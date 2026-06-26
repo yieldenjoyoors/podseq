@@ -1,0 +1,20 @@
+/target
+**/*.rs.bk
+
+# Local secrets and generated state (docker stack)
+/docker/secrets/*
+!/docker/secrets/README.txt
+jwt.hex
+podseq.toml
+*.key
+/examples/data_*
+
+# Site (Node / Vite)
+web/node_modules/
+web/dist/
+web/.vite/
+web/.cache/
+*.log
+
+# Move build
+move/build

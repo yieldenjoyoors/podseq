@@ -1,0 +1,74 @@
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Julien Robert"]
+license = "Apache-2.0"
+
+[workspace]
+members = [
+    "crates/core",
+    "crates/engine",
+    "crates/sequencer",
+    "crates/store",
+    "crates/sui",
+    "crates/p2p",
+    "crates/node",
+    "tests",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Internal crates
+podseq-core = { path = "crates/core" }
+podseq-engine = { path = "crates/engine" }
+podseq-sequencer = { path = "crates/sequencer" }
+podseq-sui = { path = "crates/sui" }
+podseq-p2p = { path = "crates/p2p" }
+podseq-store = { path = "crates/store" }
+
+# General
+anyhow = "1"
+futures = "0.3"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+toml = "0.8"
+
+# Ethereum / Engine API
+alloy-primitives = "1"
+alloy-rpc-types-engine = { version = "2", features = ["jwt", "serde"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+base64 = "0.22"
+rand = "0.8"
+
+# Walrus core (lightweight: blob encoding & types, no Sui SDK)
+walrus-core = { git = "https://github.com/MystenLabs/walrus", default-features = false }
+
+# Sui SDK (lightweight: sui-rust-sdk, in-process signing)
+sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk", features = ["hash", "serde"] }
+sui-transaction-builder = { git = "https://github.com/MystenLabs/sui-rust-sdk", features = ["intents"] }
+sui-crypto = { git = "https://github.com/MystenLabs/sui-rust-sdk", features = ["ed25519", "bech32"] }
+sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk" }
+
+# Commonware (p2p, storage, runtime)
+commonware-runtime = "2026.5"
+commonware-storage = "2026.5"
+commonware-p2p = "2026.5"
+commonware-broadcast = "2026.5"
+commonware-cryptography = "2026.5"
+commonware-codec = "2026.5"
+commonware-math = "2026.5"
+commonware-utils = "2026.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
