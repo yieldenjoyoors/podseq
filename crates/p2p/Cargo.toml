@@ -1,0 +1,29 @@
+[package]
+name = "podseq-p2p"
+description = "Peer-to-peer networking for podseq (Commonware wrapper)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+podseq-core.workspace = true
+commonware-runtime.workspace = true
+commonware-cryptography.workspace = true
+commonware-p2p.workspace = true
+commonware-broadcast.workspace = true
+commonware-codec.workspace = true
+commonware-math.workspace = true
+commonware-utils.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex = "0.4"
+rand.workspace = true
+bytes = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio.workspace = true
