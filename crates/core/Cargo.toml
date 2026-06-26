@@ -1,0 +1,15 @@
+[package]
+name = "podseq-core"
+description = "Core types and interfaces for podseq"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+commonware-runtime = { workspace = true }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
