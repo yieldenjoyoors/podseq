@@ -70,6 +70,3 @@ pub trait Settlement: Send + Sync {
 The sequencer runs methods on Tokio tasks that must be `Send`. Trait `async fn` does not
 impose `Send` on the returned future, so the core desugars each method to
 `fn ... -> impl Future<...> + Send`. Implementations may still use plain `async fn`.
-
-See [Design Decisions](../design-decisions.md#async-traits-returning-impl-future--send)
-for the full rationale.

@@ -14,7 +14,6 @@
 
 # Design
 
-- [Design Decisions](./design-decisions.md)
 - [Roadmap](./roadmap.md)
 
 # Components

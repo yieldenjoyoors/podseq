@@ -26,5 +26,4 @@ Sui settlement, persistent storage, crash recovery, and p2p block propagation
 
 - New to the project? Read [Architecture](./architecture.md).
 - Want to follow the data flow? See [Block Production](./block-production.md).
-- Curious about the design choices? See [Design Decisions](./design-decisions.md).
 - Building or contributing? See the [Development Guide](./development.md).

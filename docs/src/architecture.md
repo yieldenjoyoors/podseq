@@ -58,8 +58,7 @@ a single Sui wallet, so they live in the same crate. See
    networking each live in their own crate and communicate only through core traits.
 
 3. **Rust-native stack.** Async with Tokio, errors via `thiserror` in libraries and
-   `anyhow` in the binary, serialization with Serde. See
-   [Design Decisions](./design-decisions.md) for rationale.
+   `anyhow` in the binary, serialization with Serde.
 
 4. **Settlement-anchored DA.** Block data lives on Walrus. The Walrus blob ID and the
    sequencer commitment are anchored on Sui. A full node can independently verify

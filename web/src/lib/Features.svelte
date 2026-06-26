@@ -50,19 +50,6 @@
                     renting space on someone else's.
                 </p>
             </div>
-            <a href="#/docs/design-decisions" class="btn btn-ghost shrink-0">
-                Design decisions
-                <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.4"
-                >
-                    <path d="M5 12h14M13 6l6 6-6 6" />
-                </svg>
-            </a>
         </div>
 
         <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
