@@ -1,0 +1,15 @@
+[package]
+name = "podseq-sequencer"
+description = "Transaction sequencing and block production for podseq"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+podseq-core.workspace = true
+sui-crypto.workspace = true
+sui-sdk-types.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
