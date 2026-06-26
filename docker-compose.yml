@@ -1,0 +1,73 @@
+# Base stack: Reth (execution) + podseq (sequencer/consensus).
+#
+# Walrus and Sui are public external services; their endpoints are set by the
+# network-specific override file. Always run with an override:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d
+#
+# Each override pins its own project name, container names and host ports, so the
+# two stacks can run simultaneously on the same host.
+
+services:
+  init-jwt:
+    # Generates the shared Engine API JWT only once, into a named volume that
+    # both Reth and podseq mount read-only.
+    image: alpine:3.20
+    command: >-
+      sh -c "if [ ! -f /jwt/jwt.hex ]; then
+        od -A n -t x1 -N 32 /dev/urandom | tr -d ' \n' > /jwt/jwt.hex;
+      fi && chmod 600 /jwt/jwt.hex"
+    volumes:
+      - jwt:/jwt
+
+  reth:
+    # podseq acts as the consensus client, so Reth is driven purely over the
+    # authenticated Engine API. Uses a custom genesis with all forks active from
+    # timestamp 0 (Shanghai, Cancun, Prague).
+    image: ghcr.io/paradigmxyz/reth:latest
+    pull_policy: missing
+    depends_on:
+      init-jwt:
+        condition: service_completed_successfully
+    command:
+      - node
+      - --chain=/chain/reth-genesis.json
+      - --authrpc.jwtsecret=/jwt/jwt.hex
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8551
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8545
+      - --http.api=eth,net,web3,debug,txpool,trace
+      - --datadir=/data
+      - --instance=2
+      - --disable-discovery
+    volumes:
+      - jwt:/jwt:ro
+      - reth-data:/data
+      - ./examples/reth-genesis.json:/chain/reth-genesis.json:ro
+    restart: unless-stopped
+
+  podseq:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: podseq:latest
+    depends_on:
+      reth:
+        condition: service_started
+    environment:
+      PODSEQ_RETH_ENGINE_URL: http://reth:8551
+      PODSEQ_JWT_PATH: /jwt/jwt.hex
+      PODSEQ_SIGNER_KEY_PATH: /secrets/sui.key
+      # Endpoints are injected by the network override files.
+    volumes:
+      - jwt:/jwt:ro
+      # Place sui.key (suiprivkey) in docker/secrets/ for signing.
+      - ./docker/secrets:/secrets:ro
+    restart: unless-stopped
+
+volumes:
+  jwt:
+  reth-data:

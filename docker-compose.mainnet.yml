@@ -1,0 +1,79 @@
+# Mainnet override: Walrus mainnet + Sui mainnet.
+#
+# Runs a private authenticated Walrus publisher alongside podseq. You must:
+#   1. Place a Walrus client_config.yaml at ./walrus-config/client_config.yaml
+#   2. Place a funded Sui wallet config at ./walrus-config/publisher/sui_client.yaml
+#   3. Set WALRUS_PUBLISHER_AUTH_TOKEN (shared secret between publisher and podseq)
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d
+#
+# Host ports are shifted (+100) so the testnet and mainnet stacks can run at the
+# same time on one host.
+
+name: podseq-mainnet
+
+services:
+  reth:
+    container_name: reth-mainnet
+    ports:
+      - "8645:8545" # JSON-RPC
+      - "8651:8551" # Engine API
+      - "9101:9001/tcp" # P2P
+      - "9101:9001/udp"
+
+  podseq:
+    container_name: podseq-mainnet
+    environment:
+      # local publisher (authenticated).
+      WALRUS_PUBLISHER_URL: http://publisher:9001
+      WALRUS_AGGREGATOR_URL: https://aggregator.walrus-mainnet.walrus.space
+      WALRUS_EPOCHS: "1"
+      WALRUS_PUBLISHER_AUTH_TOKEN: "${WALRUS_PUBLISHER_AUTH_TOKEN:?must set WALRUS_PUBLISHER_AUTH_TOKEN}"
+      SUI_RPC_URL: https://fullnode.mainnet.sui.io:443
+      # Settlement object IDs (after deploying the Move contract on mainnet):
+      # SUI_SETTLEMENT_PACKAGE_ID: 0x...
+      # SUI_SETTLER_CAP_ID: 0x...
+      # SUI_REGISTRY_ID: 0x...
+    depends_on:
+      - publisher
+
+  # ---------------------------------------------------------------------------
+  # Private authenticated Walrus publisher (required on mainnet; there is no
+  # public unauthenticated publisher). Built from source.
+  #
+  # TIP: Pre-build the image once to avoid slow rebuilds:
+  #   docker build https://github.com/MystenLabs/walrus.git#main \
+  #     -f docker/walrus-service/Dockerfile \
+  #     --target walrus-service \
+  #     -t walrus:latest
+  # ---------------------------------------------------------------------------
+  publisher:
+    build:
+      context: https://github.com/MystenLabs/walrus.git#main
+      dockerfile: docker/walrus-service/Dockerfile
+      target: walrus-service
+    image: walrus:latest
+    container_name: publisher-mainnet
+    command:
+      - publisher
+      - --bind-address
+      - 0.0.0.0:9001
+      - --config
+      - /config/client_config.yaml
+      - --sub-wallets-dir
+      - /wallets
+      - --n-clients
+      - "2"
+    environment:
+      # Require clients to present this Bearer token (must match podseq's token).
+      WALRUS_PUBLISHER_AUTH_TOKEN: "${WALRUS_PUBLISHER_AUTH_TOKEN:?must set WALRUS_PUBLISHER_AUTH_TOKEN}"
+    volumes:
+      # Place these on the host before starting:
+      #   walrus-config/client_config.yaml      : Walrus mainnet client config
+      #   walrus-config/publisher/sui_client.yaml : funded Sui wallet (SUI + WAL)
+      - ./walrus-config:/config:ro
+      - publisher-wallets:/wallets
+    restart: unless-stopped
+
+volumes:
+  publisher-wallets:

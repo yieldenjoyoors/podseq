@@ -1,0 +1,12 @@
+# Build artifacts
+/target
+/docker/*/target
+
+# Local state and secrets; never bake these into the image.
+/docker/secrets
+/jwt.hex
+/podseq.toml
+*.key
+
+# Docs / book
+/docs/book
