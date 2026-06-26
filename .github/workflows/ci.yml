@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel stale runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --all --locked
+
+  move:
+    name: move build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: move
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Sui CLI (testnet toolchain)
+        run: |
+          set -euo pipefail
+          # Move.toml pins testnet-v1.73.1; install the matching Sui binary.
+          mkdir -p "$HOME/.local/bin"
+          gh release download testnet-v1.73.1 -R MystenLabs/sui \
+            -p '*ubuntu-x86_64.tgz' -D /tmp
+          tar -xzf /tmp/*ubuntu-x86_64.tgz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build settlement package
+        run: sui move build
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build podseq image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: podseq:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the binary
+        run: docker run --rm --entrypoint podseq podseq:ci --help
