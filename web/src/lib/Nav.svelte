@@ -18,7 +18,7 @@
     <div
         class="mx-auto max-w-7xl px-5 sm:px-8 h-16 flex items-center justify-between gap-6"
     >
-        <a href="#/" class="flex items-center gap-2.5 group" onclick={close}>
+        <a href="#hero" class="flex items-center gap-2.5 group" onclick={close}>
             <span class="mark" aria-hidden="true">
                 <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
                     <rect

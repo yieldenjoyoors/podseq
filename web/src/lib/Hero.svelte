@@ -3,7 +3,10 @@
     const finBlocks = [0, 1, 2];
 </script>
 
-<section class="relative pt-32 sm:pt-40 pb-24 sm:pb-32 overflow-hidden">
+<section
+    id="hero"
+    class="relative pt-32 sm:pt-40 pb-24 sm:pb-32 overflow-hidden"
+>
     <div class="mx-auto max-w-7xl px-5 sm:px-8 pt-14 sm:pt-20">
         <div
             class="grid lg:grid-cols-[1.05fr_0.95fr] gap-14 lg:gap-20 items-center"
