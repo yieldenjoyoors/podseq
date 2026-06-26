@@ -1,0 +1,18 @@
+[package]
+name = "podseq-store"
+description = "Persistent storage for podseq chain state and block data"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+podseq-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bcs = "0.1"
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
