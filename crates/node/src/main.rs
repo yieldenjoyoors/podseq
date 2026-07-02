@@ -63,11 +63,6 @@ enum KeyringCommands {
         #[arg(short, long, default_value = "sequencer.key")]
         out: PathBuf,
     },
-    /// Generate a new p2p identity key.
-    GenerateP2p {
-        #[arg(short, long, default_value = "p2p.key")]
-        out: PathBuf,
-    },
     /// Generate a secp256k1 EVM key for the bridge relayer (L2 mint/burn).
     GenerateEvmKey {
         #[arg(short, long, default_value = "relayer.key")]
@@ -106,10 +101,6 @@ fn main() -> Result<()> {
         Commands::Keyring { action } => match action {
             KeyringCommands::GenerateKey { out } => {
                 keyring::generate_signer(&out)?;
-            }
-            KeyringCommands::GenerateP2p { out } => {
-                podseq_p2p::load_or_generate_key(&out)?;
-                info!(key = %out.display(), "p2p identity key generated");
             }
             KeyringCommands::GenerateEvmKey { out } => {
                 keyring::generate_evm_key(&out)?;

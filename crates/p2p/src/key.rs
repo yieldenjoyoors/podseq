@@ -33,6 +33,13 @@ pub fn load_or_generate_key(path: &Path) -> Result<IdentityKey> {
     } else {
         let key = IdentityKey::random(&mut OsRng);
         let hex_str = hex::encode(key_seed(&key));
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("creating parent dir for p2p key at {}", path.display())
+                })?;
+            }
+        }
         std::fs::write(path, &hex_str)
             .with_context(|| format!("writing p2p key to {}", path.display()))?;
         info!(key = %path.display(), "p2p identity key generated and saved");

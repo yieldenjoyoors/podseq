@@ -43,13 +43,7 @@ address needs SUI for gas.
 
 ### P2P identity key
 
-Authenticated peer connections use a Commonware ed25519 key (32 hex bytes in a file):
-
-```sh
-podseq keyring generate-p2p --out p2p.key
-```
-
-The file contains a 64-char hex string.
+Authenticated peer connections use a Commonware ed25519 key.
 
 ### Bridge relayer key (optional)
 
@@ -204,4 +198,4 @@ settlement, at finality lag.
 | `sequencer_pubkey is required ...`    | Full node mode needs `signer.sequencer_pubkey` (from the sequencer banner).                                                                                                                              |
 | `sui.registry_id is required ...`     | Full node mode needs the shared Registry object ID (from the sequencer config).                                                                                                                          |
 | `no settlement_package_id configured` | Sequencer mode **requires** settlement: deploy the Move package and set `sui.settlement_package_id`, `sui.settler_cap_id`, and `sui.registry_id` (or leave all three unset for first-start auto-deploy). |
-| `p2p is not configured`               | Add `[p2p] key_path` to config, or run `podseq keyring generate-p2p`.                                                                                                                                    |
+| `p2p is not configured`               | Add a `[p2p]` section to config. The identity key is auto-generated on first start.                                                                                                                      |

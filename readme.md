@@ -51,7 +51,6 @@ DA latency. Blocks are persisted locally and broadcast via P2P before DA confirm
 ```sh
 podseq init config --out podseq.toml         # generate a config file
 podseq keyring generate-key                   # sequencer key (Sui ed25519; settlement + blocks)
-podseq keyring generate-p2p                   # generate a p2p identity key
 podseq keyring generate-evm-key               # bridge relayer EVM key (secp256k1)
 podseq keyring list                           # show configured keys
 podseq status                                 # query Reth height + settlement config
@@ -97,7 +96,6 @@ head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \n' > jwt.hex
 
 # 2. Generate keys
 podseq keyring generate-key --out sequencer.key   # Sui ed25519 (settlement + blocks)
-podseq keyring generate-p2p --out p2p.key
 podseq keyring generate-evm-key --out relayer.key  # bridge relayer (optional, secp256k1)
 
 # 3. Generate and edit a config

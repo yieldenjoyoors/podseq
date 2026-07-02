@@ -58,8 +58,5 @@ bootstrap_peers = [              # optional
 ]
 ```
 
-The identity key is generated on first start or via:
-
-```sh
-podseq keyring generate-p2p --out p2p.key
-```
+The identity key is **generated automatically on first start** and persisted to
+`key_path`.

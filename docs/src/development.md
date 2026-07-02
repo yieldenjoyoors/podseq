@@ -10,7 +10,6 @@
 ```sh
 podseq init config --out podseq.toml        # generate a config file
 podseq keyring generate-key                 # sequencer key (Sui ed25519; settlement + blocks)
-podseq keyring generate-p2p                 # p2p identity key
 podseq keyring generate-evm-key             # bridge relayer EVM key (secp256k1)
 podseq keyring list                         # show configured keys
 podseq status                               # query Reth height + settlement
@@ -71,11 +70,7 @@ key_path = "p2p.key"
 listen_addr = "0.0.0.0:9000"
 ```
 
-The p2p identity key is generated automatically if not present, or via:
-
-```sh
-podseq keyring generate-p2p --out p2p.key
-```
+The p2p identity key is generated automatically on first start.
 
 To sign settlement transactions and block headers in-process, add a `suiprivkey`
 path (one Ed25519 key serves both):
