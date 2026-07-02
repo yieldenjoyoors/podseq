@@ -23,7 +23,7 @@
         {
             n: "05",
             title: "Enshrined Sui bridge",
-            body: "Native asset bridge between your chain and Sui. Move tokens from Sui DeFi without third-party bridges or wrapped-asset risk. Your apps live inside both ecosystems.",
+            body: "Native asset bridge between your chain and Sui. Move tokens from Sui DeFi without third-party bridges. Your apps live inside both ecosystems.",
         },
         {
             n: "06",

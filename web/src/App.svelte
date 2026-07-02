@@ -8,7 +8,6 @@
     import HowItWorks from "./lib/HowItWorks.svelte";
     import Flow from "./lib/Flow.svelte";
     import QuickStart from "./lib/QuickStart.svelte";
-    import Crates from "./lib/Crates.svelte";
     import Faq from "./lib/Faq.svelte";
     import CtaBand from "./lib/CtaBand.svelte";
     import Footer from "./lib/Footer.svelte";
@@ -79,22 +78,7 @@
         <HowItWorks />
         <Flow />
 
-        <!-- For developers -->
-        <section
-            id="quickstart"
-            class="border-t border-line pt-20 sm:pt-28 pb-2"
-        >
-            <div class="mx-auto max-w-7xl px-5 sm:px-8">
-                <span class="label">For developers</span>
-                <h2
-                    class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5 max-w-2xl"
-                >
-                    Get a node running. Then go as deep as you want.
-                </h2>
-            </div>
-        </section>
         <QuickStart />
-        <Crates />
 
         <Faq />
         <CtaBand />

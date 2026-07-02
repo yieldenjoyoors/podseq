@@ -2,24 +2,28 @@
     // The stack, at a glance. Every layer with a precise role.
     const stats = [
         {
+            big: "Podseq",
+            label: "Sequencing",
+            sub: "Orders transactions and produces blocks. The core of the network.",
+            featured: true,
+        },
+        {
             big: "EVM",
             label: "Execution",
             sub: "Reth under the hood. Deploy any Solidity contract, unchanged.",
-        },
-        {
-            big: "Sui",
-            label: "Settlement",
-            sub: "Every block anchored on Sui L1. No separate trust assumption.",
+            featured: false,
         },
         {
             big: "Walrus",
             label: "Availability",
             sub: "Erasure-coded, BFT. Blobs verifiable directly on Sui.",
+            featured: false,
         },
         {
-            big: "⅔",
-            label: "Fault Tolerant",
-            sub: "Readable even with two-thirds of storage nodes offline.",
+            big: "Sui",
+            label: "Settlement",
+            sub: "Every block anchored on Sui L1. No separate trust assumption.",
+            featured: false,
         },
     ];
 </script>
@@ -34,18 +38,23 @@
                 Four layers. One coherent system.
             </h2>
             <p class="mt-4 text-muted text-lg leading-relaxed">
-                EVM execution on Reth, data availability on Walrus, settlement
-                on Sui. Because Walrus blobs are Sui objects, there's no trust
-                hop between DA and settlement. They're the same security domain.
+                Podseq as secquencer, EVM execution on Reth, data availability
+                on Walrus, settlement on Sui. Because Walrus blobs are Sui
+                objects, there's no trust hop between DA and settlement.
             </p>
         </div>
 
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            {#each stats as s}
-                <div class="card p-6 group">
+            {#each stats as s (s.label)}
+                <div
+                    class="card p-6 group{s.featured
+                        ? ' bg-surface-2 ring-1 ring-brand/40'
+                        : ''}"
+                >
                     <span
-                        class="font-display font-extrabold text-5xl text-ink leading-none"
-                        >{s.big}</span
+                        class="font-display font-extrabold text-5xl leading-none {s.featured
+                            ? 'text-brand-ink'
+                            : 'text-ink'}">{s.big}</span
                     >
                     <div
                         class="mt-3 font-display font-bold text-ink text-lg tracking-tight"

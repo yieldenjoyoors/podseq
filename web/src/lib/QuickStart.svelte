@@ -3,8 +3,8 @@
 
     let tabs: Tab[] = [
         {
-            id: "jwt",
-            label: "jwt",
+            id: "reth",
+            label: "reth",
             code: `# shared 32-byte secret for Reth + podseq
 head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \\n' > jwt.hex
 
@@ -71,7 +71,7 @@ podseq start --config podseq.toml --mode full`,
     }
 </script>
 
-<section class="py-12 sm:py-16">
+<section class="border-t border-line py-12 sm:py-16">
     <div class="mx-auto max-w-7xl px-5 sm:px-8">
         <div class="grid lg:grid-cols-[0.9fr_1.1fr] gap-12 items-start">
             <div class="lg:sticky lg:top-24">

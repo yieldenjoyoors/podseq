@@ -8,7 +8,7 @@
         {
             n: "2",
             title: "Run the sequencer",
-            body: "A single binary drives Reth over the Engine API to build blocks and gossips soft confirmations over P2P for sub-second latency.",
+            body: "Run Podseq and Reth binaries and they'll communicate over the Engine API to build blocks and gossips soft confirmations over P2P.",
         },
         {
             n: "3",
@@ -31,7 +31,7 @@
                     From zero to a verified chain.
                 </h2>
                 <p class="mt-4 text-muted text-lg leading-relaxed">
-                    Three steps, one binary.
+                    In three steps only.
                 </p>
             </div>
             <a href="#/docs/block-production" class="btn btn-ghost shrink-0">
