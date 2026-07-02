@@ -18,3 +18,9 @@ web/.cache/
 
 # Move build
 move/build
+
+# Foundry
+solidity/out/
+solidity/cache/
+solidity/foundry.lock
+broadcast/

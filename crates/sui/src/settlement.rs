@@ -273,7 +273,7 @@ impl Settlement {
 
 /// Signs `tx` with `key` and submits it, waiting for checkpoint inclusion.
 /// `label` is prefixed to error messages and must match the failing phase.
-async fn sign_and_execute(
+pub(crate) async fn sign_and_execute(
     rpc: &mut sui_rpc::Client,
     key: &Ed25519PrivateKey,
     tx: sui_sdk_types::Transaction,
@@ -293,7 +293,7 @@ async fn sign_and_execute(
 }
 
 /// Returns the first object id created (`IdOperation::Created`) owned by `kind`.
-fn find_created_object(
+pub(crate) fn find_created_object(
     changes: &[sui_rpc::proto::sui::rpc::v2::ChangedObject],
     kind: owner::OwnerKind,
 ) -> Option<String> {

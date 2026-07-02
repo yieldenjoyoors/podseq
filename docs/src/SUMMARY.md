@@ -6,6 +6,7 @@
 
 - [Node Setup](./setup.md)
 - [Settlement Contract](./contract.md)
+- [Enshrined Bridge](./bridge.md)
 
 # Overview
 
@@ -23,7 +24,7 @@
 - [Engine](./components/engine.md)
 - [Sequencer](./components/sequencer.md)
 - [Store](./components/store.md)
-- [Sui (DA + Settlement)](./components/sui.md)
+- [Sui (DA + Settlement + Bridge)](./components/sui.md)
 - [P2P](./components/p2p.md)
 
 # Reference

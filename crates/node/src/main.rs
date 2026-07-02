@@ -2,12 +2,15 @@
 
 #![forbid(unsafe_code)]
 
+mod bridge;
 mod config;
 mod full_node;
 mod keyring;
 mod runner;
+mod settlement;
 
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -65,6 +68,11 @@ enum KeyringCommands {
         #[arg(short, long, default_value = "p2p.key")]
         out: PathBuf,
     },
+    /// Generate a secp256k1 EVM key for the bridge relayer (L2 mint/burn).
+    GenerateEvmKey {
+        #[arg(short, long, default_value = "relayer.key")]
+        out: PathBuf,
+    },
     /// Show keys configured in the config file.
     List,
 }
@@ -102,6 +110,9 @@ fn main() -> Result<()> {
             KeyringCommands::GenerateP2p { out } => {
                 podseq_p2p::load_or_generate_key(&out)?;
                 info!(key = %out.display(), "p2p identity key generated");
+            }
+            KeyringCommands::GenerateEvmKey { out } => {
+                keyring::generate_evm_key(&out)?;
             }
             KeyringCommands::List => {
                 let config = load_config(&cli.config)?;
@@ -198,72 +209,6 @@ async fn build_p2p(
     Ok(Some((bc, rx, node)))
 }
 
-/// Startup preflight: fail fast with a clear message if settlement cannot be
-/// configured, instead of a cryptic error deep in deploy/commit later.
-///
-/// - Always checks Sui RPC reachability.
-/// - Existing IDs: verifies the Registry object is readable.
-/// - First-start deploy: verifies the Move package is built (bytecode present).
-async fn preflight_settlement(
-    sui: &config::SuiConfig,
-    ids: (&Option<String>, &Option<String>, &Option<String>),
-    signer_key_path: &std::path::Path,
-) -> Result<()> {
-    info!(rpc = %sui.rpc_url, "preflight: probing Sui RPC");
-    if let Err(e) = podseq_sui::settlement::ping_rpc(&sui.rpc_url).await {
-        anyhow::bail!(
-            "Sui RPC unreachable at {}; is the node running and the URL correct? (error: {e})",
-            sui.rpc_url
-        );
-    }
-
-    match ids {
-        (Some(_), Some(_), Some(registry_id)) => {
-            // Validate the Registry object exists and is readable.
-            if let Err(e) = podseq_sui::settlement::latest_height(&sui.rpc_url, registry_id).await {
-                anyhow::bail!(
-                    "cannot read settlement Registry {registry_id} on {}; verify sui.registry_id and that the contract is deployed (error: {e})",
-                    sui.rpc_url
-                );
-            }
-            Ok(())
-        }
-        (None, None, None) => {
-            // First-start deploy: the Move package must be built first.
-            let bytecode_dir = sui
-                .move_dir
-                .join("build/podseq_settlement/bytecode_modules");
-            let built = bytecode_dir.is_dir()
-                && std::fs::read_dir(&bytecode_dir)
-                    .map(|mut it| {
-                        it.any(|e| {
-                            e.ok()
-                                .is_some_and(|e| e.path().extension().is_some_and(|x| x == "mv"))
-                        })
-                    })
-                    .unwrap_or(false);
-            if !built {
-                anyhow::bail!(
-                    "settlement contract is not deployed and the Move package is not built: \
-                     no .mv modules in {}. Run `sui move build` in {} first.",
-                    bytecode_dir.display(),
-                    sui.move_dir.display()
-                );
-            }
-            if !signer_key_path.is_file() {
-                anyhow::bail!(
-                    "signer key not found at {}; settlement deploy needs a suiprivkey (fund its address with SUI for gas)",
-                    signer_key_path.display()
-                );
-            }
-            Ok(())
-        }
-        _ => anyhow::bail!(
-            "settlement IDs are partially configured; either set all three (settlement_package_id, settler_cap_id, registry_id) or none"
-        ),
-    }
-}
-
 async fn start_sequencer(
     mut config: Config,
     config_path: PathBuf,
@@ -279,7 +224,7 @@ async fn start_sequencer(
     let signer_key_path = config
         .signer
         .key_path
-        .as_ref()
+        .clone()
         .context("signer key path is required (set signer.key_path in config)")?;
 
     let auth = podseq_engine::Auth::from_file(&config.reth.jwt_path)
@@ -296,75 +241,20 @@ async fn start_sequencer(
     })
     .context("building Sui-layer client")?;
 
-    // Settlement: use existing IDs or deploy on first start.
-    let settlement_ids = (
-        &config.sui.settlement_package_id,
-        &config.sui.settler_cap_id,
-        &config.sui.registry_id,
-    );
-    preflight_settlement(&config.sui, settlement_ids, signer_key_path)
-        .await
-        .context("settlement preflight failed")?;
-
-    match settlement_ids {
-        (Some(pkg), Some(cap), Some(reg)) => {
-            let settlement = podseq_sui::SettlementSigner::new(
-                signer_key_path,
-                pkg,
-                cap,
-                reg,
-                &config.sui.rpc_url,
-            )
-            .context("building settlement signer")?;
-            sui_client = sui_client.with_settlement(settlement);
-            info!(key = %signer_key_path.display(), "settlement signer attached");
-        }
-        (None, None, None) => {
-            info!(key = %signer_key_path.display(), "deploying settlement contract on first start");
-            let bytecode_dir = config
-                .sui
-                .move_dir
-                .join("build/podseq_settlement/bytecode_modules");
-            let mut modules = Vec::new();
-            for entry in std::fs::read_dir(&bytecode_dir).with_context(|| {
-                format!(
-                    "reading {} (run `sui move build` in {} first)",
-                    bytecode_dir.display(),
-                    config.sui.move_dir.display()
-                )
-            })? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_file() && path.extension().is_some_and(|e| e == "mv") {
-                    modules.push(std::fs::read(&path)?);
-                }
-            }
-            let deployed =
-                podseq_sui::SettlementSigner::deploy(signer_key_path, &config.sui.rpc_url, modules)
-                    .await
-                    .context("deploying settlement contract")?;
-
-            config.sui.settlement_package_id = Some(deployed.package_id.clone());
-            config.sui.settler_cap_id = Some(deployed.settler_cap_id.clone());
-            config.sui.registry_id = Some(deployed.registry_id.clone());
-            let updated = toml::to_string_pretty(&config).context("serializing updated config")?;
-            std::fs::write(&config_path, &updated)
-                .with_context(|| format!("writing updated config to {}", config_path.display()))?;
-            info!(config = %config_path.display(), "config updated with settlement IDs");
-
-            let settlement = podseq_sui::SettlementSigner::new(
-                signer_key_path,
-                &deployed.package_id,
-                &deployed.settler_cap_id,
-                &deployed.registry_id,
-                &config.sui.rpc_url,
-            )?;
-            sui_client = sui_client.with_settlement(settlement);
-        }
-        _ => {
-            anyhow::bail!("settlement IDs are partially configured; either set all three (settlement_package_id, settler_cap_id, registry_id) or none");
-        }
-    }
+    // Settlement: preflight, then attach to existing IDs or deploy on first start.
+    settlement::preflight(
+        &config.sui,
+        (
+            &config.sui.settlement_package_id,
+            &config.sui.settler_cap_id,
+            &config.sui.registry_id,
+        ),
+        &signer_key_path,
+    )
+    .await
+    .context("settlement preflight failed")?;
+    let settlement = settlement::setup_signer(&mut config, &config_path, &signer_key_path).await?;
+    sui_client = sui_client.with_settlement(settlement);
 
     let genesis_hash = config
         .sequencer
@@ -375,15 +265,11 @@ async fn start_sequencer(
         .context("invalid genesis_hash")?;
 
     let block_signer = {
-        let signer = podseq_sequencer::Ed25519BlockSigner::from_suiprivkey_file(signer_key_path)
+        let signer = podseq_sequencer::Ed25519BlockSigner::from_suiprivkey_file(&signer_key_path)
             .context("loading signer key for block signing")?;
         info!(key = %signer_key_path.display(), "signer key loaded");
-        let address = signer.address();
-        let pub_key = signer.pub_key();
-        info!("╔{}╗", "═".repeat(80));
-        info!("║ SEQUENCER ADDRESS: {address}");
-        info!("║ SEQUENCER PUBKEY:  {pub_key}");
-        info!("╚{}╝", "═".repeat(80));
+        info!(address = %signer.address(), "sequencer address (Sui, ed25519)");
+        info!(pubkey = %signer.pub_key(), "sequencer pubkey (hex) => set this as signer.sequencer_pubkey on full nodes");
         Arc::new(signer) as Arc<dyn podseq_core::BlockSigner>
     };
 
@@ -401,8 +287,29 @@ async fn start_sequencer(
         broadcaster,
         config.walrus.batch_size_bytes,
     );
+
+    // Enshrined bridge relayer: runs concurrently with the production loop and is
+    // deliberately NON-FATAL. The spawned task owns its own config copy and may
+    // persist Sui object IDs to the config file independently of the runner.
+    let bridge_handle = bridge::spawn(config.clone(), config_path.clone(), signer_key_path.clone());
+
     info!("starting sequencer loop (Ctrl+C to stop)");
-    runner.run().await
+    let result = runner.run().await;
+
+    if let Some((mut handle, shutdown)) = bridge_handle {
+        shutdown.store(true, Ordering::SeqCst);
+        // Best-effort drain; mirrors the finalizer's bounded shutdown.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), &mut handle).await {
+            Ok(Ok(())) => info!("bridge relayer stopped"),
+            Ok(Err(e)) => warn!(error = %e, "bridge relayer task panicked"),
+            Err(_) => {
+                warn!("bridge relayer did not stop in time; aborting");
+                handle.abort();
+            }
+        }
+    }
+
+    result
 }
 
 async fn start_full_node(config: Config, context: podseq_core::runtime::Context) -> Result<()> {

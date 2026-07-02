@@ -39,14 +39,15 @@ crates/
 ├── engine/      # Reth Engine API client
 ├── sequencer/   # Ordering + block signing
 ├── store/       # Persistent storage (blocks, state, pending crash-recovery)
-├── sui/         # Sui layer: Walrus DA + settlement (one shared wallet)
+├── sui/         # Sui layer: Walrus DA + settlement + bridge vault (one wallet)
 ├── p2p/         # Block propagation (Commonware discovery + broadcast)
-└── node/        # Binary wiring everything together
+└── node/        # Binary: CLI, config, runner, full node, bridge relayer
 ```
 
-`podseq-sui` owns both Walrus data availability and Sui settlement. Both go through
-a single Sui wallet, so they live in the same crate. See
-[Sui Settlement](./components/sui.md).
+`podseq-sui` owns Walrus data availability, Sui settlement, and the Sui side of
+the enshrined bridge. All go through a single Sui wallet, so they live in the
+same crate. See [Sui Settlement](./components/sui.md) and
+[Bridge](./bridge.md).
 
 ## Design principles
 

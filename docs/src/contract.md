@@ -71,20 +71,26 @@ the transaction (the owned object is not accessible to the sender).
 
 ## Configuration
 
-Settlement requires four values in configuration:
+Settlement needs three object IDs and the sequencer's Sui key. On first start,
+if all three IDs are unset, the sequencer **publishes the package and writes the
+IDs back to the config** automatically — so you usually leave them unset. To reuse
+an existing deployment, set them:
 
 ```toml
 [sui]
 rpc_url = "https://fullnode.testnet.sui.io:443"
-settlement_package_id = "0x..."   # from `sui client publish`
+settlement_package_id = "0x..."   # from publish (auto-written on first start)
 settler_cap_id = "0x..."          # from `init` (owned by the sequencer)
 registry_id = "0x..."             # from `init` (shared)
 
 [signer]
-settlement_key_path = "sui.key"   # suiprivkey matching the cap owner
+key_path = "sequencer.key"        # suiprivkey matching the cap owner
 ```
 
-The node refuses to enable settlement unless all four are present.
+The IDs must be all set or all unset; partial configuration is rejected.
+
+> The enshrined [Bridge](./bridge.md) reuses this same package (the `bridge`
+> module ships alongside `settlement`) and the same `[signer] key_path`.
 
 ## Verification flow
 

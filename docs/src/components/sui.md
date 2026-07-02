@@ -31,6 +31,7 @@ pub struct Config {
     pub aggregator_url: String,
     pub epochs: u64,      // storage lifetime; default MAX_EPOCHS (53 ≈ 2 years)
     pub sui_rpc_url: String,
+    pub publisher_auth_token: Option<String>, // bearer token for an authenticated publisher
 }
 ```
 
@@ -63,3 +64,11 @@ is shared across its heights). Implemented in-process via:
 Mandatory in sequencer mode: every produced block is committed, so full nodes
 can verify data availability for every height. Full nodes never sign; they
 verify against `signer.sequencer_pubkey`.
+
+## Enshrined bridge
+
+The crate also hosts the Sui half of the [bridge](../bridge.md): `bridge.rs`
+reads deposits by nonce and submits `bridge::withdraw`. The `bridge` module is
+published as part of the settlement package, and `bridge::initialize` (which
+creates the shared `Vault` + `BridgeCap`) is auto-called on first start when the
+bridge is enabled, mirroring settlement's auto-deploy.

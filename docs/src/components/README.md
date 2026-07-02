@@ -18,12 +18,12 @@ traits defined in [`podseq-core`](./core.md).
         └───────────┴───────────┴───────────┴───────────┴──► podseq-core (traits)
 ```
 
-| Crate       | Responsibility                             | Core trait                       |
-| ----------- | ------------------------------------------ | -------------------------------- |
-| `core`      | Interfaces and Commonware runtime bridge   | (defines them)                   |
-| `engine`    | Reth Engine API client                     | `Executor`                       |
-| `sequencer` | Transaction ordering and block signing     | `Sequencer`, `BlockSigner`       |
-| `sui`       | Walrus DA + Sui settlement (shared wallet) | `DataAvailability`, `Settlement` |
-| `store`     | Persistent storage + crash recovery        | (none)                           |
-| `p2p`       | Block propagation via Commonware           | (none)                           |
-| `node`      | Binary: CLI, config, runner, full node     | (none)                           |
+| Crate       | Responsibility                                         | Core trait                       |
+| ----------- | ------------------------------------------------------ | -------------------------------- |
+| `core`      | Interfaces and Commonware runtime bridge               | (defines them)                   |
+| `engine`    | Reth Engine API client                                 | `Executor`                       |
+| `sequencer` | Transaction ordering and block signing                 | `Sequencer`, `BlockSigner`       |
+| `sui`       | Walrus DA + Sui settlement + bridge vault              | `DataAvailability`, `Settlement` |
+| `store`     | Persistent storage + crash recovery                    | (none)                           |
+| `p2p`       | Block propagation via Commonware                       | (none)                           |
+| `node`      | Binary: CLI, config, runner, full node, bridge relayer | (none)                           |

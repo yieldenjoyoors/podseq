@@ -51,6 +51,20 @@ podseq keyring generate-p2p --out p2p.key
 
 The file contains a 64-char hex string.
 
+### Bridge relayer key (optional)
+
+The enshrined bridge ([bridge](./bridge.md)) mints on L2 for Sui deposits and
+releases on Sui for L2 burns. It needs a separate **secp256k1** EVM key (the L2
+uses EVM signatures; Sui uses Ed25519 so they can't share a key). Generate it
+with podseq:
+
+```sh
+podseq keyring generate-evm-key --out relayer.key
+```
+
+The printed address must be set as the L2 `Bridge` `relayer` (via the contract's
+one-time `initialize`) and funded with L2 gas.
+
 ## 3. podseq configuration
 
 Generate a starting config:
@@ -88,6 +102,12 @@ key_path = "sequencer.key"
 # Full node mode: the sequencer's ed25519 public key (hex) to verify blocks.
 # Required in full node mode; ignored in sequencer mode.
 # sequencer_pubkey = "0x..."
+
+# Bridge (optional, sequencer mode only). On first start, if cap_id/vault_id are
+# unset, the sequencer calls bridge::initialize and writes them back here.
+# [bridge]
+# enabled = true
+# l2_relayer_key_path = "relayer.key"
 ```
 
 A minimal sequencer config only needs `[reth] jwt_path` and `[signer] key_path`.

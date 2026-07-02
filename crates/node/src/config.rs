@@ -33,6 +33,8 @@ pub struct Config {
     #[serde(default)]
     pub sequencer: SequencerConfig,
     #[serde(default)]
+    pub bridge: BridgeConfig,
+    #[serde(default)]
     pub p2p: P2pConfig,
     /// Directory for persistent chain state and blocks.
     #[serde(default = "default_data_dir")]
@@ -203,6 +205,57 @@ pub struct P2pConfig {
     pub no_p2p: bool,
 }
 
+/// Enshrined bridge configuration.
+///
+/// When `enabled`, the sequencer runs an in-process relayer that mints on L2 for
+/// each Sui deposit and releases on Sui for each L2 burn. See
+/// `move/sources/bridge.move` and `solidity/Bridge.sol`.
+///
+/// The L2 side needs no address/chain-id here: the `Bridge` is a genesis
+/// predeploy at a fixed address (`bridge::BRIDGE_PREDEPLOY_ADDRESS`), and the
+/// chain id is read from Reth via `eth_chainId` at startup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeConfig {
+    /// Enable the bridge relayer.
+    #[serde(default)]
+    pub enabled: bool,
+    /// `BridgeCap` object ID (owned by the sequencer). Auto-created on first
+    /// start via `bridge::initialize` if unset.
+    #[serde(default)]
+    pub cap_id: Option<String>,
+    /// Shared `Vault` object ID. Auto-created on first start if unset.
+    #[serde(default)]
+    pub vault_id: Option<String>,
+    /// Path to the relayer EVM private key (raw 32-byte secp256k1 hex). Its
+    /// address must hold the L2 `relayer` role (set via `Bridge.initialize`)
+    /// and be funded for gas.
+    #[serde(default = "default_relayer_key_path")]
+    pub l2_relayer_key_path: Option<PathBuf>,
+    /// Relayer poll interval, in milliseconds.
+    #[serde(default = "default_bridge_poll_ms")]
+    pub poll_interval_ms: u64,
+}
+
+fn default_bridge_poll_ms() -> u64 {
+    2000
+}
+
+fn default_relayer_key_path() -> Option<PathBuf> {
+    Some(PathBuf::from("relayer.key"))
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cap_id: None,
+            vault_id: None,
+            l2_relayer_key_path: default_relayer_key_path(),
+            poll_interval_ms: default_bridge_poll_ms(),
+        }
+    }
+}
+
 impl Default for P2pConfig {
     fn default() -> Self {
         Self {
@@ -280,6 +333,7 @@ impl Config {
             sui: SuiConfig::default(),
             signer: SignerConfig::default(),
             sequencer: SequencerConfig::default(),
+            bridge: BridgeConfig::default(),
             p2p: P2pConfig::default(),
             data_dir: default_data_dir(),
             mode: default_mode(),
@@ -344,5 +398,37 @@ engine_url = "http://localhost:8551"
         let parsed = Config::from_str(&serialized).unwrap();
         assert_eq!(parsed.reth.jwt_path, config.reth.jwt_path);
         assert_eq!(parsed.walrus.epochs, config.walrus.epochs);
+    }
+
+    #[test]
+    fn bridge_defaults() {
+        // The Bridge is a genesis predeploy at a fixed address, and the chain id
+        // is read from Reth.
+        let config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        let bridge = &config.bridge;
+        assert!(!bridge.enabled);
+        assert_eq!(
+            bridge.l2_relayer_key_path,
+            Some(PathBuf::from("relayer.key"))
+        );
+        assert_eq!(bridge.poll_interval_ms, 2000);
+    }
+
+    #[test]
+    fn parses_bridge_with_sui_ids() {
+        let toml = r#"
+[reth]
+jwt_path = "jwt.hex"
+
+[bridge]
+enabled = true
+cap_id = "0xcap"
+vault_id = "0xvault"
+l2_relayer_key_path = "relayer.key"
+"#;
+        let config = Config::from_str(toml).unwrap();
+        assert!(config.bridge.enabled);
+        assert_eq!(config.bridge.cap_id.as_deref(), Some("0xcap"));
+        assert_eq!(config.bridge.vault_id.as_deref(), Some("0xvault"));
     }
 }

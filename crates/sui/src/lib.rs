@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blob_id;
+pub mod bridge;
 pub mod settlement;
 pub mod wire;
 

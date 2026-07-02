@@ -13,7 +13,7 @@ simple while making the chain trust-minimized and developer-friendly.
       DA confirmation.
 - [x] **Persistent store**: crash recovery from local block + state storage.
 - [x] **Full node sync**: syncs from DA, P2P, and settlement.
-- [ ] **Enshrined bridge**: `Bridge.sol` predeploy on L2 + `bridge.move` vault on
+- [x] **Enshrined bridge**: `Bridge.sol` predeploy on L2 + `bridge.move` vault on
       Sui. Users bridge USDSui (and other Sui coins) to the L2. Deposits and withdrawals
       without external relayers.
 

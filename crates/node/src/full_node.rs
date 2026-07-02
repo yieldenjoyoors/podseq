@@ -65,9 +65,7 @@ impl FullNode {
         let sequencer_pubkey = sui_crypto::ed25519::Ed25519VerifyingKey::new(&public_key)
             .context("building sequencer verifying key")?;
         let sequencer_address = public_key.derive_address();
-        info!("╔{}╗", "═".repeat(80));
-        info!("║ FULL NODE: verifying sequencer: {sequencer_address}");
-        info!("╚{}╝", "═".repeat(80));
+        info!("Checking sequencer address in full-node mode: {sequencer_address}");
 
         // The registry ID is required to read settlements; fail fast with a
         // clear message instead of a cryptic RPC error mid-sync.

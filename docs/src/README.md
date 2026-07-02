@@ -7,12 +7,6 @@ forming a fully EVM-compatible L2. Walrus provides the data availability layer;
 Sui handles settlement and verification. Networking, consensus, and storage
 primitives come from [Commonware](https://commonware.xyz).
 
-## Status
-
-Under active development. The sequencer, Engine API client, Walrus DA publishing,
-Sui settlement, persistent storage, crash recovery, and p2p block propagation
-(via Commonware) are all implemented. Multi-sequencer consensus is pending.
-
 ## At a glance
 
 | Aspect          | Choice                       |

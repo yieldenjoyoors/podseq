@@ -50,9 +50,9 @@ DA latency. Blocks are persisted locally and broadcast via P2P before DA confirm
 
 ```sh
 podseq init config --out podseq.toml         # generate a config file
-podseq keyring generate-settlement            # generate a settlement key (suiprivkey)
-podseq keyring generate-block                 # generate a block signing key
+podseq keyring generate-key                   # sequencer key (Sui ed25519; settlement + blocks)
 podseq keyring generate-p2p                   # generate a p2p identity key
+podseq keyring generate-evm-key               # bridge relayer EVM key (secp256k1)
 podseq keyring list                           # show configured keys
 podseq status                                 # query Reth height + settlement config
 podseq start                                  # start the node
@@ -67,8 +67,9 @@ crates/
 ├── sequencer/   # SingleSequencer + Ed25519BlockSigner
 ├── store/       # Persistent storage (blocks, chain state, crash recovery)
 ├── sui/         # Walrus DA (HTTP) + Sui settlement (in-process sui-rust-sdk)
+│                # + enshrined bridge vault client
 ├── p2p/         # Commonware networking (discovery + broadcast + announce)
-└── node/        # Binary: CLI, config, runner, full node sync
+└── node/        # Binary: CLI, config, runner, full node sync, bridge relayer
 ```
 
 ## Dependencies
@@ -95,9 +96,9 @@ cargo build --release
 head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \n' > jwt.hex
 
 # 2. Generate keys
-podseq keyring generate-settlement --out sui.key
-podseq keyring generate-block --out block.key
+podseq keyring generate-key --out sequencer.key   # Sui ed25519 (settlement + blocks)
 podseq keyring generate-p2p --out p2p.key
+podseq keyring generate-evm-key --out relayer.key  # bridge relayer (optional, secp256k1)
 
 # 3. Generate and edit a config
 podseq init config --out podseq.toml
