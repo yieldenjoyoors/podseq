@@ -30,7 +30,6 @@
                         <path d="M5 12h14M13 6l6 6-6 6" />
                     </svg>
                 </a>
-                <a href="#/docs" class="btn btn-ghost">Read the docs</a>
                 <a
                     href="https://github.com/yieldenjoyoors/podseq"
                     target="_blank"
