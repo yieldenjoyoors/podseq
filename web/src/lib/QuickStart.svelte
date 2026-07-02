@@ -1,10 +1,11 @@
 <script lang="ts">
-    type Tab = { id: string; label: string; code: string };
+    type Tab = { id: string; label: string; lang: "sh" | "toml"; code: string };
 
     let tabs: Tab[] = [
         {
-            id: "reth",
-            label: "reth",
+            id: "jwt",
+            label: "jwt",
+            lang: "sh",
             code: `# shared 32-byte secret for Reth + podseq
 head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \\n' > jwt.hex
 
@@ -16,6 +17,7 @@ reth node --authrpc.jwtsecret jwt.hex
         {
             id: "keys",
             label: "keys",
+            lang: "sh",
             code: `# settlement key (Sui suiprivkey, ed25519)
 sui keytool generate ed25519    # save suiprivkey... to sui.key
 
@@ -26,6 +28,7 @@ podseq keyring list`,
         {
             id: "config",
             label: "config",
+            lang: "toml",
             code: `podseq init config --out podseq.toml
 
 [reth]
@@ -46,6 +49,7 @@ settlement_key_path = "sui.key"`,
         {
             id: "run",
             label: "run",
+            lang: "sh",
             code: `cargo build --release
 
 # sequencer (default): deploys settlement on first start
@@ -59,6 +63,109 @@ podseq start --config podseq.toml --mode full`,
     let active = $state(tabs[0].id);
     let copied = $state(false);
     const current = $derived(tabs.find((t) => t.id === active) ?? tabs[0]);
+    const html = $derived(
+        current.lang === "toml" ? toml(current.code) : sh(current.code),
+    );
+
+    function esc(s: string): string {
+        return s
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;");
+    }
+
+    // Shell: comments, flags, strings, numbers, and a small set of known commands.
+    function sh(src: string): string {
+        const known = new Set([
+            "head",
+            "od",
+            "tr",
+            "reth",
+            "sui",
+            "keytool",
+            "generate",
+            "podseq",
+            "keyring",
+            "generate-block",
+            "list",
+            "cargo",
+            "build",
+            "start",
+            "init",
+        ]);
+        return src
+            .split("\n")
+            .map((line) => {
+                if (/^\s*#/.test(line))
+                    return `<span class="t-com">${esc(line)}</span>`;
+                const hash = line.indexOf("#");
+                let body = line;
+                let com = "";
+                if (hash >= 0) {
+                    body = line.slice(0, hash);
+                    com = line.slice(hash);
+                }
+                const out = esc(body)
+                    .replace(/("[^"]*")/g, '<span class="t-str">$1</span>')
+                    .replace(
+                        /(\s|^)(--?[A-Za-z][\w-]*)/g,
+                        '$1<span class="t-flag">$2</span>',
+                    )
+                    .replace(/\b(\d+)\b/g, '<span class="t-num">$1</span>')
+                    .replace(/[A-Za-z_][\w-]*/g, (m) =>
+                        known.has(m) ? `<span class="t-cmd">${m}</span>` : m,
+                    );
+                return com
+                    ? `${out}<span class="t-com">${esc(com)}</span>`
+                    : out;
+            })
+            .join("\n");
+    }
+
+    // TOML: sections, keys, strings, numbers, booleans, comments.
+    function toml(src: string): string {
+        const shLine = (line: string) => {
+            if (/^\s*#/.test(line))
+                return `<span class="t-com">${esc(line)}</span>`;
+            return line;
+        };
+        // First pass: run the shell tokenizer so the leading `podseq init ...`
+        // command line is colored consistently with the other tabs.
+        const lines = src.split("\n");
+        const firstSh = lines.findIndex(
+            (l) =>
+                /^\s*#/.test(l) === false && !/^\s*\[/.test(l) && !/=/.test(l),
+        );
+        return lines
+            .map((line, i) => {
+                if (i === firstSh) return sh(line);
+                const section = line.match(/^(\s*)(\[[^\]]+\])(\s*)(#.*)?$/);
+                if (section)
+                    return `${section[1]}<span class="t-sec">${esc(
+                        section[2],
+                    )}</span>${section[3]}${section[4] ? `<span class="t-com">${esc(section[4])}</span>` : ""}`;
+                const kv = line.match(/^(\s*)([\w.]+)(\s*=)(.*)$/);
+                if (kv) {
+                    const val = esc(kv[4])
+                        .replace(/("[^"]*")/g, '<span class="t-str">$1</span>')
+                        .replace(
+                            /\b(true|false)\b/g,
+                            '<span class="t-num">$1</span>',
+                        )
+                        .replace(/\b(\d+)\b/g, '<span class="t-num">$1</span>');
+                    const trailing = val.match(/(#.*)$/);
+                    const valBody = trailing
+                        ? val.slice(0, val.length - trailing[1].length)
+                        : val;
+                    const valCom = trailing
+                        ? `<span class="t-com">${trailing[1]}</span>`
+                        : "";
+                    return `${kv[1]}<span class="t-key">${kv[2]}</span><span class="t-op">${kv[3]}</span>${valBody}${valCom}`;
+                }
+                return shLine(line);
+            })
+            .join("\n");
+    }
 
     async function copy() {
         try {
@@ -146,7 +253,7 @@ podseq start --config podseq.toml --mode full`,
                         <span>{copied ? "copied" : "copy"}</span>
                     </button>
                 </div>
-                <pre class="term-body"><code>{current.code}</code></pre>
+                <pre class="term-body"><code>{@html html}</code></pre>
             </div>
         </div>
     </div>
@@ -212,9 +319,36 @@ podseq start --config podseq.toml --mode full`,
     }
     .term-body code {
         white-space: pre;
-        color: inherit;
+        color: #d8d4ca;
         background: none;
         border: none;
         padding: 0;
+    }
+    .term-body :global(.t-com) {
+        color: #6b7280;
+        font-style: italic;
+    }
+    .term-body :global(.t-str) {
+        color: #e5a663;
+    }
+    .term-body :global(.t-num) {
+        color: #d19a66;
+    }
+    .term-body :global(.t-flag) {
+        color: #c678dd;
+    }
+    .term-body :global(.t-cmd) {
+        color: #10b981;
+        font-weight: 600;
+    }
+    .term-body :global(.t-key) {
+        color: #61afef;
+    }
+    .term-body :global(.t-sec) {
+        color: #e06c75;
+        font-weight: 600;
+    }
+    .term-body :global(.t-op) {
+        color: #8c8c95;
     }
 </style>
