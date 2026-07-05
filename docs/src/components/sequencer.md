@@ -17,11 +17,23 @@ let signer = Ed25519BlockSigner::from_suiprivkey_file(path)?;
 let signature = signer.sign_header(&header)?;
 ```
 
+## Forced inclusion
+
+The single sequencer can censor any ordinary tx by refusing to include it.
+Forced inclusion removes that power: users post a tx to a Sui-side inbox, and
+the sequencer must include it within N blocks or halt. After each
+`engine.build()`, the sequencer pulls unread inbox entries, submits each to
+Reth's mempool via `eth_sendRawTransaction`, and advances the inbox cursor
+once the tx is mined. Full nodes verify the liveness invariant on settlement.
+
+Forced txs enter the same mempool as user txs and ride the same gas-limit
+cap, so block validity is unchanged. The sequencer's only choice is to
+include the forced tx or stop producing blocks.
+
 ## Trust model
 
 The single sequencer is trusted for liveness (block production halts if it
 goes offline). State validity is verifiable by anyone: every block is
 executed by Reth, and every block's data is anchored on Walrus + Sui so full
-nodes independently reconstruct the chain. Forced inclusion and exit queues
-([Roadmap](../roadmap.md) Phase 2) are the planned mechanisms for reducing
-the sequencer's censorship and liveness power.
+nodes independently reconstruct the chain. Forced inclusion bounds the
+sequencer's censorship power; exit queues bound its liveness power.

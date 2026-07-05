@@ -1,10 +1,16 @@
-//! Block signing for podseq.
+//! Block signing and forced inclusion for podseq.
 //!
-//! podseq does not order transactions itself. Block contents are decided by
-//! Reth (the execution client fills each block from its own mempool, subject to
-//! the chain's gas limit). podseq's job is to *produce* blocks on a timer,
-//! sign their headers so full nodes can attribute them to the sequencer, and
-//! anchor them on DA + settlement.
+//! Block contents come from Reth: the execution client fills each block from
+//! its own mempool (gas-price greedy, gas-limit capped). podseq's job is to
+//! *produce* blocks on a timer, sign their headers so full nodes can attribute
+//! them to the sequencer, and anchor them on DA + settlement.
+//!
+//! Forced inclusion removes the sequencer's censoring power. Users post a tx
+//! to a Sui-side inbox; the sequencer must include it within N blocks or halt.
+//! The sequencer pulls unread inbox entries, submits each to Reth's mempool
+//! via `eth_sendRawTransaction`, and advances the inbox cursor once the tx is
+//! mined. Forced txs enter the same mempool as user txs and ride the same
+//! gas-limit cap, so this stays compatible with Reth-owned block contents.
 //!
 //! See `docs/src/components/sequencer.md` for the rationale.
 
