@@ -11,7 +11,6 @@ primitives come from [Commonware](https://commonware.xyz).
 
 | Aspect          | Choice                       |
 | --------------- | ---------------------------- |
-| Language        | Rust                         |
 | Execution       | Standalone Reth (Engine API) |
 | DA / settlement | Walrus / Sui                 |
 | P2P / consensus | Commonware                   |

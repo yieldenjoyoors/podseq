@@ -31,7 +31,3 @@
 
 - [Engine API](./engine-api.md)
 - [Walrus & Sui](./walrus-sui.md)
-
-# Development
-
-- [Development Guide](./development.md)
