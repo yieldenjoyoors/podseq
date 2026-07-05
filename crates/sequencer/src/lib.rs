@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use podseq_core::{Batch, BlockSigner, Error, Header, Sequencer, Signature};
+use podseq_core::{BlockSigner, Error, Header, Signature};
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::Signer;
 use sui_sdk_types::{Address, Ed25519PublicKey, SimpleSignature};
@@ -68,23 +68,9 @@ impl SingleSequencer {
         self.pending.push(tx);
     }
 
-    /// Removes and returns all pending transactions as a batch.
-    pub fn drain(&mut self) -> Batch {
-        let txs = std::mem::take(&mut self.pending);
-        Batch { transactions: txs }
-    }
-
-    /// Returns the number of queued transactions.
-    pub fn pending_count(&self) -> usize {
-        self.pending.len()
-    }
-}
-
-impl Sequencer for SingleSequencer {
-    async fn next_batch(&self) -> Result<Batch, Error> {
-        Ok(Batch {
-            transactions: self.pending.clone(),
-        })
+    /// Removes and returns all pending transactions in FIFO order.
+    pub fn drain(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.pending)
     }
 }
 
@@ -92,28 +78,20 @@ impl Sequencer for SingleSequencer {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn next_batch_returns_pending() {
-        let mut seq = SingleSequencer::new();
-        seq.submit(vec![1, 2, 3]);
-        let batch = seq.next_batch().await.unwrap();
-        assert_eq!(batch.transactions, vec![vec![1, 2, 3]]);
-    }
-
-    #[tokio::test]
-    async fn empty_batch_has_no_transactions() {
-        let seq = SingleSequencer::new();
-        let batch = seq.next_batch().await.unwrap();
-        assert!(batch.transactions.is_empty());
-    }
-
     #[test]
-    fn drain_clears_pending() {
+    fn drain_returns_pending_in_fifo_order() {
         let mut seq = SingleSequencer::new();
         seq.submit(vec![1]);
         seq.submit(vec![2]);
+        seq.submit(vec![3]);
         let batch = seq.drain();
-        assert_eq!(batch.transactions.len(), 2);
-        assert_eq!(seq.pending_count(), 0);
+        assert_eq!(batch, vec![vec![1], vec![2], vec![3]]);
+        assert!(seq.drain().is_empty());
+    }
+
+    #[test]
+    fn drain_on_empty_returns_empty() {
+        let mut seq = SingleSequencer::new();
+        assert!(seq.drain().is_empty());
     }
 }

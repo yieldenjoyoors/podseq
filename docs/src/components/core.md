@@ -12,30 +12,9 @@ are stable; any implementation can be swapped without touching consumers.
 | `BlobId` | 256-bit Walrus blob identifier (content-addressed) |
 | `Header` | Sequencer-produced block header                    |
 | `Block`  | A header plus its committed transaction data       |
-| `Batch`  | An ordered list of transactions awaiting execution |
 | `Error`  | Typed error enum shared across all crates          |
 
 ## Traits
-
-### `Sequencer`
-
-Orders transactions into a batch.
-
-```rust
-pub trait Sequencer: Send + Sync {
-    fn next_batch(&self) -> impl Future<Output = Result<Batch, Error>> + Send;
-}
-```
-
-### `Executor`
-
-Drives the execution layer (Reth) to turn a batch into a block.
-
-```rust
-pub trait Executor: Send + Sync {
-    fn execute(&self, batch: &Batch) -> impl Future<Output = Result<Block, Error>> + Send;
-}
-```
 
 ### `DataAvailability`
 

@@ -261,17 +261,13 @@ async fn produce_block(
     }
     info!(height, ?block_hash, "head advanced");
 
-    // Reth executes via engine.build(); the drained batch is recorded for
+    // Reth executes via engine.build(); the drained tx hashes are recorded for
     // auditability and future ordering control.
     {
         let mut seq = sequencer.lock().await;
-        let batch = seq.drain();
-        if !batch.transactions.is_empty() {
-            info!(
-                height,
-                txs = batch.transactions.len(),
-                "batch drained from mempool"
-            );
+        let txs = seq.drain();
+        if !txs.is_empty() {
+            info!(height, txs = txs.len(), "batch drained from mempool");
         }
     }
 

@@ -17,9 +17,9 @@ openssl rand -hex 32 > jwt.hex
 
 ## Ports
 
-| Port | Purpose                 |
-| ---- | ----------------------- |
-| 8545 | JSON-RPC (public)       |
+| Port | Purpose                    |
+| ---- | -------------------------- |
+| 8545 | JSON-RPC (public)          |
 | 8551 | Engine API (authenticated) |
 
 ## Block production cycle
@@ -34,7 +34,7 @@ Podseq                                     Reth
    │  2. {payloadId}                          │
    │◄─────────────────────────────────────────│
    │                                          │
-   │  3. engine_getPayloadV3(payloadId)       │
+   │  3. engine_getPayloadV4(payloadId)       │
    │─────────────────────────────────────────►│
    │                                          │
    │  4. {executionPayload, blockValue}       │
@@ -42,7 +42,7 @@ Podseq                                     Reth
    │                                          │
    │  [Podseq broadcasts to P2P, submits DA]  │
    │                                          │
-   │  5. engine_newPayloadV3(executionPayload)│
+   │  5. engine_newPayloadV4(executionPayload)│
    │─────────────────────────────────────────►│
    │                                          │
    │  6. {status: VALID}                      │
@@ -88,37 +88,38 @@ Response:
 }
 ```
 
-### `engine_getPayloadV3`
+### `engine_getPayloadV4`
 
 Retrieves a built payload by its `payloadId`.
 
 ```json
 {
-  "method": "engine_getPayloadV3",
+  "method": "engine_getPayloadV4",
   "params": ["0x...payloadId"]
 }
 ```
 
-### `engine_newPayloadV3`
+### `engine_newPayloadV4`
 
 Validates and executes a payload.
 
 ```json
 {
-  "method": "engine_newPayloadV3",
+  "method": "engine_newPayloadV4",
   "params": [
     { "executionPayload": "..." },
     ["0x...versionedHashes"],
-    "0x...parentBeaconBlockRoot"
+    "0x...parentBeaconBlockRoot",
+    []
   ]
 }
 ```
 
 ## Status codes
 
-| Status     | Meaning                              |
-| ---------- | ------------------------------------ |
-| `VALID`    | Payload is valid                     |
-| `INVALID`  | Payload is invalid                   |
-| `SYNCING`  | Node is syncing                      |
-| `ACCEPTED` | Payload accepted, not yet validated  |
+| Status     | Meaning                             |
+| ---------- | ----------------------------------- |
+| `VALID`    | Payload is valid                    |
+| `INVALID`  | Payload is invalid                  |
+| `SYNCING`  | Node is syncing                     |
+| `ACCEPTED` | Payload accepted, not yet validated |

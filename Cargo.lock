@@ -3934,7 +3934,6 @@ dependencies = [
  "podseq-core",
  "sui-crypto",
  "sui-sdk-types",
- "tokio",
 ]
 
 [[package]]

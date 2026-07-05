@@ -134,7 +134,7 @@ A full node does **not** produce blocks. It reconstructs the chain from DA +
 settlement, verifies every block signature against the sequencer's public key,
 and re-executes blocks against a local Reth.
 
-Set `mode = "full"` (or run `podseq start --mode full`).
+Set `mode = "full"` in the config.
 
 ### Minimal full node config
 

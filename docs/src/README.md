@@ -17,6 +17,7 @@ primitives come from [Commonware](https://commonware.xyz).
 
 ## Where to start
 
-- New to the project? Read [Architecture](./architecture.md).
+New to the project? Read [Architecture](./architecture.md).
+
 - Want to follow the data flow? See [Block Production](./block-production.md).
-- Building or contributing? See the [Development Guide](./development.md).
+- Building or contributing? See [`CONTRIBUTING.md`](https://github.com/podseq/podseq/blob/main/CONTRIBUTING.md).

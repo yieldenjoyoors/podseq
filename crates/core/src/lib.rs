@@ -37,22 +37,6 @@ pub struct Block {
     pub signature: Option<Signature>,
 }
 
-/// An ordered batch of transactions to be executed into a block.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Batch {
-    pub transactions: Vec<Vec<u8>>,
-}
-
-/// Produces the next batch of transactions for execution.
-pub trait Sequencer: Send + Sync {
-    fn next_batch(&self) -> impl Future<Output = Result<Batch, Error>> + Send;
-}
-
-/// Executes a batch of transactions and produces a block.
-pub trait Executor: Send + Sync {
-    fn execute(&self, batch: &Batch) -> impl Future<Output = Result<Block, Error>> + Send;
-}
-
 /// Treats a blob as a batch: one publish stores one or more blocks under a single blob id, and a fetch returns the whole batch.
 pub trait DataAvailability: Send + Sync {
     fn publish(&self, blocks: &[Block]) -> impl Future<Output = Result<BlobId, Error>> + Send;
@@ -136,11 +120,6 @@ mod tests {
     fn blob_id_roundtrips() {
         let id = BlobId([1u8; 32]);
         assert_eq!(id.0, [1u8; 32]);
-    }
-
-    #[test]
-    fn batch_defaults_empty() {
-        assert!(Batch::default().transactions.is_empty());
     }
 
     #[test]

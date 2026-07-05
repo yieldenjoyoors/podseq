@@ -1,12 +1,12 @@
 # Sequencer (`podseq-sequencer`)
 
-The sequencer crate orders pending transactions into batches and signs produced block
-headers. It implements [`Sequencer`](./core.md#sequencer) and [`BlockSigner`](./core.md#blocksigner).
+The sequencer crate holds pending transactions in a FIFO queue and signs produced
+block headers. It exposes [`BlockSigner`](./core.md#blocksigner) for signature
+verification by full nodes.
 
 ## `SingleSequencer`
 
-The current implementation is a single-operator sequencer: one designated node that
-orders all transactions.
+A single-operator sequencer: one designated node that holds the queue.
 
 ```rust
 pub struct SingleSequencer {
@@ -14,8 +14,8 @@ pub struct SingleSequencer {
 }
 ```
 
-- `submit(tx)` adds a transaction to the pending pool.
-- `next_batch()` drains the pending transactions into an ordered `Batch`.
+- `submit(tx)` appends a transaction to the queue.
+- `drain()` takes all pending transactions in FIFO order, leaving the queue empty.
 
 ## `Ed25519BlockSigner`
 
@@ -36,11 +36,15 @@ let signature = signer.sign_header(&header)?;
 | Liveness              | Sequencer must be online         |
 | MEV control           | Sequencer controlled             |
 
-Podseq starts with single sequencing. The trait abstraction supports based
-sequencing or a consensus-backed sequencer as a future upgrade.
+Podseq starts with single sequencing. Trust-minimization (forced inclusion,
+exit queue, stall detection) is handled outside this crate — see
+[Roadmap](../roadmap.md).
 
 ## Status
 
-`SingleSequencer` holds transactions in memory as 32-byte tx hashes; the runner
-feeds them from Reth's mempool before each production tick and drains the ordered
-batch during block production. Real ordering policy and batch formation are pending.
+Reth owns block contents: `produce_block` calls `engine.build()`, and Reth
+pulls from its own mempool and orders by its own policy (gas price). The
+`SingleSequencer` queue does not currently feed into the block — drained hashes
+are logged only. It exists so podseq can later take control of block contents
+(explicit transaction list via `PayloadAttributes` or `newPayload`) and apply an
+opinionated ordering policy. Until then, ordering is delegated to Reth.

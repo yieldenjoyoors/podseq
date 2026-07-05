@@ -21,8 +21,8 @@ traits defined in [`podseq-core`](./core.md).
 | Crate       | Responsibility                                         | Core trait                       |
 | ----------- | ------------------------------------------------------ | -------------------------------- |
 | `core`      | Interfaces and Commonware runtime bridge               | (defines them)                   |
-| `engine`    | Reth Engine API client                                 | `Executor`                       |
-| `sequencer` | Transaction ordering and block signing                 | `Sequencer`, `BlockSigner`       |
+| `engine`    | Reth Engine API client                                 | (none)                           |
+| `sequencer` | FIFO transaction queue and block signing               | `BlockSigner`                    |
 | `sui`       | Walrus DA + Sui settlement + bridge vault              | `DataAvailability`, `Settlement` |
 | `store`     | Persistent storage + crash recovery                    | (none)                           |
 | `p2p`       | Block propagation via Commonware                       | (none)                           |
