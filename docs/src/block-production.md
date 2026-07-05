@@ -39,7 +39,7 @@ User Tx → Reth mempool
    with payload attributes (`timestamp`, `prevRandao`, `suggestedFeeRecipient`).
    Reth builds the block itself: it pulls transactions from its own mempool,
    sorted by gas price, and packs greedily until the chain's block gas limit.
-   Podseq does not select or order transactions — see
+   Transaction selection and ordering are Reth's responsibility: see
    [Sequencer](./components/sequencer.md).
 
 2. **Retrieve.** Podseq calls `engine_getPayloadV4(payloadId)` to get the assembled

@@ -130,9 +130,9 @@ full node that should verify this sequencer's blocks.
 
 ## Full node
 
-A full node does **not** produce blocks. It reconstructs the chain from DA +
-settlement, verifies every block signature against the sequencer's public key,
-and re-executes blocks against a local Reth.
+A full node reconstructs the chain from DA + settlement, verifies every block
+signature against the sequencer's public key, and re-executes blocks against a
+local Reth. Only the sequencer produces blocks.
 
 Set `mode = "full"` in the config.
 
@@ -154,8 +154,10 @@ rpc_url = "https://fullnode.testnet.sui.io:443"
 registry_id           = "0x..."   # the shared Registry object
 ```
 
-The node refuses to start if `sequencer_pubkey` or `registry_id` is missing. A full node does **not** use `signer.key_path`, `sui.settler_cap_id`, `sui.settlement_package_id` or
-`walrus.publisher_url`.
+The node refuses to start if `sequencer_pubkey` or `registry_id` is missing.
+Full-node mode only needs `[reth]`, `[signer] sequencer_pubkey`, and
+`[sui] registry_id` — `signer.key_path`, `sui.settler_cap_id`,
+`sui.settlement_package_id`, and `walrus.publisher_url` are sequencer-only.
 
 ### Fast-sync (optional)
 
