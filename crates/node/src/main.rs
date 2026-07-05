@@ -6,11 +6,12 @@ mod bridge;
 mod config;
 mod full_node;
 mod keyring;
+mod metrics;
 mod runner;
 mod settlement;
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -212,6 +213,22 @@ async fn start_sequencer(
         .map(|(bc, rx, n)| (Some(bc), Some(rx), Some(n)))
         .unwrap_or((None, None, None));
 
+    // Metrics: construct and optionally start the HTTP endpoint.
+    let podseq_metrics = Arc::new(metrics::PodseqMetrics::new());
+    let metrics_shutdown = Arc::new(AtomicBool::new(false));
+    let _metrics_handle = if config.metrics.enabled {
+        let addr: std::net::SocketAddr = config
+            .metrics
+            .listen_addr
+            .parse()
+            .context("invalid metrics.listen_addr")?;
+        let m = Arc::clone(&podseq_metrics);
+        let s = Arc::clone(&metrics_shutdown);
+        Some(tokio::spawn(metrics::serve(m, addr, s)))
+    } else {
+        None
+    };
+
     let signer_key_path = config
         .signer
         .key_path
@@ -273,15 +290,27 @@ async fn start_sequencer(
         &config.data_dir,
         broadcaster,
         config.walrus.batch_size_bytes,
+        Arc::clone(&podseq_metrics),
     );
 
     // Enshrined bridge relayer: runs concurrently with the production loop and is
     // deliberately NON-FATAL. The spawned task owns its own config copy and may
     // persist Sui object IDs to the config file independently of the runner.
-    let bridge_handle = bridge::spawn(config.clone(), config_path.clone(), signer_key_path.clone());
+    let bridge_handle = bridge::spawn(
+        config.clone(),
+        config_path.clone(),
+        signer_key_path.clone(),
+        Arc::clone(&podseq_metrics),
+    );
 
     info!("starting sequencer loop (Ctrl+C to stop)");
     let result = runner.run().await;
+
+    // Shut down the metrics endpoint.
+    metrics_shutdown.store(true, Ordering::SeqCst);
+    if let Some(handle) = _metrics_handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
 
     if let Some((mut handle, shutdown)) = bridge_handle {
         shutdown.store(true, Ordering::SeqCst);
@@ -301,6 +330,22 @@ async fn start_sequencer(
 
 async fn start_full_node(config: Config, context: podseq_core::runtime::Context) -> Result<()> {
     info!(mode = "full", "starting podseq node");
+
+    // Metrics: construct and optionally start the HTTP endpoint.
+    let podseq_metrics = Arc::new(metrics::PodseqMetrics::new());
+    let metrics_shutdown = Arc::new(AtomicBool::new(false));
+    let _metrics_handle = if config.metrics.enabled {
+        let addr: std::net::SocketAddr = config
+            .metrics
+            .listen_addr
+            .parse()
+            .context("invalid metrics.listen_addr")?;
+        let m = Arc::clone(&podseq_metrics);
+        let s = Arc::clone(&metrics_shutdown);
+        Some(tokio::spawn(metrics::serve(m, addr, s)))
+    } else {
+        None
+    };
 
     let receiver = build_p2p(&context, &config.p2p)
         .await?
@@ -322,5 +367,13 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
 
     let node = full_node::FullNode::new(engine, sui_client, &config, receiver)?;
     info!("starting full node sync (Ctrl+C to stop)");
-    node.run().await
+    let result = node.run().await;
+
+    // Shut down the metrics endpoint.
+    metrics_shutdown.store(true, Ordering::SeqCst);
+    if let Some(handle) = _metrics_handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
+
+    result
 }
