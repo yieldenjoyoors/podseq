@@ -12,13 +12,12 @@ use alloy_rpc_types_engine::{ForkchoiceState, PayloadAttributes};
 use anyhow::{Context, Result};
 use commonware_cryptography::Digestible as _;
 use podseq_core::{Block, BlockSigner, DataAvailability, Settlement};
-use podseq_engine::{payload_into_block, Engine, MempoolClient, PARENT_BEACON_BLOCK_ROOT};
+use podseq_engine::{payload_into_block, Engine, PARENT_BEACON_BLOCK_ROOT};
 use podseq_p2p::BlockBroadcaster;
-use podseq_sequencer::SingleSequencer;
 use podseq_store::{BlockStore, ChainState as StoredState, PendingStore, StateStore};
 use podseq_sui::Client as SuiClient;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::config::SequencerConfig;
 
@@ -38,8 +37,6 @@ struct ChainState {
 /// Runs the sequencer block production loop until shutdown.
 pub struct Runner {
     engine: Engine,
-    mempool: MempoolClient,
-    sequencer: Arc<Mutex<SingleSequencer>>,
     sui: SuiClient,
     block_signer: Arc<dyn BlockSigner>,
     block_store: Arc<BlockStore>,
@@ -57,7 +54,6 @@ impl Runner {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         engine: Engine,
-        mempool: MempoolClient,
         sui: SuiClient,
         block_signer: Arc<dyn BlockSigner>,
         config: &SequencerConfig,
@@ -69,8 +65,6 @@ impl Runner {
         podseq_store::init(data_dir).expect("failed to init storage");
         Self {
             engine,
-            mempool,
-            sequencer: Arc::new(Mutex::new(SingleSequencer::new())),
             sui,
             block_signer,
             block_store: Arc::new(BlockStore::new(data_dir)),
@@ -159,20 +153,15 @@ impl Runner {
         let state_store = self.state_store;
         let pending_store = self.pending_store;
         let broadcaster = self.broadcaster;
-        let mempool = self.mempool;
-        let sequencer = self.sequencer;
         let mut ticker = tokio::time::interval(self.block_time);
 
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    if let Err(e) = refresh_mempool(&mempool, &sequencer).await {
-                        warn!(error = %e, "failed to refresh mempool (block building continues)");
-                    }
                     if let Err(e) = produce_block(
                         &engine, &state, fee_recipient, &block_signer, &tx,
                         &block_store, &state_store, &pending_store,
-                        &broadcaster, &sequencer,
+                        &broadcaster,
                     ).await {
                         error!(error = ?e, "block production failed");
                     }
@@ -216,7 +205,6 @@ async fn produce_block(
     state_store: &StateStore,
     pending_store: &PendingStore,
     broadcaster: &Option<BlockBroadcaster>,
-    sequencer: &Mutex<SingleSequencer>,
 ) -> Result<()> {
     let s = state.lock().await;
     let head = s.head;
@@ -260,16 +248,6 @@ async fn produce_block(
         s.timestamp = timestamp;
     }
     info!(height, ?block_hash, "head advanced");
-
-    // Reth executes via engine.build(); the drained tx hashes are recorded for
-    // auditability and future ordering control.
-    {
-        let mut seq = sequencer.lock().await;
-        let txs = seq.drain();
-        if !txs.is_empty() {
-            info!(height, txs = txs.len(), "batch drained from mempool");
-        }
-    }
 
     let mut block = payload_into_block(&built).context("converting payload to block")?;
     block.signature = Some(block_signer.sign_header(&block.header)?);
@@ -575,21 +553,6 @@ fn recover_pending(
             }
         }
     }
-}
-
-async fn refresh_mempool(
-    mempool: &MempoolClient,
-    sequencer: &Mutex<SingleSequencer>,
-) -> Result<()> {
-    let hashes = mempool.pending_transactions().await?;
-    if !hashes.is_empty() {
-        debug!(count = hashes.len(), "mempool has pending transactions");
-        let mut seq = sequencer.lock().await;
-        for hash in &hashes {
-            seq.submit(hash.to_vec());
-        }
-    }
-    Ok(())
 }
 
 fn decode_block_hash(data: &[u8]) -> Result<B256> {

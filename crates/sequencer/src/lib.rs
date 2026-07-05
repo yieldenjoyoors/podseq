@@ -1,4 +1,12 @@
-//! Transaction sequencing and block signing.
+//! Block signing for podseq.
+//!
+//! podseq does not order transactions itself. Block contents are decided by
+//! Reth (the execution client fills each block from its own mempool, subject to
+//! the chain's gas limit). podseq's job is to *produce* blocks on a timer,
+//! sign their headers so full nodes can attribute them to the sequencer, and
+//! anchor them on DA + settlement.
+//!
+//! See `docs/src/components/sequencer.md` for the rationale.
 
 #![forbid(unsafe_code)]
 
@@ -48,50 +56,5 @@ impl BlockSigner for Ed25519BlockSigner {
             return Err(Error::Execution("unexpected signature scheme".into()));
         };
         Ok(signature.into())
-    }
-}
-
-/// Single-operator sequencer that orders pending transactions.
-#[derive(Debug, Default)]
-pub struct SingleSequencer {
-    pending: Vec<Vec<u8>>,
-}
-
-impl SingleSequencer {
-    /// Creates an empty sequencer.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Queues a transaction for sequencing.
-    pub fn submit(&mut self, tx: Vec<u8>) {
-        self.pending.push(tx);
-    }
-
-    /// Removes and returns all pending transactions in FIFO order.
-    pub fn drain(&mut self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut self.pending)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn drain_returns_pending_in_fifo_order() {
-        let mut seq = SingleSequencer::new();
-        seq.submit(vec![1]);
-        seq.submit(vec![2]);
-        seq.submit(vec![3]);
-        let batch = seq.drain();
-        assert_eq!(batch, vec![vec![1], vec![2], vec![3]]);
-        assert!(seq.drain().is_empty());
-    }
-
-    #[test]
-    fn drain_on_empty_returns_empty() {
-        let mut seq = SingleSequencer::new();
-        assert!(seq.drain().is_empty());
     }
 }

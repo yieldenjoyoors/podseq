@@ -12,7 +12,7 @@ traits defined in [`podseq-core`](./core.md).
         ▼           ▼          ▼          ▼            ▼          ▼
    ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
    │sequencer│ │ engine  │ │   sui   │ │  store  │ │   p2p   │ │ runtime │
-   │ ordering│ │  Reth   │ │DA+settle│ │persist  │ │ network │ │ bridge  │
+   │ signing │ │  Reth   │ │DA+settle│ │persist  │ │ network │ │ bridge  │
    └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘
         │           │           │           │           │           │
         └───────────┴───────────┴───────────┴───────────┴──► podseq-core (traits)
@@ -22,7 +22,7 @@ traits defined in [`podseq-core`](./core.md).
 | ----------- | ------------------------------------------------------ | -------------------------------- |
 | `core`      | Interfaces and Commonware runtime bridge               | (defines them)                   |
 | `engine`    | Reth Engine API client                                 | (none)                           |
-| `sequencer` | FIFO transaction queue and block signing               | `BlockSigner`                    |
+| `sequencer` | Block header signing (Ed25519)                         | `BlockSigner`                    |
 | `sui`       | Walrus DA + Sui settlement + bridge vault              | `DataAvailability`, `Settlement` |
 | `store`     | Persistent storage + crash recovery                    | (none)                           |
 | `p2p`       | Block propagation via Commonware                       | (none)                           |

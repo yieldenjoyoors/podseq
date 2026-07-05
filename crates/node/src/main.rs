@@ -264,12 +264,8 @@ async fn start_sequencer(
         Arc::new(signer) as Arc<dyn podseq_core::BlockSigner>
     };
 
-    let mempool = podseq_engine::MempoolClient::new(&config.reth.rpc_url)
-        .context("building mempool client")?;
-
     let runner = runner::Runner::new(
         engine,
-        mempool,
         sui_client,
         block_signer,
         &config.sequencer,

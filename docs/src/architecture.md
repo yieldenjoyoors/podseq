@@ -1,8 +1,9 @@
 # Architecture
 
-Podseq separates four concerns: ordering transactions, executing them against an EVM,
-publishing the resulting blocks to a DA layer, and settling commitments on L1.
-Each concern maps to a crate.
+Podseq separates four concerns: producing blocks on a timer, executing them against an EVM,
+publishing the resulting blocks to a DA layer, and settling commitments on L1.  
+Note: Transaction selection and ordering within a block are
+handled by Reth, not podseq: see [Sequencer](./components/sequencer.md).)
 
 ## System overview
 
@@ -16,7 +17,7 @@ Each concern maps to a crate.
 │                            Podseq                               │
 │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌──────────────┐  │
 │  │ Sequencer │  │  Reth     │  │    P2P    │  │   Walrus     │  │
-│  │ (ordering)│  │ (Engine)  │  │(Commonware)│  │  Submitter   │  │
+│  │ (signing) │  │ (Engine)  │  │(Commonware)│  │  Submitter   │  │
 │  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └───────┬──────┘  │
 └────────┼──────────────┼──────────────┼────────────────┼─────────┘
          │              │              │                │
@@ -37,7 +38,7 @@ Each concern maps to a crate.
 crates/
 ├── core/        # Interfaces only
 ├── engine/      # Reth Engine API client
-├── sequencer/   # Ordering + block signing
+├── sequencer/   # Block header signing
 ├── store/       # Persistent storage (blocks, state, pending crash-recovery)
 ├── sui/         # Sui layer: Walrus DA + settlement + bridge vault (one wallet)
 ├── p2p/         # Block propagation (Commonware discovery + broadcast)

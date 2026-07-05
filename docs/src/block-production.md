@@ -8,20 +8,20 @@ This page traces a transaction from the Reth mempool all the way to settlement o
 User Tx → Reth mempool
               │
               ▼
-      Podseq polls mempool (txpool_content)
+      Podseq production tick
               │
               ▼
-      SingleSequencer orders pending txs
-              │
-              ▼
-      engine_forkchoiceUpdated  ──► Reth builds payload
-              │
+      engine_forkchoiceUpdated  ──► Reth builds payload from its mempool
+              │                      (Reth owns tx selection + ordering, gas-price greedy, gas-limit capped)
               ▼
       engine_getPayload         ──► Reth returns block
               │
               ├──► P2P broadcast (block data on channel 0)
              │     + P2P announce (height + digest on channel 1)
              │     → full nodes pull block from broadcast cache
+              │
+              ▼
+      Podseq signs the block header (Ed25519)
               │
               ▼
       Walrus batch publish ──► Walrus blob (hard confirmation)
@@ -35,14 +35,18 @@ User Tx → Reth mempool
 
 ## Steps in detail
 
-1. **Collect & order.** The sequencer pulls transactions from the Reth mempool and
-   orders them into a [`Batch`](./components/sequencer.md).
+1. **Build.** On each production tick, podseq calls `engine_forkchoiceUpdatedV3`
+   with payload attributes (`timestamp`, `prevRandao`, `suggestedFeeRecipient`).
+   Reth builds the block itself: it pulls transactions from its own mempool,
+   sorted by gas price, and packs greedily until the chain's block gas limit.
+   Podseq does not select or order transactions — see
+   [Sequencer](./components/sequencer.md).
 
-2. **Build.** Podseq calls `engine_forkchoiceUpdatedV3` with payload attributes. Reth
-   starts building a block from its pending transactions.
-
-3. **Retrieve.** Podseq calls `engine_getPayloadV4(payloadId)` to get the assembled
+2. **Retrieve.** Podseq calls `engine_getPayloadV4(payloadId)` to get the assembled
    execution payload from Reth.
+
+3. **Sign.** Podseq signs the block header with its Ed25519 key so full nodes can
+   attribute the block to the authorized sequencer.
 
 4. **Broadcast (soft confirmation).** The new block is gossiped over the P2P network
    (Commonware) so full nodes can execute it immediately, before it is posted to DA.

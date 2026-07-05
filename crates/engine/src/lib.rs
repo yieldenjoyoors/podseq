@@ -4,7 +4,6 @@
 
 pub mod auth;
 pub mod client;
-pub mod mempool;
 
 use alloy_primitives::B256;
 use alloy_rpc_types_engine::{
@@ -15,7 +14,6 @@ use podseq_core::{Block, Error, Header};
 
 pub use auth::Auth;
 pub use client::{Client, EngineError};
-pub use mempool::{MempoolClient, MempoolError};
 
 /// Parent beacon block root applied to every block.
 /// This consensus client and has no beacon chain, so there is no real

@@ -52,7 +52,7 @@ documentation at **[podseq.xyz/#/docs](https://podseq.xyz/#/docs)**.
 crates/
 ├── core/        # Interfaces, types, Commonware runtime bridge
 ├── engine/      # Reth Engine API client (build, accept, finalize, JWT)
-├── sequencer/   # SingleSequencer + Ed25519BlockSigner
+├── sequencer/   # Ed25519BlockSigner (block header signing)
 ├── store/       # Persistent storage (blocks, chain state, recovery)
 ├── sui/         # Walrus DA (HTTP) + Sui settlement + bridge vault client
 ├── p2p/         # Commonware networking (discovery + broadcast + announce)
