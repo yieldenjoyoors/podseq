@@ -11,7 +11,7 @@ mod runner;
 mod settlement;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -160,14 +160,17 @@ fn load_config(config_path: &Option<PathBuf>) -> Result<Config> {
 
 /// Spawns the metrics HTTP server when `[metrics] enabled = true`.
 ///
-/// Returns the optional join handle and the shutdown flag. When metrics are
-/// disabled, returns `(None, flag)` so the caller can still call
-/// [`shutdown_metrics`] without branching.
+/// Returns the optional join handle and the shared shutdown notifier. When
+/// metrics are disabled, returns `(None, notify)` so the caller can still
+/// call [`shutdown_metrics`] without branching.
 fn start_metrics_endpoint(
     config: &Config,
     metrics: &Arc<metrics::PodseqMetrics>,
-) -> Result<(Option<tokio::task::JoinHandle<()>>, Arc<AtomicBool>)> {
-    let shutdown = Arc::new(AtomicBool::new(false));
+) -> Result<(
+    Option<tokio::task::JoinHandle<()>>,
+    Arc<tokio::sync::Notify>,
+)> {
+    let shutdown = Arc::new(tokio::sync::Notify::new());
     if !config.metrics.enabled {
         return Ok((None, shutdown));
     }
@@ -184,11 +187,36 @@ fn start_metrics_endpoint(
     Ok((Some(handle), shutdown))
 }
 
-/// Signals the metrics endpoint to shut down and awaits its exit (best-effort).
-async fn shutdown_metrics(handle: Option<tokio::task::JoinHandle<()>>, shutdown: Arc<AtomicBool>) {
-    shutdown.store(true, Ordering::SeqCst);
+/// Signals shutdown and awaits the metrics endpoint exit (best-effort).
+async fn shutdown_metrics(
+    handle: Option<tokio::task::JoinHandle<()>>,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    shutdown.notify_waiters();
     if let Some(handle) = handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
+}
+
+/// Polls the settlement key's SUI balance every 15 min and updates the gauge.
+/// Runs until `shutdown` is notified.
+async fn refresh_sui_gas_balance(
+    metrics: Arc<metrics::PodseqMetrics>,
+    sui: podseq_sui::Client,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    loop {
+        match sui.sui_balance().await {
+            Ok(Some(mist)) => {
+                metrics.sui_gas_balance.set(mist as i64);
+            }
+            Ok(None) => break, // no settlement signer attached
+            Err(e) => warn!(error = %e, "failed to refresh SUI gas balance"),
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(900)) => {},
+            _ = shutdown.notified() => break,
+        }
     }
 }
 
@@ -285,6 +313,14 @@ async fn start_sequencer(
     .context("settlement preflight failed")?;
     let settlement = settlement::setup_signer(&mut config, &config_path, &signer_key_path).await?;
     sui_client = sui_client.with_settlement(settlement);
+
+    // Refresh the SUI gas balance gauge periodically.
+    {
+        let metrics = Arc::clone(&podseq_metrics);
+        let sui = sui_client.clone();
+        let shutdown = Arc::clone(&metrics_shutdown);
+        tokio::spawn(refresh_sui_gas_balance(metrics, sui, shutdown));
+    }
 
     let genesis_hash = config
         .sequencer

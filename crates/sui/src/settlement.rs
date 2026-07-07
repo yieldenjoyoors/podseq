@@ -11,6 +11,7 @@ use sui_rpc::proto::sui::rpc::v2::owner;
 use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest;
 use sui_rpc::proto::sui::rpc::v2::GetEpochRequest;
 use sui_rpc::proto::sui::rpc::v2::GetObjectRequest;
+use sui_rpc::proto::sui::rpc::v2::ListBalancesRequest;
 use sui_sdk_types::Address;
 use sui_sdk_types::Identifier;
 use sui_sdk_types::TypeTag;
@@ -93,6 +94,11 @@ impl Settlement {
                 .map_err(|e| SettlementError::Parse(format!("registry id: {e}")))?,
             rpc,
         })
+    }
+
+    /// Returns the settlement key's Sui address.
+    pub fn sender(&self) -> sui_sdk_types::Address {
+        self.sender
     }
 
     /// Commits a block header and blob id on Sui via the settle entrypoint.
@@ -328,6 +334,27 @@ pub async fn latest_height(rpc_url: &str, registry_id: &str) -> Result<u64, Sett
         .ok_or_else(|| SettlementError::Execution("registry has no contents".into()))?;
 
     parse_latest_height(&contents)
+}
+
+/// Returns the total SUI balance of `owner` in mistos (1 SUI = 1e9 mistos).
+///
+/// Read-only: does not touch the settlement signer, so it is safe to call
+/// concurrently with `commit`.
+pub async fn sui_balance(rpc_url: &str, owner: &str) -> Result<u64, SettlementError> {
+    use futures::StreamExt;
+
+    let rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+    let mut request = ListBalancesRequest::default();
+    request.owner = Some(owner.to_string());
+    let stream = rpc.list_balances(request);
+    futures::pin_mut!(stream);
+    while let Some(item) = stream.next().await {
+        let balance = item.map_err(|e| SettlementError::Rpc(format!("list_balances: {e}")))?;
+        if balance.coin_type.as_deref() == Some("0x2::sui::SUI") {
+            return Ok(balance.balance.unwrap_or(0));
+        }
+    }
+    Ok(0)
 }
 
 /// Probes Sui RPC reachability with a cheap no-arg epoch query.

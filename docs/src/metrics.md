@@ -27,13 +27,14 @@ When `enabled = false`, no HTTP server is started.
 | `podseq_block_height`                | Gauge     | Current chain head height                                             |
 | `podseq_blocks_built_total`          | Counter   | Total blocks produced since startup                                   |
 | `podseq_pending_blocks`              | Gauge     | Blocks buffered in the finalizer channel                              |
+| `podseq_sui_gas_balance_mist`        | Gauge     | Settlement key SUI balance in mistos                                  |
 | `podseq_da_publish_duration_seconds` | Histogram | Walrus DA publish latency, observed per attempt (success and failure) |
 | `podseq_da_publish_errors_total`     | Counter   | Total Walrus DA publish attempts that failed                          |
 | `podseq_settlement_duration_seconds` | Histogram | Latency of the successful Sui settlement RPC per block                |
 | `podseq_bridge_deposits_total`       | Counter   | Bridge deposits minted on L2                                          |
 | `podseq_bridge_withdrawals_total`    | Counter   | Bridge withdrawals released on Sui                                    |
 
-> Sequencer-only metrics (`block_height`, `blocks_built`, `bridge_*`) read 0 on full nodes.
+> Sequencer-only metrics (`block_height`, `blocks_built`, `sui_gas_balance`, `bridge_*`) read 0 on full nodes.
 
 ## Scraping
 

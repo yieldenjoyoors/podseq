@@ -42,8 +42,8 @@ simple while making the chain trust-minimized and developer-friendly.
 ## Phase 4: Operator Tooling
 
 - [x] **Sequencer health dashboard**: Prometheus metrics endpoint with block
-      height, DA latency, Sui gas balance, pending deposit queue depth.  
-      Grafana dashboard template included.
+      height, DA latency, settlement duration, Sui gas balance, and bridge
+      throughput. Grafana dashboard template included.
 - [ ] **Rate limiting on RPC**: token-bucket limiter for public RPC
       endpoints. Protects the sequencer from DDoS without affecting block
       production (Engine API has its own port).

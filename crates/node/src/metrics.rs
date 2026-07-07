@@ -39,6 +39,8 @@ pub struct PodseqMetrics {
     pub settlement_duration: Histogram,
     /// Blocks buffered in the finalizer channel.
     pub pending_blocks: Gauge,
+    /// Settlement key's SUI balance in mistos.
+    pub sui_gas_balance: Gauge,
     /// Bridge deposits minted on L2.
     pub bridge_deposits_total: Counter,
     /// Bridge withdrawals released on Sui.
@@ -92,6 +94,13 @@ impl PodseqMetrics {
             pending_blocks.clone(),
         );
 
+        let sui_gas_balance = Gauge::default();
+        registry.register(
+            "podseq_sui_gas_balance_mist",
+            "Settlement key SUI balance in mistos",
+            sui_gas_balance.clone(),
+        );
+
         let bridge_deposits_total = Counter::default();
         registry.register(
             "podseq_bridge_deposits_total",
@@ -114,6 +123,7 @@ impl PodseqMetrics {
             da_publish_errors_total,
             settlement_duration,
             pending_blocks,
+            sui_gas_balance,
             bridge_deposits_total,
             bridge_withdrawals_total,
         }
@@ -205,7 +215,6 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +229,7 @@ mod tests {
         m.da_publish_errors_total.inc();
         m.settlement_duration.observe(1.0);
         m.pending_blocks.set(3);
+        m.sui_gas_balance.set(1_000_000_000);
         m.bridge_deposits_total.inc();
         m.bridge_withdrawals_total.inc();
     }

@@ -63,6 +63,8 @@ pub enum Error {
     MissingBlobId,
     #[error("invalid url: {0}")]
     Url(#[from] url::ParseError),
+    #[error("settlement error: {0}")]
+    Settlement(String),
 }
 
 /// Connection configuration for Walrus and the Sui RPC.
@@ -91,11 +93,13 @@ impl Default for Config {
 pub const MAX_EPOCHS: u64 = 53;
 
 /// A Sui RPC client for Walrus DA and settlement.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Client {
     http: reqwest::Client,
     config: Config,
     settlement: Option<Arc<Mutex<SettlementSigner>>>,
+    /// Snapshot of the settlement signer's address, for lock-free queries.
+    settlement_sender: Option<sui_sdk_types::Address>,
 }
 
 impl Client {
@@ -107,17 +111,34 @@ impl Client {
                 .build()?,
             config,
             settlement: None,
+            settlement_sender: None,
         })
     }
 
     /// Attaches a settlement signer, enabling on-chain commitments.
     pub fn with_settlement(mut self, settlement: SettlementSigner) -> Self {
+        self.settlement_sender = Some(settlement.sender());
         self.settlement = Some(Arc::new(Mutex::new(settlement)));
         self
     }
 
     pub fn has_settlement(&self) -> bool {
         self.settlement.is_some()
+    }
+
+    /// Returns the settlement key's SUI balance in mistos, or `None` if no
+    /// settlement signer is attached.
+    ///
+    /// Read-only: queries the Sui RPC directly without taking the settlement
+    /// lock, so it never blocks `commit`.
+    pub async fn sui_balance(&self) -> Result<Option<u64>, Error> {
+        let Some(owner) = self.settlement_sender else {
+            return Ok(None);
+        };
+        settlement::sui_balance(&self.config.sui_rpc_url, &owner.to_hex())
+            .await
+            .map(Some)
+            .map_err(|e| Error::Settlement(e.to_string()))
     }
 
     pub fn rpc_url(&self) -> &str {
