@@ -8,7 +8,10 @@ WORKDIR /build
 # Copy the workspace manifest first to cache dependency compilation.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+COPY tests ./tests
 
+# The binary lives in crates/node; the other workspace members (tests)
+# must be present for Cargo to load the workspace manifest.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     cargo build --release --bin podseq && \
@@ -22,11 +25,14 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder /podseq /usr/local/bin/podseq
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Default config — edit /etc/podseq/podseq.toml inside the container, or
+# bind-mount a replacement at runtime. See docker/podseq.toml.
+COPY docker/podseq.toml /etc/podseq/podseq.toml
 
 # Move sources are included so a first-start settlement deployment can read
 # move/build/podseq_settlement/bytecode.mv once it has been built (see README).
 COPY move ./move
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["podseq"]
+CMD ["start", "--config", "/etc/podseq/podseq.toml"]

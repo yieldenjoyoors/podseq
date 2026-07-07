@@ -15,13 +15,6 @@ services:
 
   podseq:
     container_name: podseq-testnet
-    environment:
-      # Public testnet endpoints; no auth needed, blobs are subsidized.
-      WALRUS_PUBLISHER_URL: https://publisher.walrus-testnet.walrus.space
-      WALRUS_AGGREGATOR_URL: https://aggregator.walrus-testnet.walrus.space
-      WALRUS_EPOCHS: "53"
-      SUI_RPC_URL: https://fullnode.testnet.sui.io:443
-      # Settlement object IDs (after deploying the Move contract on testnet):
-      # SUI_SETTLEMENT_PACKAGE_ID: 0x...
-      # SUI_SETTLER_CAP_ID: 0x...
-      # SUI_REGISTRY_ID: 0x...
+    volumes:
+      # Override the image default with the testnet config.
+      - ./docker/podseq.testnet.toml:/etc/podseq/podseq.toml:ro

@@ -1,0 +1,34 @@
+# Default podseq configuration for the Docker image.
+#
+# Override per-deployment by bind-mounting a custom TOML at /etc/podseq/podseq.toml
+# (or running with `podseq start --config <path>`). Every field here has a
+# sensible default; uncomment and edit only what you need.
+
+[reth]
+engine_url = "http://reth:8551"
+jwt_path   = "/jwt/jwt.hex"
+
+[walrus]
+# publisher_url = "https://publisher.walrus-testnet.walrus.space"
+# aggregator_url = "https://aggregator.walrus-testnet.walrus.space"
+# epochs = 53               # storage lifetime; default = max (53 ≈ 2 years)
+# batch_size_bytes = 65536  # flush a DA blob once blocks reach this size
+# publisher_auth_token = "..."  # only for authenticated publishers
+
+[sui]
+rpc_url = "https://fullnode.testnet.sui.io:443"
+# Settlement object IDs (after deploying the Move package). Leave unset for
+# first-start auto-deploy.
+# settlement_package_id = "0x..."
+# settler_cap_id = "0x..."
+# registry_id = "0x..."
+
+[signer]
+key_path = "/secrets/sui.key"   # required in sequencer mode
+
+[sequencer]
+block_time_ms = 2000
+# fee_recipient = "0x0000000000000000000000000000000000000000"
+# genesis_hash = "0x..."
+
+mode = "sequencer"

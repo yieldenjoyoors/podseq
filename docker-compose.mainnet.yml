@@ -3,7 +3,9 @@
 # Runs a private authenticated Walrus publisher alongside podseq. You must:
 #   1. Place a Walrus client_config.yaml at ./walrus-config/client_config.yaml
 #   2. Place a funded Sui wallet config at ./walrus-config/publisher/sui_client.yaml
-#   3. Set WALRUS_PUBLISHER_AUTH_TOKEN (shared secret between publisher and podseq)
+#   3. Set WALRUS_PUBLISHER_AUTH_TOKEN in the host env (shared secret between
+#      publisher and podseq — paste the same value into docker/podseq.mainnet.toml's
+#      `publisher_auth_token` field).
 #
 #   docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d
 #
@@ -23,17 +25,10 @@ services:
 
   podseq:
     container_name: podseq-mainnet
-    environment:
-      # local publisher (authenticated).
-      WALRUS_PUBLISHER_URL: http://publisher:9001
-      WALRUS_AGGREGATOR_URL: https://aggregator.walrus-mainnet.walrus.space
-      WALRUS_EPOCHS: "1"
-      WALRUS_PUBLISHER_AUTH_TOKEN: "${WALRUS_PUBLISHER_AUTH_TOKEN:?must set WALRUS_PUBLISHER_AUTH_TOKEN}"
-      SUI_RPC_URL: https://fullnode.mainnet.sui.io:443
-      # Settlement object IDs (after deploying the Move contract on mainnet):
-      # SUI_SETTLEMENT_PACKAGE_ID: 0x...
-      # SUI_SETTLER_CAP_ID: 0x...
-      # SUI_REGISTRY_ID: 0x...
+    volumes:
+      # Override the image default with the mainnet config. Edit
+      # publisher_auth_token in this file before bringing the stack up.
+      - ./docker/podseq.mainnet.toml:/etc/podseq/podseq.toml:ro
     depends_on:
       - publisher
 
@@ -65,7 +60,8 @@ services:
       - --n-clients
       - "2"
     environment:
-      # Require clients to present this Bearer token (must match podseq's token).
+      # Require clients to present this Bearer token (must match the
+      # publisher_auth_token in docker/podseq.mainnet.toml).
       WALRUS_PUBLISHER_AUTH_TOKEN: "${WALRUS_PUBLISHER_AUTH_TOKEN:?must set WALRUS_PUBLISHER_AUTH_TOKEN}"
     volumes:
       # Place these on the host before starting:

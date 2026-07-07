@@ -1,0 +1,33 @@
+# podseq config for the mainnet stack (docker-compose.mainnet.yml).
+#
+# Sui mainnet + a private authenticated Walrus publisher running alongside
+# podseq. Requires WALRUS_PUBLISHER_AUTH_TOKEN in the env (shared secret
+# between podseq and the publisher service).
+
+[reth]
+engine_url = "http://reth:8551"
+jwt_path   = "/jwt/jwt.hex"
+
+[walrus]
+# Local authenticated publisher (defined in docker-compose.mainnet.yml).
+publisher_url  = "http://publisher:9001"
+aggregator_url = "https://aggregator.walrus-mainnet.walrus.space"
+epochs = 1
+# Bearer token shared with the local publisher. Edit this file (or bind-mount
+# your own podseq.toml) to set the real value — TOML has no env-var interpolation.
+publisher_auth_token = "REPLACE_ME"
+
+[sui]
+rpc_url = "https://fullnode.mainnet.sui.io:443"
+# Settlement object IDs (after deploying the Move contract on mainnet):
+# settlement_package_id = "0x..."
+# settler_cap_id = "0x..."
+# registry_id = "0x..."
+
+[signer]
+key_path = "/secrets/sui.key"
+
+[sequencer]
+block_time_ms = 2000
+
+mode = "sequencer"

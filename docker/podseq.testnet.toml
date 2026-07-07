@@ -1,0 +1,28 @@
+# podseq config for the testnet stack (docker-compose.testnet.yml).
+#
+# Public Walrus testnet (subsidized publisher/aggregator) and Sui testnet.
+# Mount this at /etc/podseq/podseq.toml to override the image default.
+
+[reth]
+engine_url = "http://reth:8551"
+jwt_path   = "/jwt/jwt.hex"
+
+[walrus]
+publisher_url  = "https://publisher.walrus-testnet.walrus.space"
+aggregator_url = "https://aggregator.walrus-testnet.walrus.space"
+epochs = 53
+
+[sui]
+rpc_url = "https://fullnode.testnet.sui.io:443"
+# Settlement object IDs — leave all three unset for first-start auto-deploy.
+# settlement_package_id = "0x..."
+# settler_cap_id = "0x..."
+# registry_id = "0x..."
+
+[signer]
+key_path = "/secrets/sui.key"
+
+[sequencer]
+block_time_ms = 2000
+
+mode = "sequencer"

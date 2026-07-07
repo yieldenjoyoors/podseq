@@ -1,13 +1,13 @@
 # Base stack: Reth (execution) + podseq (sequencer/consensus).
 #
-# Walrus and Sui are public external services; their endpoints are set by the
-# network-specific override file. Always run with an override:
+# Walrus and Sui are public external services; their endpoints are set in the
+# config file mounted into the podseq container. Always run with an override:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d
 #   docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d
 #
-# Each override pins its own project name, container names and host ports, so the
-# two stacks can run simultaneously on the same host.
+# Each override pins its own project name, container names and host ports, so
+# the two stacks can run simultaneously on the same host.
 
 services:
   init-jwt:
@@ -57,13 +57,11 @@ services:
     depends_on:
       reth:
         condition: service_started
-    environment:
-      PODSEQ_RETH_ENGINE_URL: http://reth:8551
-      PODSEQ_JWT_PATH: /jwt/jwt.hex
-      PODSEQ_SIGNER_KEY_PATH: /secrets/sui.key
-      # Endpoints are injected by the network override files.
+    # Override /etc/podseq/podseq.toml (the image default) by bind-mounting a
+    # deployment-specific config. See docker/podseq.toml for the schema.
     volumes:
       - jwt:/jwt:ro
+      - ./docker/podseq.toml:/etc/podseq/podseq.toml:ro
       # Place sui.key (suiprivkey) in docker/secrets/ for signing.
       - ./docker/secrets:/secrets:ro
     restart: unless-stopped

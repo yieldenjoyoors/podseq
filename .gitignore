@@ -5,9 +5,9 @@
 /docker/secrets/*
 !/docker/secrets/README.txt
 jwt.hex
-podseq.toml
 *.key
 /examples/data_*
+/examples/podseq.toml
 
 # Site (Node / Vite)
 web/node_modules/

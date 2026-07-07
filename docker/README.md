@@ -7,13 +7,15 @@ are containerized.
 
 ## Files
 
-| File                         | Purpose                                                        |
-| ---------------------------- | -------------------------------------------------------------- |
-| `Dockerfile`                 | Multi-stage build of the `podseq` binary                       |
-| `docker/entrypoint.sh`       | Renders the podseq TOML config from env vars, then runs it     |
-| `docker-compose.yml`         | Base stack: `init-jwt`, `reth`, `podseq`                       |
-| `docker-compose.testnet.yml` | Testnet endpoints, ports `8545/8551`, project `podseq-testnet` |
-| `docker-compose.mainnet.yml` | Mainnet endpoints, ports `8645/8651`, project `podseq-mainnet` |
+| File                         | Purpose                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `Dockerfile`                 | Multi-stage build of the `podseq` binary; ships a default config at `/etc/podseq/podseq.toml` |
+| `docker/podseq.toml`         | Default config (image-baked). Override by bind-mounting a replacement.                        |
+| `docker/podseq.testnet.toml` | Testnet config: public Walrus testnet + Sui testnet                                           |
+| `docker/podseq.mainnet.toml` | Mainnet config: Sui mainnet + local authenticated Walrus publisher                            |
+| `docker-compose.yml`         | Base stack: `init-jwt`, `reth`, `podseq`                                                      |
+| `docker-compose.testnet.yml` | Testnet override: mounts `podseq.testnet.toml`, ports `8545/8551`, project `podseq-testnet`   |
+| `docker-compose.mainnet.yml` | Mainnet override: mounts `podseq.mainnet.toml`, ports `8645/8651`, project `podseq-mainnet`   |
 
 Each override sets its own project name, container names and host ports, so the
 two stacks can run side by side.
@@ -38,14 +40,34 @@ settlement transactions and block headers. Without it, the sequencer refuses to
 start. The Engine API JWT is generated automatically and shared between
 Reth and podseq.
 
+## Configure podseq
+
+Edit the per-network config (`docker/podseq.testnet.toml` or
+`docker/podseq.mainnet.toml`) for your deployment. Common things to set:
+
+- `[sui] settlement_package_id` / `settler_cap_id` / `registry_id` — supply the
+  object IDs of an already-deployed Move contract, or leave all three unset for
+  first-start auto-deploy.
+- `[sequencer] block_time_ms`, `fee_recipient`, `genesis_hash` — production tuning.
+- `[walrus] publisher_auth_token` — mainnet only; must match the
+  `WALRUS_PUBLISHER_AUTH_TOKEN` env var passed to the publisher service.
+
+For deeper customization, bind-mount your own TOML:
+
+```yaml
+volumes:
+  - ./my-podseq.toml:/etc/podseq/podseq.toml:ro
+```
+
 ## Run
 
 ```sh
 # Testnet
 docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d --build
 
-# Mainnet
-docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d --build
+# Mainnet (requires WALRUS_PUBLISHER_AUTH_TOKEN in env)
+WALRUS_PUBLISHER_AUTH_TOKEN=... \
+  docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d --build
 
 # Logs
 docker compose -f docker-compose.yml -f docker-compose.testnet.yml logs -f podseq
@@ -65,18 +87,8 @@ docker compose -f docker-compose.yml -f docker-compose.testnet.yml down
 
 Settlement is **required** for the sequencer: every produced block is committed
 to the Sui Registry, which full nodes read to verify data availability. Either
-supply the object IDs of an already-deployed contract, or let podseq auto-deploy
-on first start.
-
-```yaml
-environment:
-  SUI_SETTLEMENT_PACKAGE_ID: 0x...
-  SUI_SETTLER_CAP_ID: 0x...
-  SUI_REGISTRY_ID: 0x...
-```
-
-With `docker/secrets/sui.key` present and those three IDs set, podseq signs and submits
-settlement transactions in-process. See `docs/src/contract.md`.
+supply the object IDs in the per-network config, or let podseq auto-deploy on
+first start.
 
 For a **first-start auto-deploy**, podseq reads
 `move/build/podseq_settlement/bytecode.mv`. Build it locally and bind-mount it,
@@ -87,16 +99,7 @@ sui move build --path move
 # then mount the build output into the container at /app/move/build
 ```
 
-## Tuning
-
-Common overrides via the `podseq` service `environment`:
-
-| Env var         | Default     | Effect                                |
-| --------------- | ----------- | ------------------------------------- |
-| `BLOCK_TIME_MS` | `2000`      | Block production interval             |
-| `FEE_RECIPIENT` | `0x…0`      | Fee recipient address                 |
-| `GENESIS_HASH`  | unset       | Initial head hash (else queries Reth) |
-| `PODSEQ_MODE`   | `sequencer` | `sequencer` or `full`                 |
+See `docs/src/contract.md`.
 
 ## Notes
 
