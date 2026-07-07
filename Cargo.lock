@@ -1662,7 +1662,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "prometheus-client",
+ "prometheus-client 0.24.1",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "rayon",
@@ -3866,6 +3866,7 @@ dependencies = [
  "podseq-sequencer",
  "podseq-store",
  "podseq-sui",
+ "prometheus-client 0.25.0",
  "rand 0.8.6",
  "reqwest",
  "serde",
@@ -4090,6 +4091,18 @@ name = "prometheus-client"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cca3d75b4566b9a29fe1ed623587fb058e826eb329a0be4b7c4da1ebb2d7a6ca"
+dependencies = [
+ "dtoa",
+ "itoa",
+ "parking_lot",
+ "prometheus-client-derive-encode",
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba70bf887030e45213b4a95c9b08d5a450b157f87c1d63661ed0847a12fa2aad"
 dependencies = [
  "dtoa",
  "itoa",

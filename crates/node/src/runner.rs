@@ -20,6 +20,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
 use crate::config::SequencerConfig;
+use crate::metrics::{HistogramTimer, PodseqMetrics};
 
 struct PendingBlock {
     block: Block,
@@ -47,6 +48,7 @@ pub struct Runner {
     fee_recipient: Address,
     genesis_hash: Option<B256>,
     da_batch_size: usize,
+    metrics: Arc<PodseqMetrics>,
 }
 
 impl Runner {
@@ -61,6 +63,7 @@ impl Runner {
         data_dir: &std::path::Path,
         broadcaster: Option<BlockBroadcaster>,
         da_batch_size: usize,
+        metrics: Arc<PodseqMetrics>,
     ) -> Self {
         podseq_store::init(data_dir).expect("failed to init storage");
         Self {
@@ -75,6 +78,7 @@ impl Runner {
             fee_recipient: config.fee_recipient.parse().unwrap_or_default(),
             genesis_hash,
             da_batch_size,
+            metrics,
         }
     }
 
@@ -126,6 +130,7 @@ impl Runner {
         // already persisted, so a backlog only delays DA.
         let (tx, rx) = mpsc::unbounded_channel::<PendingBlock>();
         let shutting_down = Arc::new(AtomicBool::new(false));
+        let metrics = self.metrics;
         let mut finalizer_handle = tokio::spawn(finalize_blocks(
             engine.clone(),
             self.sui,
@@ -136,6 +141,7 @@ impl Runner {
             self.pending_store.clone(),
             shutting_down.clone(),
             self.da_batch_size,
+            Arc::clone(&metrics),
         ));
 
         // Crash recovery: re-submit persisted blocks that never reached DA.
@@ -161,7 +167,7 @@ impl Runner {
                     if let Err(e) = produce_block(
                         &engine, &state, fee_recipient, &block_signer, &tx,
                         &block_store, &state_store, &pending_store,
-                        &broadcaster,
+                        &broadcaster, &metrics,
                     ).await {
                         error!(error = ?e, "block production failed");
                     }
@@ -205,6 +211,7 @@ async fn produce_block(
     state_store: &StateStore,
     pending_store: &PendingStore,
     broadcaster: &Option<BlockBroadcaster>,
+    metrics: &PodseqMetrics,
 ) -> Result<()> {
     let s = state.lock().await;
     let head = s.head;
@@ -248,6 +255,10 @@ async fn produce_block(
         s.timestamp = timestamp;
     }
     info!(height, ?block_hash, "head advanced");
+
+    // Record metrics after a successful block production.
+    metrics.block_height.set(height as i64);
+    metrics.blocks_built.inc();
 
     let mut block = payload_into_block(&built).context("converting payload to block")?;
     block.signature = Some(block_signer.sign_header(&block.header)?);
@@ -295,6 +306,7 @@ async fn finalize_blocks(
     pending_store: Arc<PendingStore>,
     shutting_down: Arc<AtomicBool>,
     batch_size_bytes: usize,
+    metrics: Arc<PodseqMetrics>,
 ) {
     let mut batch: Vec<PendingBlock> = Vec::new();
     let mut batch_bytes: usize = 0;
@@ -310,11 +322,14 @@ async fn finalize_blocks(
                 Some(p) => {
                     batch_bytes = batch_bytes.saturating_add(p.block.data.len());
                     batch.push(p);
+                    metrics.pending_blocks.set(batch.len() as i64);
                     if batch_bytes >= batch_size_bytes {
                         flush_batch(
                             &engine, &sui, &state, &mut batch, &mut batch_bytes,
                             &block_store, &state_store, &pending_store, &shutting_down,
+                            &metrics,
                         ).await;
+                        metrics.pending_blocks.set(batch.len() as i64);
                     }
                 }
                 None => {
@@ -322,6 +337,7 @@ async fn finalize_blocks(
                         flush_batch(
                             &engine, &sui, &state, &mut batch, &mut batch_bytes,
                             &block_store, &state_store, &pending_store, &shutting_down,
+                            &metrics,
                         ).await;
                     }
                     if !batch.is_empty() {
@@ -356,6 +372,7 @@ async fn flush_batch(
     state_store: &StateStore,
     pending_store: &Arc<PendingStore>,
     shutting_down: &Arc<AtomicBool>,
+    metrics: &PodseqMetrics,
 ) {
     if batch.is_empty() {
         return;
@@ -368,8 +385,14 @@ async fn flush_batch(
         if shutting_down.load(Ordering::SeqCst) {
             return;
         }
+        let started = std::time::Instant::now();
         match sui.publish(&blocks).await {
-            Ok(id) => break id,
+            Ok(id) => {
+                metrics
+                    .da_publish_duration
+                    .observe(started.elapsed().as_secs_f64());
+                break id;
+            }
             Err(e) => {
                 error!(
                     blocks = batch.len(),
@@ -394,7 +417,7 @@ async fn flush_batch(
     // + on disk. Retry with backoff until success or shutdown.
     while !batch.is_empty() {
         let front = &batch[0];
-        let settled = settle_block(sui, &front.block, &blob_id, shutting_down).await;
+        let settled = settle_block(sui, &front.block, &blob_id, shutting_down, metrics).await;
         if !settled {
             // Shutdown interrupted settlement: finalize the rest locally and
             // leave pending markers so they are re-settled on restart.
@@ -431,8 +454,10 @@ async fn settle_block(
     block: &Block,
     blob_id: &podseq_core::BlobId,
     shutting_down: &Arc<AtomicBool>,
+    metrics: &PodseqMetrics,
 ) -> bool {
     let height = block.header.height;
+    let _timer = HistogramTimer::new(&metrics.settlement_duration);
     let committed = retry_with_backoff(
         shutting_down,
         Duration::from_millis(500),

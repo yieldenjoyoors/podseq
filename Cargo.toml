@@ -65,6 +65,9 @@ sui-transaction-builder = { git = "https://github.com/MystenLabs/sui-rust-sdk", 
 sui-crypto = { git = "https://github.com/MystenLabs/sui-rust-sdk", features = ["ed25519", "bech32"] }
 sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk" }
 
+# Observability
+prometheus-client = "0.25"
+
 # Commonware (p2p, storage, runtime)
 commonware-runtime = "2026.5"
 commonware-storage = "2026.5"

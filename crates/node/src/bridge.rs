@@ -63,6 +63,7 @@ pub struct BridgeRelayer {
     deposits_table_uid: SuiAddress,
     cursors: Arc<Mutex<Cursors>>,
     cursors_path: PathBuf,
+    metrics: Arc<crate::metrics::PodseqMetrics>,
 }
 
 impl std::fmt::Debug for BridgeRelayer {
@@ -91,6 +92,7 @@ impl BridgeRelayer {
         sui_rpc: &str,
         l2_rpc: &str,
         data_dir: &Path,
+        metrics: Arc<crate::metrics::PodseqMetrics>,
     ) -> Result<Self> {
         let l2_token: Address = BRIDGE_PREDEPLOY_ADDRESS_HEX
             .parse()
@@ -165,6 +167,7 @@ impl BridgeRelayer {
             deposits_table_uid,
             cursors,
             cursors_path,
+            metrics,
         })
     }
 
@@ -316,6 +319,7 @@ impl BridgeRelayer {
         // advance the cursor past an un-minted deposit.
         wait_for_receipt_success(http, &self.l2_rpc, &tx_hash, self.poll_interval).await?;
         info!(nonce, %recipient, amount, "bridge: deposit minted on L2");
+        self.metrics.bridge_deposits_total.inc();
         Ok(())
     }
 
@@ -365,6 +369,7 @@ impl BridgeRelayer {
                 amount = parsed.amount,
                 "bridge: withdrawal released on Sui"
             );
+            self.metrics.bridge_withdrawals_total.inc();
         }
 
         let mut c = self.cursors.lock().await;
@@ -784,6 +789,7 @@ pub fn spawn(
     config: Config,
     config_path: PathBuf,
     signer_key_path: PathBuf,
+    metrics: Arc<crate::metrics::PodseqMetrics>,
 ) -> Option<(tokio::task::JoinHandle<()>, Arc<AtomicBool>)> {
     if !config.bridge.enabled {
         return None;
@@ -791,7 +797,14 @@ pub fn spawn(
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
     let handle = tokio::spawn(async move {
-        relay_until_ready(config, config_path, signer_key_path, shutdown_clone).await;
+        relay_until_ready(
+            config,
+            config_path,
+            signer_key_path,
+            shutdown_clone,
+            metrics,
+        )
+        .await;
     });
     info!(predeploy = %BRIDGE_PREDEPLOY_ADDRESS_HEX, "bridge enabled (will relay once L2 contract is initialized)");
     Some((handle, shutdown))
@@ -807,13 +820,14 @@ async fn relay_until_ready(
     config_path: PathBuf,
     signer_key_path: PathBuf,
     shutdown: Arc<AtomicBool>,
+    metrics: Arc<crate::metrics::PodseqMetrics>,
 ) {
     let backoff = Duration::from_secs(5);
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return;
         }
-        match setup_relayer(&mut config, &config_path, &signer_key_path).await {
+        match setup_relayer(&mut config, &config_path, &signer_key_path, &metrics).await {
             Ok(relayer) => {
                 if let Err(e) = relayer.run(shutdown.clone()).await {
                     warn!(error = %e, "bridge relayer exited with error; will restart");
@@ -850,6 +864,7 @@ async fn setup_relayer(
     config: &mut Config,
     config_path: &Path,
     signer_key_path: &Path,
+    metrics: &Arc<crate::metrics::PodseqMetrics>,
 ) -> Result<BridgeRelayer> {
     let package_id = config
         .sui
@@ -889,6 +904,7 @@ async fn setup_relayer(
         &config.sui.rpc_url,
         &config.reth.rpc_url,
         &config.data_dir,
+        Arc::clone(metrics),
     )
     .await
 }

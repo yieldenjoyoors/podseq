@@ -36,6 +36,8 @@ pub struct Config {
     pub bridge: BridgeConfig,
     #[serde(default)]
     pub p2p: P2pConfig,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
     /// Directory for persistent chain state and blocks.
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
@@ -276,6 +278,34 @@ fn default_p2p_listen() -> String {
     "0.0.0.0:9000".into()
 }
 
+/// Prometheus metrics endpoint configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    /// Expose a Prometheus `/metrics` HTTP endpoint.
+    #[serde(default = "default_metrics_enabled")]
+    pub enabled: bool,
+    /// Address to bind the metrics HTTP server.
+    #[serde(default = "default_metrics_listen")]
+    pub listen_addr: String,
+}
+
+fn default_metrics_enabled() -> bool {
+    false
+}
+
+fn default_metrics_listen() -> String {
+    "0.0.0.0:9090".into()
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_metrics_enabled(),
+            listen_addr: default_metrics_listen(),
+        }
+    }
+}
+
 /// Sequencer block-production settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
@@ -335,6 +365,7 @@ impl Config {
             sequencer: SequencerConfig::default(),
             bridge: BridgeConfig::default(),
             p2p: P2pConfig::default(),
+            metrics: MetricsConfig::default(),
             data_dir: default_data_dir(),
             mode: default_mode(),
         }
@@ -430,5 +461,36 @@ l2_relayer_key_path = "relayer.key"
         assert!(config.bridge.enabled);
         assert_eq!(config.bridge.cap_id.as_deref(), Some("0xcap"));
         assert_eq!(config.bridge.vault_id.as_deref(), Some("0xvault"));
+    }
+
+    #[test]
+    fn metrics_defaults_when_missing() {
+        let config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        assert!(!config.metrics.enabled);
+        assert_eq!(config.metrics.listen_addr, "0.0.0.0:9090");
+    }
+
+    #[test]
+    fn parses_metrics_config() {
+        let toml = r#"
+[reth]
+jwt_path = "jwt.hex"
+
+[metrics]
+enabled = true
+listen_addr = "127.0.0.1:9100"
+"#;
+        let config = Config::from_str(toml).unwrap();
+        assert!(config.metrics.enabled);
+        assert_eq!(config.metrics.listen_addr, "127.0.0.1:9100");
+    }
+
+    #[test]
+    fn metrics_roundtrips_through_serialize() {
+        let config = Config::testnet();
+        let serialized = toml::to_string(&config).unwrap();
+        let parsed = Config::from_str(&serialized).unwrap();
+        assert_eq!(parsed.metrics.enabled, config.metrics.enabled);
+        assert_eq!(parsed.metrics.listen_addr, config.metrics.listen_addr);
     }
 }

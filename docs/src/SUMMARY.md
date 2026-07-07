@@ -31,3 +31,4 @@
 
 - [Engine API](./engine-api.md)
 - [Walrus & Sui](./walrus-sui.md)
+- [Metrics](./metrics.md)
