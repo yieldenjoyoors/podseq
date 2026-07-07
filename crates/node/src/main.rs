@@ -158,6 +158,40 @@ fn load_config(config_path: &Option<PathBuf>) -> Result<Config> {
     Config::load(path)
 }
 
+/// Spawns the metrics HTTP server when `[metrics] enabled = true`.
+///
+/// Returns the optional join handle and the shutdown flag. When metrics are
+/// disabled, returns `(None, flag)` so the caller can still call
+/// [`shutdown_metrics`] without branching.
+fn start_metrics_endpoint(
+    config: &Config,
+    metrics: &Arc<metrics::PodseqMetrics>,
+) -> Result<(Option<tokio::task::JoinHandle<()>>, Arc<AtomicBool>)> {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    if !config.metrics.enabled {
+        return Ok((None, shutdown));
+    }
+    let addr: std::net::SocketAddr = config
+        .metrics
+        .listen_addr
+        .parse()
+        .context("invalid metrics.listen_addr")?;
+    let handle = tokio::spawn(metrics::serve(
+        Arc::clone(metrics),
+        addr,
+        Arc::clone(&shutdown),
+    ));
+    Ok((Some(handle), shutdown))
+}
+
+/// Signals the metrics endpoint to shut down and awaits its exit (best-effort).
+async fn shutdown_metrics(handle: Option<tokio::task::JoinHandle<()>>, shutdown: Arc<AtomicBool>) {
+    shutdown.store(true, Ordering::SeqCst);
+    if let Some(handle) = handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
+}
+
 /// Returns `None` when p2p is disabled (`no_p2p`).
 async fn build_p2p(
     context: &podseq_core::runtime::Context,
@@ -215,19 +249,7 @@ async fn start_sequencer(
 
     // Metrics: construct and optionally start the HTTP endpoint.
     let podseq_metrics = Arc::new(metrics::PodseqMetrics::new());
-    let metrics_shutdown = Arc::new(AtomicBool::new(false));
-    let _metrics_handle = if config.metrics.enabled {
-        let addr: std::net::SocketAddr = config
-            .metrics
-            .listen_addr
-            .parse()
-            .context("invalid metrics.listen_addr")?;
-        let m = Arc::clone(&podseq_metrics);
-        let s = Arc::clone(&metrics_shutdown);
-        Some(tokio::spawn(metrics::serve(m, addr, s)))
-    } else {
-        None
-    };
+    let (metrics_handle, metrics_shutdown) = start_metrics_endpoint(&config, &podseq_metrics)?;
 
     let signer_key_path = config
         .signer
@@ -306,11 +328,7 @@ async fn start_sequencer(
     info!("starting sequencer loop (Ctrl+C to stop)");
     let result = runner.run().await;
 
-    // Shut down the metrics endpoint.
-    metrics_shutdown.store(true, Ordering::SeqCst);
-    if let Some(handle) = _metrics_handle {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
-    }
+    shutdown_metrics(metrics_handle, metrics_shutdown).await;
 
     if let Some((mut handle, shutdown)) = bridge_handle {
         shutdown.store(true, Ordering::SeqCst);
@@ -333,19 +351,7 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
 
     // Metrics: construct and optionally start the HTTP endpoint.
     let podseq_metrics = Arc::new(metrics::PodseqMetrics::new());
-    let metrics_shutdown = Arc::new(AtomicBool::new(false));
-    let _metrics_handle = if config.metrics.enabled {
-        let addr: std::net::SocketAddr = config
-            .metrics
-            .listen_addr
-            .parse()
-            .context("invalid metrics.listen_addr")?;
-        let m = Arc::clone(&podseq_metrics);
-        let s = Arc::clone(&metrics_shutdown);
-        Some(tokio::spawn(metrics::serve(m, addr, s)))
-    } else {
-        None
-    };
+    let (metrics_handle, metrics_shutdown) = start_metrics_endpoint(&config, &podseq_metrics)?;
 
     let receiver = build_p2p(&context, &config.p2p)
         .await?
@@ -369,11 +375,7 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
     info!("starting full node sync (Ctrl+C to stop)");
     let result = node.run().await;
 
-    // Shut down the metrics endpoint.
-    metrics_shutdown.store(true, Ordering::SeqCst);
-    if let Some(handle) = _metrics_handle {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
-    }
+    shutdown_metrics(metrics_handle, metrics_shutdown).await;
 
     result
 }

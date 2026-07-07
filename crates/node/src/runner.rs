@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
 use crate::config::SequencerConfig;
-use crate::metrics::{HistogramTimer, PodseqMetrics};
+use crate::metrics::PodseqMetrics;
 
 struct PendingBlock {
     block: Block,
@@ -339,6 +339,7 @@ async fn finalize_blocks(
                             &block_store, &state_store, &pending_store, &shutting_down,
                             &metrics,
                         ).await;
+                        metrics.pending_blocks.set(batch.len() as i64);
                     }
                     if !batch.is_empty() {
                         finalize_buffered_locally(&engine, &state, std::mem::take(&mut batch)).await;
@@ -383,6 +384,7 @@ async fn flush_batch(
 
     let blob_id = loop {
         if shutting_down.load(Ordering::SeqCst) {
+            metrics.pending_blocks.set(batch.len() as i64);
             return;
         }
         let started = std::time::Instant::now();
@@ -394,6 +396,10 @@ async fn flush_batch(
                 break id;
             }
             Err(e) => {
+                metrics
+                    .da_publish_duration
+                    .observe(started.elapsed().as_secs_f64());
+                metrics.da_publish_errors_total.inc();
                 error!(
                     blocks = batch.len(),
                     error = %e,
@@ -423,10 +429,12 @@ async fn flush_batch(
             // leave pending markers so they are re-settled on restart.
             finalize_buffered_locally(engine, state, std::mem::take(batch)).await;
             *batch_bytes = 0;
+            metrics.pending_blocks.set(0);
             return;
         }
         let p = batch.remove(0);
         let height = p.height;
+        metrics.pending_blocks.set(batch.len() as i64);
 
         advance_finalized(engine, state, height, p.block_hash).await;
 
@@ -457,12 +465,22 @@ async fn settle_block(
     metrics: &PodseqMetrics,
 ) -> bool {
     let height = block.header.height;
-    let _timer = HistogramTimer::new(&metrics.settlement_duration);
     let committed = retry_with_backoff(
         shutting_down,
         Duration::from_millis(500),
         Duration::from_secs(10),
-        || async { sui.commit(block, blob_id).await.map_err(|e| e.to_string()) },
+        || async {
+            let started = std::time::Instant::now();
+            match sui.commit(block, blob_id).await {
+                Ok(()) => {
+                    metrics
+                        .settlement_duration
+                        .observe(started.elapsed().as_secs_f64());
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        },
     )
     .await;
     match committed {

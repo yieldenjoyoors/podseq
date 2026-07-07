@@ -11,7 +11,6 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
 
 use prometheus_client::encoding::text::encode;
 use prometheus_client::metrics::counter::Counter;
@@ -32,9 +31,11 @@ pub struct PodseqMetrics {
     pub block_height: Gauge,
     /// Total blocks produced since startup.
     pub blocks_built: Counter,
-    /// Walrus DA publish latency.
+    /// Walrus DA publish latency per attempt (success and failure).
     pub da_publish_duration: Histogram,
-    /// Sui settlement commit latency.
+    /// Total Walrus DA publish attempts that failed.
+    pub da_publish_errors_total: Counter,
+    /// Latency of the successful Sui settlement RPC for each block.
     pub settlement_duration: Histogram,
     /// Blocks buffered in the finalizer channel.
     pub pending_blocks: Gauge,
@@ -63,17 +64,24 @@ impl PodseqMetrics {
             blocks_built.clone(),
         );
 
-        let da_publish_duration = Histogram::new(exponential_buckets(0.01, 2.0, 10));
+        let da_publish_duration = Histogram::new(exponential_buckets(0.01, 2.0, 13));
         registry.register(
             "podseq_da_publish_duration_seconds",
-            "Walrus DA publish latency",
+            "Walrus DA publish latency per attempt (success and failure)",
             da_publish_duration.clone(),
         );
 
-        let settlement_duration = Histogram::new(exponential_buckets(0.01, 2.0, 10));
+        let da_publish_errors_total = Counter::default();
+        registry.register(
+            "podseq_da_publish_errors_total",
+            "Total Walrus DA publish attempts that failed",
+            da_publish_errors_total.clone(),
+        );
+
+        let settlement_duration = Histogram::new(exponential_buckets(0.01, 2.0, 13));
         registry.register(
             "podseq_settlement_duration_seconds",
-            "Total time to settle a block on Sui, including retries until success",
+            "Latency of the successful Sui settlement RPC for each block",
             settlement_duration.clone(),
         );
 
@@ -103,6 +111,7 @@ impl PodseqMetrics {
             block_height,
             blocks_built,
             da_publish_duration,
+            da_publish_errors_total,
             settlement_duration,
             pending_blocks,
             bridge_deposits_total,
@@ -114,35 +123,6 @@ impl PodseqMetrics {
 impl Default for PodseqMetrics {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// A guard that records the elapsed time since creation into a histogram.
-///
-/// ```rust,ignore
-/// let _timer = HistogramTimer::new(&metrics.da_publish_duration);
-/// // ... expensive operation ...
-/// // _timer drops here, recording the elapsed duration.
-/// ```
-#[must_use = "timer records duration on drop; bind to _timer or _ to keep alive"]
-pub struct HistogramTimer<'a> {
-    histogram: &'a Histogram,
-    start: Instant,
-}
-
-impl<'a> HistogramTimer<'a> {
-    pub fn new(histogram: &'a Histogram) -> Self {
-        Self {
-            histogram,
-            start: Instant::now(),
-        }
-    }
-}
-
-impl Drop for HistogramTimer<'_> {
-    fn drop(&mut self) {
-        let elapsed = self.start.elapsed().as_secs_f64();
-        self.histogram.observe(elapsed);
     }
 }
 
@@ -246,6 +226,7 @@ mod tests {
         m.block_height.set(42);
         m.blocks_built.inc();
         m.da_publish_duration.observe(0.5);
+        m.da_publish_errors_total.inc();
         m.settlement_duration.observe(1.0);
         m.pending_blocks.set(3);
         m.bridge_deposits_total.inc();
@@ -272,19 +253,5 @@ mod tests {
     fn default_creates_usable_instance() {
         let m = PodseqMetrics::default();
         m.block_height.set(1);
-    }
-
-    #[test]
-    fn histogram_timer_records_elapsed() {
-        let m = PodseqMetrics::new();
-        {
-            let _timer = HistogramTimer::new(&m.da_publish_duration);
-            // Simulate a tiny delay.
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        // The histogram should have at least one observation now.
-        let mut buffer = String::new();
-        encode(&mut buffer, &m.registry).unwrap();
-        assert!(buffer.contains("podseq_da_publish_duration_seconds"));
     }
 }
