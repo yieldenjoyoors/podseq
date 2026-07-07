@@ -130,11 +130,11 @@ impl Default for PodseqMetrics {
 ///
 /// Binds to `addr` and responds to every HTTP request with the full metrics
 /// payload. A GET to `/healthz` returns 200 OK with an empty body for
-/// liveness probes. The task runs until the provided shutdown flag is set.
+/// liveness probes. The task runs until the provided [`Notify`] is signalled.
 pub async fn serve(
     metrics: Arc<PodseqMetrics>,
     addr: SocketAddr,
-    shutdown: Arc<std::sync::atomic::AtomicBool>,
+    shutdown: Arc<tokio::sync::Notify>,
 ) {
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
@@ -146,13 +146,9 @@ pub async fn serve(
     info!(addr = %addr, "metrics endpoint listening");
 
     loop {
-        if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
-            break;
-        }
-
         let (stream, _peer) = match tokio::select! {
             result = listener.accept() => result,
-            _ = shutdown_canceled(&shutdown) => break,
+            _ = shutdown.notified() => break,
         } {
             Ok(v) => v,
             Err(e) => {
@@ -209,12 +205,7 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn shutdown_canceled(shutdown: &std::sync::atomic::AtomicBool) {
-    while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-}
-
+async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -122,7 +122,7 @@
       }
     },
     {
-      "title": "Settlement Duration (p50/p95/p99, includes retries)",
+      "title": "Settlement Duration (p50/p95/p99, successful RPC)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
       "targets": [
