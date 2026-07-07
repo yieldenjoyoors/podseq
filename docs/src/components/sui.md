@@ -30,6 +30,7 @@ pub struct Client {
 
 `settlement` is `None` until [`with_settlement`](#settlement) attaches a signer;
 
+```rust
 pub struct Config {
 pub publisher_url: String,
 pub aggregator_url: String,
@@ -37,7 +38,6 @@ pub epochs: u64, // storage lifetime; default MAX_EPOCHS (53 ≈ 2 years)
 pub sui_rpc_url: String,
 pub publisher_auth_token: Option<String>, // bearer token for an authenticated publisher
 }
-
 ```
 
 ## DA (Walrus)
@@ -77,4 +77,3 @@ reads deposits by nonce and submits `bridge::withdraw`. The `bridge` module is
 published as part of the settlement package, and `bridge::initialize` (which
 creates the shared `Vault` + `BridgeCap`) is auto-called on first start when the
 bridge is enabled, mirroring settlement's auto-deploy.
-```

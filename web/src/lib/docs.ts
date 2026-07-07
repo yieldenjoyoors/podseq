@@ -1,4 +1,6 @@
-import { marked } from "marked";
+import { Marked } from "marked";
+import { markedHighlight } from "marked-highlight";
+import hljs from "highlight.js/lib/common";
 
 // `src/docs` is a symlink to the repo's `docs/` directory, so the markdown
 // here is always the single source of truth.
@@ -37,7 +39,41 @@ for (const [path, content] of Object.entries(modules)) {
   raw[slug] = content;
 }
 
-marked.setOptions({ gfm: true, breaks: false });
+// Map GitHub fence names to highlight.js language ids the common languages
+// bundle understands (e.g. `sh` -> `bash`).
+function aliasFor(lang: string): string {
+  const l = lang.toLowerCase();
+  if (l === "sh" || l === "shell" || l === "console") return "bash";
+  if (l === "txt") return "text";
+  return l;
+}
+
+// Shared highlighter for any `<pre>` code block (docs + landing terminal).
+export function highlightCode(code: string, lang: string): string {
+  const language = aliasFor(lang || "text");
+  if (language === "text") return code;
+  if (hljs.getLanguage(language)) {
+    try {
+      return hljs.highlight(code, { language }).value;
+    } catch {
+      return code;
+    }
+  }
+  try {
+    return hljs.highlightAuto(code).value;
+  } catch {
+    return code;
+  }
+}
+
+const markedInstance = new Marked(
+  markedHighlight({
+    langPrefix: "hljs language-",
+    highlight: highlightCode,
+  }),
+);
+
+markedInstance.setOptions({ gfm: true, breaks: false });
 
 export function docContent(slug: string): string {
   return raw[slug] ?? raw[DEFAULT_DOC] ?? "";
@@ -86,7 +122,7 @@ export function resolveDocLink(
 
 export function renderDoc(slug: string): RenderedDoc {
   const md = docContent(slug);
-  const html = marked.parse(md) as string;
+  const html = markedInstance.parse(md) as string;
 
   if (typeof document === "undefined") return { html, outline: [] };
 
@@ -105,6 +141,15 @@ export function renderDoc(slug: string): RenderedDoc {
     if (count > 0) id = `${id}-${count}`;
     heading.id = id;
     outline.push({ id, text, level: heading.tagName === "H2" ? 2 : 3 });
+
+    // Append a `#` anchor that routes to this section using the same
+    // `~/anchor` scheme the outline uses.
+    const headingLink = document.createElement("a");
+    headingLink.className = "heading-anchor";
+    headingLink.href = `#/docs/${slug}~${id}`;
+    headingLink.setAttribute("aria-label", `Link to ${text}`);
+    headingLink.textContent = "#";
+    heading.appendChild(headingLink);
   });
 
   container.querySelectorAll("a").forEach((link) => {

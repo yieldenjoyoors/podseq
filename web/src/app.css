@@ -543,6 +543,101 @@
     line-height: 1.4;
 }
 
+/* Heading anchor links: a `#` that appears on hover and routes to the section. */
+.prose-docs h2,
+.prose-docs h3 {
+    position: relative;
+}
+.prose-docs .heading-anchor {
+    position: absolute;
+    left: -1.1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 1.1rem;
+    text-align: center;
+    color: var(--color-faint);
+    text-decoration: none;
+    font-family: var(--font-mono);
+    font-weight: 400;
+    opacity: 0;
+    transition:
+        opacity 0.15s ease,
+        color 0.15s ease;
+    border: none;
+    padding: 0;
+    background: none;
+}
+.prose-docs h2:hover .heading-anchor,
+.prose-docs h3:hover .heading-anchor,
+.prose-docs .heading-anchor:focus-visible {
+    opacity: 1;
+}
+.prose-docs .heading-anchor:hover {
+    color: var(--color-brand-ink);
+    text-decoration: none;
+}
+
+/*
+ * Syntax highlighting for docs code blocks.
+ * Palette mirrors the landing-page terminal (QuickStart.svelte) so the two
+ * stay visually consistent: One Dark base + brand emerald for keywords.
+ */
+.prose-docs pre code.hljs {
+    color: #d8d4ca;
+    background: none;
+    padding: 0;
+}
+.prose-docs .hljs-comment,
+.prose-docs .hljs-quote {
+    color: #6b7280;
+    font-style: italic;
+}
+.prose-docs .hljs-keyword,
+.prose-docs .hljs-selector-tag,
+.prose-docs .hljs-literal,
+.prose-docs .hljs-section,
+.prose-docs .hljs-link {
+    color: #10b981;
+    font-weight: 600;
+}
+.prose-docs .hljs-string,
+.prose-docs .hljs-attr,
+.prose-docs .hljs-template-tag,
+.prose-docs .hljs-template-variable,
+.prose-docs .hljs-addition {
+    color: #e5a663;
+}
+.prose-docs .hljs-number,
+.prose-docs .hljs-built_in,
+.prose-docs .hljs-type,
+.prose-docs .hljs-boolean {
+    color: #d19a66;
+}
+.prose-docs .hljs-title,
+.prose-docs .hljs-title.function_,
+.prose-docs .hljs-name {
+    color: #61afef;
+}
+.prose-docs .hljs-attr,
+.prose-docs .hljs-variable,
+.prose-docs .hljs-property {
+    color: #e06c75;
+}
+.prose-docs .hljs-symbol,
+.prose-docs .hljs-bullet,
+.prose-docs .hljs-meta {
+    color: #c678dd;
+}
+.prose-docs .hljs-deletion {
+    color: #e06c75;
+}
+.prose-docs .hljs-emphasis {
+    font-style: italic;
+}
+.prose-docs .hljs-strong {
+    font-weight: 700;
+}
+
 .prose-docs table {
     width: 100%;
     margin: 1.5rem 0;

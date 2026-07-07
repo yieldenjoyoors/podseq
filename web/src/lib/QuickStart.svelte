@@ -1,5 +1,7 @@
 <script lang="ts">
-    type Tab = { id: string; label: string; lang: "sh" | "toml"; code: string };
+    import { highlightCode } from "./docs";
+
+    type Tab = { id: string; label: string; lang: string; code: string };
 
     let tabs: Tab[] = [
         {
@@ -63,109 +65,7 @@ podseq start --config podseq.toml --mode full`,
     let active = $state(tabs[0].id);
     let copied = $state(false);
     const current = $derived(tabs.find((t) => t.id === active) ?? tabs[0]);
-    const html = $derived(
-        current.lang === "toml" ? toml(current.code) : sh(current.code),
-    );
-
-    function esc(s: string): string {
-        return s
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;");
-    }
-
-    // Shell: comments, flags, strings, numbers, and a small set of known commands.
-    function sh(src: string): string {
-        const known = new Set([
-            "head",
-            "od",
-            "tr",
-            "reth",
-            "sui",
-            "keytool",
-            "generate",
-            "podseq",
-            "keyring",
-            "generate-block",
-            "list",
-            "cargo",
-            "build",
-            "start",
-            "init",
-        ]);
-        return src
-            .split("\n")
-            .map((line) => {
-                if (/^\s*#/.test(line))
-                    return `<span class="t-com">${esc(line)}</span>`;
-                const hash = line.indexOf("#");
-                let body = line;
-                let com = "";
-                if (hash >= 0) {
-                    body = line.slice(0, hash);
-                    com = line.slice(hash);
-                }
-                const out = esc(body)
-                    .replace(/("[^"]*")/g, '<span class="t-str">$1</span>')
-                    .replace(
-                        /(\s|^)(--?[A-Za-z][\w-]*)/g,
-                        '$1<span class="t-flag">$2</span>',
-                    )
-                    .replace(/\b(\d+)\b/g, '<span class="t-num">$1</span>')
-                    .replace(/[A-Za-z_][\w-]*/g, (m) =>
-                        known.has(m) ? `<span class="t-cmd">${m}</span>` : m,
-                    );
-                return com
-                    ? `${out}<span class="t-com">${esc(com)}</span>`
-                    : out;
-            })
-            .join("\n");
-    }
-
-    // TOML: sections, keys, strings, numbers, booleans, comments.
-    function toml(src: string): string {
-        const shLine = (line: string) => {
-            if (/^\s*#/.test(line))
-                return `<span class="t-com">${esc(line)}</span>`;
-            return line;
-        };
-        // First pass: run the shell tokenizer so the leading `podseq init ...`
-        // command line is colored consistently with the other tabs.
-        const lines = src.split("\n");
-        const firstSh = lines.findIndex(
-            (l) =>
-                /^\s*#/.test(l) === false && !/^\s*\[/.test(l) && !/=/.test(l),
-        );
-        return lines
-            .map((line, i) => {
-                if (i === firstSh) return sh(line);
-                const section = line.match(/^(\s*)(\[[^\]]+\])(\s*)(#.*)?$/);
-                if (section)
-                    return `${section[1]}<span class="t-sec">${esc(
-                        section[2],
-                    )}</span>${section[3]}${section[4] ? `<span class="t-com">${esc(section[4])}</span>` : ""}`;
-                const kv = line.match(/^(\s*)([\w.]+)(\s*=)(.*)$/);
-                if (kv) {
-                    const val = esc(kv[4])
-                        .replace(/("[^"]*")/g, '<span class="t-str">$1</span>')
-                        .replace(
-                            /\b(true|false)\b/g,
-                            '<span class="t-num">$1</span>',
-                        )
-                        .replace(/\b(\d+)\b/g, '<span class="t-num">$1</span>');
-                    const trailing = val.match(/(#.*)$/);
-                    const valBody = trailing
-                        ? val.slice(0, val.length - trailing[1].length)
-                        : val;
-                    const valCom = trailing
-                        ? `<span class="t-com">${trailing[1]}</span>`
-                        : "";
-                    return `${kv[1]}<span class="t-key">${kv[2]}</span><span class="t-op">${kv[3]}</span>${valBody}${valCom}`;
-                }
-                return shLine(line);
-            })
-            .join("\n");
-    }
+    const html = $derived(highlightCode(current.code, current.lang));
 
     async function copy() {
         try {
@@ -324,31 +224,49 @@ podseq start --config podseq.toml --mode full`,
         border: none;
         padding: 0;
     }
-    .term-body :global(.t-com) {
+    .term-body :global(.hljs-comment),
+    .term-body :global(.hljs-quote) {
         color: #6b7280;
         font-style: italic;
     }
-    .term-body :global(.t-str) {
+    .term-body :global(.hljs-string),
+    .term-body :global(.hljs-attr),
+    .term-body :global(.hljs-template-tag),
+    .term-body :global(.hljs-template-variable),
+    .term-body :global(.hljs-addition) {
         color: #e5a663;
     }
-    .term-body :global(.t-num) {
+    .term-body :global(.hljs-number),
+    .term-body :global(.hljs-built_in),
+    .term-body :global(.hljs-type),
+    .term-body :global(.hljs-boolean) {
         color: #d19a66;
     }
-    .term-body :global(.t-flag) {
-        color: #c678dd;
-    }
-    .term-body :global(.t-cmd) {
+    .term-body :global(.hljs-keyword),
+    .term-body :global(.hljs-literal),
+    .term-body :global(.hljs-section),
+    .term-body :global(.hljs-link) {
         color: #10b981;
         font-weight: 600;
     }
-    .term-body :global(.t-key) {
+    .term-body :global(.hljs-title),
+    .term-body :global(.hljs-title.function_),
+    .term-body :global(.hljs-name) {
         color: #61afef;
     }
-    .term-body :global(.t-sec) {
+    .term-body :global(.hljs-variable),
+    .term-body :global(.hljs-property) {
         color: #e06c75;
-        font-weight: 600;
     }
-    .term-body :global(.t-op) {
-        color: #8c8c95;
+    .term-body :global(.hljs-symbol),
+    .term-body :global(.hljs-bullet),
+    .term-body :global(.hljs-meta) {
+        color: #c678dd;
+    }
+    .term-body :global(.hljs-emphasis) {
+        font-style: italic;
+    }
+    .term-body :global(.hljs-strong) {
+        font-weight: 700;
     }
 </style>
