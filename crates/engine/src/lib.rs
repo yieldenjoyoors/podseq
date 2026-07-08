@@ -15,9 +15,8 @@ use podseq_core::{Block, Error, Header};
 pub use auth::Auth;
 pub use client::{Client, EngineError};
 
-/// Parent beacon block root applied to every block.
-/// This consensus client and has no beacon chain, so there is no real
-/// parent beacon block root.
+/// Parent beacon block root applied to every block. This consensus client
+/// has no beacon chain, so there is no real parent beacon block root.
 pub const PARENT_BEACON_BLOCK_ROOT: B256 = B256::ZERO;
 
 /// Engine API facade for building, accepting, and finalizing blocks.
@@ -59,7 +58,36 @@ impl Engine {
     /// (notably Reth) reject that with `-38002: Invalid forkchoice state` before
     /// the chain has a canonical head they can reference. Standard `eth_` calls
     /// work on any Engine API endpoint.
+    ///
+    /// Retries with backoff on transient errors for up to 60 seconds, so the
+    /// sequencer can start alongside Reth without a race on RPC readiness.
+    /// Transient here means transport failures and the "block not found" RPC
+    /// path: a just-started Reth can answer `eth_blockNumber` before the block
+    /// at that height is retrievable.
     pub async fn current_head(&self) -> Result<B256, EngineError> {
+        Ok(self.current_head_with_height().await?.0)
+    }
+
+    /// Same as [`current_head`](Self::current_head) but also returns the height,
+    /// so callers that need both avoid a second `eth_blockNumber` round trip.
+    pub async fn current_head_with_height(&self) -> Result<(B256, u64), EngineError> {
+        let mut backoff = std::time::Duration::from_millis(500);
+        let max_backoff = std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            match self.current_head_inner().await {
+                Ok((hash, height)) => return Ok((hash, height)),
+                Err(e) if is_transient(&e) && std::time::Instant::now() < deadline => {
+                    tracing::warn!(error = %e, ?backoff, "Reth RPC not ready; retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn current_head_inner(&self) -> Result<(B256, u64), EngineError> {
         let height = self.rpc.block_number().await?;
         let hash = self
             .rpc
@@ -69,7 +97,7 @@ impl Engine {
                 code: -1,
                 message: format!("block {height} not found; is the EL initialized?"),
             })?;
-        Ok(hash)
+        Ok((hash, height))
     }
 
     /// Returns the block hash at the given height, if present.
@@ -194,6 +222,17 @@ impl Engine {
     }
 }
 
+/// Classifies errors that can resolve themselves as Reth finishes starting.
+/// Transport failures and the synthesized "block not found" RPC error both
+/// qualify; anything else is a real failure the caller should see immediately.
+fn is_transient(e: &EngineError) -> bool {
+    match e {
+        EngineError::Transport(_) => true,
+        EngineError::Rpc { code: -1, message } => message.starts_with("block "),
+        _ => false,
+    }
+}
+
 /// Converts a built Engine API payload into a core `Block`.
 pub fn payload_into_block(built: &BuiltPayload) -> Result<Block, Error> {
     let inner = &built.payload.payload_inner.payload_inner;
@@ -256,5 +295,29 @@ mod tests {
         assert_eq!(block.header.height, 42);
         assert_eq!(block.header.timestamp, 1_700_000_000);
         assert!(!block.data.is_empty());
+    }
+
+    #[test]
+    fn is_transient_classifies_startup_errors() {
+        // The synthesized "block not found" error from current_head_inner is retried.
+        let block_missing = EngineError::Rpc {
+            code: -1,
+            message: "block 0 not found; is the EL initialized?".into(),
+        };
+        assert!(is_transient(&block_missing));
+
+        // A real RPC error from the node is not retried.
+        let rpc_real = EngineError::Rpc {
+            code: -38002,
+            message: "Invalid forkchoice state".into(),
+        };
+        assert!(!is_transient(&rpc_real));
+
+        // A synthesized error about something else is not retried.
+        let other = EngineError::Rpc {
+            code: -1,
+            message: "invalid block number: parse error".into(),
+        };
+        assert!(!is_transient(&other));
     }
 }

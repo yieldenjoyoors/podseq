@@ -102,17 +102,10 @@ impl Runner {
                     }
                     None => {
                         info!("discovering chain head from Reth");
-                        let height = engine
-                            .block_number()
+                        let (hash, height) = engine
+                            .current_head_with_height()
                             .await
-                            .context("querying block number from Reth")?;
-                        let hash = engine
-                            .block_by_number(height)
-                            .await
-                            .context("querying chain head from Reth")?
-                            .with_context(|| {
-                                format!("block {height} not found; is Reth initialized?")
-                            })?;
+                            .context("discovering chain head from Reth")?;
                         info!(height, ?hash, "discovered chain head");
                         (hash, hash, hash, now_unix())
                     }

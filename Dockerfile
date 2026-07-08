@@ -9,8 +9,9 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY tests ./tests
+COPY e2e ./e2e
 
-# The binary lives in crates/node; the other workspace members (tests)
+# The binary lives in crates/node; the other workspace members (tests, e2e)
 # must be present for Cargo to load the workspace manifest.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
