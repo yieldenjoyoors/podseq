@@ -15,9 +15,8 @@ use podseq_core::{Block, Error, Header};
 pub use auth::Auth;
 pub use client::{Client, EngineError};
 
-/// Parent beacon block root applied to every block.
-/// This consensus client and has no beacon chain, so there is no real
-/// parent beacon block root.
+/// Parent beacon block root applied to every block. This consensus client
+/// has no beacon chain, so there is no real parent beacon block root.
 pub const PARENT_BEACON_BLOCK_ROOT: B256 = B256::ZERO;
 
 /// Engine API facade for building, accepting, and finalizing blocks.
@@ -59,7 +58,27 @@ impl Engine {
     /// (notably Reth) reject that with `-38002: Invalid forkchoice state` before
     /// the chain has a canonical head they can reference. Standard `eth_` calls
     /// work on any Engine API endpoint.
+    ///
+    /// Retries with backoff on connection errors for up to 60 seconds, so the
+    /// sequencer can start alongside Reth without a race on RPC readiness.
     pub async fn current_head(&self) -> Result<B256, EngineError> {
+        let mut backoff = std::time::Duration::from_millis(500);
+        let max_backoff = std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            match self.current_head_inner().await {
+                Ok(hash) => return Ok(hash),
+                Err(EngineError::Transport(_)) if std::time::Instant::now() < deadline => {
+                    tracing::warn!(?backoff, "Reth RPC not ready; retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn current_head_inner(&self) -> Result<B256, EngineError> {
         let height = self.rpc.block_number().await?;
         let hash = self
             .rpc

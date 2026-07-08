@@ -3888,6 +3888,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "podseq-e2e"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-network",
+ "alloy-primitives",
+ "alloy-rpc-types-engine",
+ "alloy-signer-local",
+ "anyhow",
+ "hex",
+ "podseq-core",
+ "podseq-engine",
+ "podseq-sui",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "podseq-engine"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,36 @@
+[package]
+name = "podseq-e2e"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "End-to-end integration tests driving podseq against a real Reth container"
+
+[dependencies]
+podseq-core.workspace = true
+podseq-engine.workspace = true
+podseq-sui.workspace = true
+alloy-primitives.workspace = true
+alloy-rpc-types-engine.workspace = true
+alloy-consensus.workspace = true
+alloy-eips.workspace = true
+alloy-network.workspace = true
+alloy-signer-local.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "process", "io-util"] }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tempfile = "3"
+hex.workspace = true
+url.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[[test]]
+name = "engine_integration"
+path = "tests/engine_integration.rs"
+
+[[test]]
+name = "full_stack"
+path = "tests/full_stack.rs"

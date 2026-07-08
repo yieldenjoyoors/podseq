@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies.Sui]
 git = "https://github.com/MystenLabs/sui.git"
 subdir = "crates/sui-framework/packages/sui-framework"
-rev = "testnet-v1.73.1"
+rev = "testnet-v1.75.1"
 
 [addresses]
 podseq = "0x0"
