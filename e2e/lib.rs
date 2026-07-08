@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 /// Default Reth image tag pinned for reproducible CI runs.
-pub const RETH_IMAGE: &str = "ghcr.io/paradigmxyz/reth:v1.5.0";
+pub const RETH_IMAGE: &str = "ghcr.io/paradigmxyz/reth:latest";
 
 /// Polling interval when waiting for an endpoint to become reachable.
 const POLL: Duration = Duration::from_millis(500);
