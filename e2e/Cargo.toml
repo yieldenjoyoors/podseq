@@ -23,6 +23,8 @@ reqwest.workspace = true
 tempfile = "3"
 hex.workspace = true
 url.workspace = true
+toml.workspace = true
+rand.workspace = true
 
 [lib]
 path = "lib.rs"

@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
 
 # Cancel stale runs on the same ref.
 concurrency:
@@ -46,17 +48,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Sui CLI (testnet toolchain)
-        run: |
-          set -euo pipefail
-          SUI_TAG=$(grep '^rev = ' Move.toml | sed 's/rev = "//;s/"//')
-          echo "Installing Sui CLI $SUI_TAG (from Move.toml)"
-          mkdir -p "$HOME/.local/bin"
-          gh release download "$SUI_TAG" -R MystenLabs/sui \
-            -p '*ubuntu-x86_64.tgz' -D /tmp
-          tar -xzf /tmp/*ubuntu-x86_64.tgz -C "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/install-sui
+        with:
+          move-toml: move/Move.toml
 
       - name: Build settlement package
         run: sui move build
@@ -101,11 +95,12 @@ jobs:
       - name: Run e2e tests
         run: cargo test -p podseq-e2e --no-fail-fast --test engine_integration -- --test-threads=1 --nocapture
 
+  # Runs on every PR/push (non-blocking) and on the daily schedule + manual dispatch (blocking).
   e2e-full:
     name: e2e (full stack)
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -119,17 +114,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Install Sui CLI (testnet toolchain)
-        run: |
-          set -euo pipefail
-          SUI_TAG=$(grep '^rev = ' move/Move.toml | sed 's/rev = "//;s/"//')
-          echo "Installing Sui CLI $SUI_TAG (from move/Move.toml)"
-          mkdir -p "$HOME/.local/bin"
-          gh release download "$SUI_TAG" -R MystenLabs/sui \
-            -p '*ubuntu-x86_64.tgz' -D /tmp
-          tar -xzf /tmp/*ubuntu-x86_64.tgz -C "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/install-sui
+        with:
+          move-toml: move/Move.toml
 
       - name: Build settlement package
         working-directory: move

@@ -216,11 +216,7 @@ async fn wait_for_http_ok(url: &str, method: &str) -> Result<()> {
 }
 
 fn random_hex_32() -> String {
-    use std::io::Read;
-    let mut buf = [0u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut buf))
-        .expect("reading /dev/urandom");
+    let buf: [u8; 32] = rand::random();
     hex::encode(buf)
 }
 
@@ -386,6 +382,50 @@ volumes:
     /// IDs back here on first start.
     pub fn config_path(&self) -> std::path::PathBuf {
         self.workdir.join("podseq.toml")
+    }
+
+    /// Returns the podseq container's status, or `None` if `docker compose ps`
+    /// fails or the container is absent. Used to fail fast when podseq crashes
+    /// during startup instead of waiting out the full polling budget.
+    fn podseq_state(&self) -> Option<String> {
+        let out = std::process::Command::new("docker")
+            .args([
+                "compose",
+                "-p",
+                &self.project,
+                "-f",
+                "docker-compose.yml",
+                "ps",
+                "--status",
+                "--format",
+                "json",
+                "podseq",
+            ])
+            .current_dir(&self.workdir)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        // `docker compose ps --format json` emits one JSON object per line.
+        // Each has a "Status" field like "exited (1)" or "running".
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(s) = v.get("Status").and_then(|s| s.as_str()) {
+                    return Some(s.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// True when the podseq container has stopped (exited). Lets the test bail
+    /// early with logs instead of polling for minutes after a startup crash.
+    pub fn podseq_exited(&self) -> bool {
+        self.podseq_state()
+            .map(|s| s.starts_with("exited"))
+            .unwrap_or(false)
     }
 
     /// Streams `docker compose logs podseq` until `predicate` returns true on the

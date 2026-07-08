@@ -54,16 +54,12 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     let registry_id = {
         let deadline = Instant::now() + Duration::from_secs(300);
         let id = loop {
-            if let Ok(config) = std::fs::read_to_string(stack.config_path()) {
-                if let Some(found) = config.lines().find_map(|line| {
-                    let trimmed = line.trim();
-                    let val = trimmed.strip_prefix("registry_id")?;
-                    let val = val.trim_start_matches(['=', ' ', '"']);
-                    let id = val.split('"').next().unwrap_or("");
-                    (id.starts_with("0x") && id.len() == 66).then(|| id.to_string())
-                }) {
-                    break found;
-                }
+            if stack.podseq_exited() {
+                stack.dump_logs();
+                bail!("podseq container exited before settling; see logs above");
+            }
+            if let Some(id) = read_registry_id(&stack.config_path())? {
+                break id;
             }
             if Instant::now() >= deadline {
                 stack.dump_logs();
@@ -148,6 +144,33 @@ fn require_docker() {
         .is_ok();
     if !available {
         panic!("docker is not available; the full-stack e2e test requires it");
+    }
+}
+
+/// Reads `sui.registry_id` from the podseq config file, returning it only once
+/// it is set and looks like a Sui object id (`0x` + 64 hex). Returns `Ok(None)`
+/// when the field is absent (auto-deploy not finished yet).
+fn read_registry_id(path: &std::path::Path) -> Result<Option<String>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return Ok(None),
+    };
+    let value: toml::Value = match toml::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let id = match value
+        .get("sui")
+        .and_then(|s| s.get("registry_id"))
+        .and_then(|v| v.as_str())
+    {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+    if id.starts_with("0x") && id.len() == 66 {
+        Ok(Some(id.to_string()))
+    } else {
+        Ok(None)
     }
 }
 
