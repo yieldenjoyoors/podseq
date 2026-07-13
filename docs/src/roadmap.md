@@ -37,7 +37,7 @@ simple while making the chain trust-minimized and developer-friendly.
       earns revenue directly from every block it produces. (Default is burned.)
 - [x] **Open-source block explorer**: [blockscout](https://github.com/blockscout/blockscout)-based deployment with
       automatic contract verification via Sourcify.
-- [x] **Open-source faucet**: [eth-faucet](https://github.com/chainflag/eth-faucet) preconfigured deployment.
+- [ ] **Open-source faucet**: [eth-faucet](https://github.com/chainflag/eth-faucet) preconfigured deployment.
 
 ## Phase 4: Operator Tooling
 
