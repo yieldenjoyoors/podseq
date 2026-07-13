@@ -191,6 +191,24 @@ settlement, at finality lag.
 - A block whose signature fails verification is rejected and sync halts with an
   error.
 
+## Docker Compose
+
+The recommended way to run a local dev node is with Docker Compose:
+
+```sh
+docker compose \
+  -f docker-compose.yml -f docker-compose.testnet.yml up -d
+```
+
+This starts Reth, podseq, and a **Blockscout block explorer** on
+`http://localhost:4000`. The explorer indexes blocks, transactions, contracts,
+and token transfers from the local Reth node. Contract verification is automatic
+via [Sourcify](https://sourcify.dev).
+
+### Disabling the explorer
+
+Comment out all `blockscout-*` services in `docker-compose.yml`.
+
 ## Troubleshooting
 
 | Symptom                               | Fix                                                                                                                                                                                                      |

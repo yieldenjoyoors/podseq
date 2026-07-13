@@ -35,9 +35,9 @@ simple while making the chain trust-minimized and developer-friendly.
 - [x] **Fee capture**: all L2 fees flow to the sequencer. Gas is paid in
       bridged USDSui: users don't need a separate native token. The sequencer
       earns revenue directly from every block it produces. (Default is burned.)
-- [ ] **Open-source block explorer**: [blockscout](https://github.com/blockscout/blockscout)-based deployment with
+- [x] **Open-source block explorer**: [blockscout](https://github.com/blockscout/blockscout)-based deployment with
       automatic contract verification via Sourcify.
-- [ ] **Open-source faucet**: [eth-faucet](https://github.com/chainflag/eth-faucet) preconfigured deployment.
+- [x] **Open-source faucet**: [eth-faucet](https://github.com/chainflag/eth-faucet) preconfigured deployment.
 
 ## Phase 4: Operator Tooling
 
