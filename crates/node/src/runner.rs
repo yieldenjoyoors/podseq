@@ -64,9 +64,9 @@ impl Runner {
         broadcaster: Option<BlockBroadcaster>,
         da_batch_size: usize,
         metrics: Arc<PodseqMetrics>,
-    ) -> Self {
-        podseq_store::init(data_dir).expect("failed to init storage");
-        Self {
+    ) -> Result<Self> {
+        podseq_store::init(data_dir).context("initializing storage under data_dir")?;
+        Ok(Self {
             engine,
             sui,
             block_signer,
@@ -79,7 +79,7 @@ impl Runner {
             genesis_hash,
             da_batch_size,
             metrics,
-        }
+        })
     }
 
     /// Runs the production loop and a background finalizer until shutdown.
@@ -165,7 +165,14 @@ impl Runner {
                         error!(error = ?e, "block production failed");
                     }
                 }
-                _ = shutdown_signal() => {
+                sig = shutdown_signal() => {
+                    if let Err(e) = sig {
+                        // Signal handler install failed: keep running, but log
+                        // loudly. The process can still exit via the finalizer
+                        // drain on channel close (e.g. panic in a task).
+                        error!(error = %e, "failed to install shutdown signal handlers; continuing without graceful shutdown");
+                        continue;
+                    }
                     info!("received shutdown signal, stopping sequencer");
                     shutting_down.store(true, Ordering::SeqCst);
                     break;
@@ -429,7 +436,15 @@ async fn flush_batch(
         let height = p.height;
         metrics.pending_blocks.set(batch.len() as i64);
 
-        advance_finalized(engine, state, height, p.block_hash).await;
+        if let Err(e) = advance_finalized(engine, state, height, p.block_hash).await {
+            // Reth did not confirm finalization. Put the block back and leave
+            // the pending marker so it is re-finalized on the next startup;
+            // do NOT advance state or clear pending.
+            error!(height, error = %e, "finalization failed; leaving pending marker");
+            batch.insert(0, p);
+            metrics.pending_blocks.set(batch.len() as i64);
+            return;
+        }
 
         if let Err(e) = pending_store.clear(height) {
             warn!(height, error = %e, "failed to clear pending marker");
@@ -524,7 +539,15 @@ async fn finalize_buffered_locally(
     batch: Vec<PendingBlock>,
 ) {
     for p in batch {
-        advance_finalized(engine, state, p.height, p.block_hash).await;
+        if let Err(e) = advance_finalized(engine, state, p.height, p.block_hash).await {
+            error!(
+                height = p.height,
+                ?p.block_hash,
+                error = %e,
+                "shutdown: failed to finalize locally (re-finalized on restart)"
+            );
+            continue;
+        }
         info!(
             height = p.height,
             ?p.block_hash,
@@ -626,29 +649,38 @@ fn derive_prev_randao(height: u64) -> B256 {
 }
 
 /// Shared by the normal finalize path and shutdown.
+///
+/// Returns `Err` if the engine rejected the forkchoice update; in that case
+/// the in-memory `safe`/`finalized` pointers are NOT advanced, so the caller
+/// can retry or leave the pending marker intact. Advancing state only on a
+/// confirmed engine response prevents silent drift between the sequencer's
+/// view and Reth's actual forkchoice.
 async fn advance_finalized(
     engine: &Engine,
     state: &Mutex<ChainState>,
     height: u64,
     block_hash: B256,
-) {
+) -> Result<()> {
     let head = state.lock().await.head;
-    if let Err(e) = engine.finalize(head, block_hash, block_hash).await {
-        error!(height, error = %e, "failed to advance finalized");
-    }
+    engine
+        .finalize(head, block_hash, block_hash)
+        .await
+        .with_context(|| format!("advancing finalized to height {height}"))?;
     let mut s = state.lock().await;
     s.safe = block_hash;
     s.finalized = block_hash;
+    Ok(())
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal() -> Result<()> {
     use tokio::signal::unix::{signal, SignalKind};
-    let mut interrupt = signal(SignalKind::interrupt()).expect("install SIGINT handler");
-    let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+    let mut interrupt = signal(SignalKind::interrupt()).context("installing SIGINT handler")?;
+    let mut terminate = signal(SignalKind::terminate()).context("installing SIGTERM handler")?;
     tokio::select! {
         _ = interrupt.recv() => {}
         _ = terminate.recv() => {}
     }
+    Ok(())
 }
 
 #[cfg(test)]

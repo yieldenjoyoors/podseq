@@ -27,7 +27,7 @@ pub fn load_or_generate_key(path: &Path) -> Result<IdentityKey> {
             );
         }
         let seed = hex::decode(&hex).with_context(|| "decoding p2p key hex")?;
-        let key = load_from_seed(&seed);
+        let key = load_from_seed(&seed)?;
         info!(key = %path.display(), "p2p identity key loaded");
         Ok(key)
     } else {
@@ -47,10 +47,12 @@ pub fn load_or_generate_key(path: &Path) -> Result<IdentityKey> {
     }
 }
 
-fn load_from_seed(seed: &[u8]) -> IdentityKey {
+fn load_from_seed(seed: &[u8]) -> Result<IdentityKey> {
     use commonware_codec::Read;
     let mut buf: &[u8] = seed;
-    ed25519::PrivateKey::read_cfg(&mut buf, &()).expect("invalid seed")
+    let key = ed25519::PrivateKey::read_cfg(&mut buf, &())
+        .context("decoding p2p key seed (must be 32 raw bytes)")?;
+    Ok(key)
 }
 
 fn key_seed(key: &IdentityKey) -> Vec<u8> {

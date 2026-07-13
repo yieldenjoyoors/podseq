@@ -51,7 +51,8 @@ impl FullNode {
         config: &Config,
         p2p_receiver: Option<BlockReceiver>,
     ) -> Result<Self> {
-        podseq_store::init(&config.data_dir).expect("failed to init storage");
+        podseq_store::init(&config.data_dir)
+            .with_context(|| format!("initializing storage under {}", config.data_dir.display()))?;
         let poll_interval = Duration::from_millis(config.sequencer.block_time_ms.max(100));
 
         // Full nodes verify; they never need the sequencer's private key.
@@ -189,14 +190,16 @@ impl FullNode {
         );
 
         // The commitments-table UID is immutable; fetch it once and reuse it.
-        if self.table_uid.is_none() {
-            self.table_uid = Some(
-                podseq_sui::settlement::table_uid(&self.rpc_url, &self.registry_id)
+        let table_uid = match self.table_uid {
+            Some(uid) => uid,
+            None => {
+                let uid = podseq_sui::settlement::table_uid(&self.rpc_url, &self.registry_id)
                     .await
-                    .context("reading commitments table UID from registry")?,
-            );
-        }
-        let table_uid = self.table_uid.expect("cached");
+                    .context("reading commitments table UID from registry")?;
+                self.table_uid = Some(uid);
+                uid
+            }
+        };
 
         // Read commitments one height at a time by their dynamic-field object id,
         // so each poll costs O(new heights).
@@ -209,8 +212,14 @@ impl FullNode {
                 .with_context(|| format!("reading settlement for height {height}"))?
                 .with_context(|| format!("height {height} not settled"))?;
 
-            let blocks = if cached_blob.as_ref().is_some_and(|(id, _)| id == &blob_id) {
-                cached_blob.as_ref().unwrap().1.clone()
+            let blocks = if let Some((id, blocks)) = cached_blob.as_ref() {
+                if id == &blob_id {
+                    blocks.clone()
+                } else {
+                    let fetched = self.sui.fetch(&blob_id).await?;
+                    cached_blob = Some((blob_id, fetched.clone()));
+                    fetched
+                }
             } else {
                 let fetched = self.sui.fetch(&blob_id).await?;
                 cached_blob = Some((blob_id, fetched.clone()));

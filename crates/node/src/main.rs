@@ -249,11 +249,16 @@ async fn build_p2p(
         bootstrap_peers: cfg
             .bootstrap_peers
             .iter()
-            .filter_map(|s| {
-                let (hex, addr) = s.split_once('@')?;
-                Some((hex.to_string(), addr.parse().ok()?))
+            .map(|s| {
+                let (hex, addr) = s
+                    .split_once('@')
+                    .with_context(|| format!("bootstrap peer missing '@' separator: {s}"))?;
+                let addr = addr
+                    .parse()
+                    .with_context(|| format!("bootstrap peer addr invalid for {s}"))?;
+                Ok((hex.to_string(), addr))
             })
-            .collect(),
+            .collect::<Result<_>>()?,
         ..podseq_p2p::P2pConfig::default()
     };
 
@@ -349,7 +354,7 @@ async fn start_sequencer(
         broadcaster,
         config.walrus.batch_size_bytes,
         Arc::clone(&podseq_metrics),
-    );
+    )?;
 
     // Enshrined bridge relayer: runs concurrently with the production loop and is
     // deliberately NON-FATAL. The spawned task owns its own config copy and may

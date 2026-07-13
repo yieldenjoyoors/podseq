@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use commonware_broadcast::Broadcaster as _;
 use commonware_cryptography::{sha256::Digest, Digestible, Signer as _};
 use commonware_p2p::{authenticated::discovery, Ingress, Manager, Recipients, Sender as RawSender};
@@ -171,12 +171,14 @@ impl P2pNode {
             .iter()
             .map(|(hex_key, addr)| {
                 let mut bytes = [0u8; 32];
-                hex::decode_to_slice(hex_key, &mut bytes)
-                    .expect("bootstrap peer pubkey must be valid 64-char hex");
-                let pk = load_pubkey(bytes);
-                (pk, Ingress::from(*addr))
+                hex::decode_to_slice(hex_key, &mut bytes).with_context(|| {
+                    format!("bootstrap peer pubkey must be valid 64-char hex, got {hex_key}")
+                })?;
+                let pk = load_pubkey(bytes)
+                    .with_context(|| format!("decoding bootstrap peer pubkey {hex_key}"))?;
+                Ok::<_, anyhow::Error>((pk, Ingress::from(*addr)))
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         let dialable_addr = config.dialable_addr.unwrap_or(config.listen_addr);
 
@@ -263,9 +265,9 @@ impl P2pNode {
     }
 }
 
-fn load_pubkey(bytes: [u8; 32]) -> commonware_cryptography::ed25519::PublicKey {
+fn load_pubkey(bytes: [u8; 32]) -> Result<commonware_cryptography::ed25519::PublicKey> {
     use commonware_codec::Read;
     let mut buf: &[u8] = &bytes;
     commonware_cryptography::ed25519::PublicKey::read_cfg(&mut buf, &())
-        .expect("32 bytes must deserialize to a valid ed25519 public key")
+        .context("decoding 32-byte ed25519 public key")
 }
