@@ -13,6 +13,9 @@ services:
       - "9001:9001/tcp" # P2P
       - "9001:9001/udp"
 
+  faucet:
+    container_name: faucet-testnet
+
   podseq:
     container_name: podseq-testnet
     volumes:

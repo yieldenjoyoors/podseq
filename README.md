@@ -97,6 +97,27 @@ podseq start --config podseq.toml
 For a complete walkthrough: Reth setup, Walrus/Sui endpoints, key configuration, and
 node modes; see the [Node Setup](https://podseq.xyz/#/docs~setup) guide.
 
+### Development faucet
+
+The Docker Compose stack includes an optional [eth-faucet](https://github.com/chainflag/eth-faucet)
+service that dispenses test ETH from the local Reth node. It is intended for
+development and testnet use only.
+
+```sh
+# Start the stack with the faucet
+FAUCET_PRIVATE_KEY=0x<your-dev-key> docker compose \
+  -f docker-compose.yml -f docker-compose.testnet.yml up -d
+
+# Faucet web UI is available at http://localhost:8080
+```
+
+Set `FAUCET_PRIVATE_KEY` to the hex private key of a funded development account.
+To disable the faucet, comment out or remove the `faucet` service from
+`docker-compose.yml`.
+
+> **Warning**: Never reuse the faucet key on mainnet. Production deployments
+> should use a dedicated funded wallet.
+
 ### Useful CLI commands
 
 ```sh

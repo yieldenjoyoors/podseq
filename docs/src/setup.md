@@ -191,6 +191,23 @@ settlement, at finality lag.
 - A block whose signature fails verification is rejected and sync halts with an
   error.
 
+## Docker Compose
+
+The recommended way to run a local dev node is with Docker Compose:
+
+```sh
+FAUCET_PRIVATE_KEY=0x<dev-key> docker compose \
+  -f docker-compose.yml -f docker-compose.testnet.yml up -d
+```
+
+This starts Reth, podseq, and an optional **development faucet** on
+`http://localhost:8080`. The faucet connects to the local Reth JSON-RPC and
+dispenses test ETH. Disable it by commenting out the `faucet` service in
+`docker-compose.yml`.
+
+> **Security**: The faucet key is for development only. Never reuse it on
+> mainnet. Production deployments should use a dedicated funded wallet.
+
 ## Troubleshooting
 
 | Symptom                               | Fix                                                                                                                                                                                                      |
