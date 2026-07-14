@@ -203,7 +203,7 @@ FAUCET_PRIVATE_KEY=0x<dev-key> docker compose \
 This starts Reth, podseq, and an optional **development faucet** on
 `http://localhost:8080`. The faucet connects to the local Reth JSON-RPC and
 dispenses test ETH. Disable it by commenting out the `faucet` service in
-`docker-compose.yml`.
+`docker-compose.testnet.yml`.
 
 > **Security**: The faucet key is for development only. Never reuse it on
 > mainnet. Production deployments should use a dedicated funded wallet.

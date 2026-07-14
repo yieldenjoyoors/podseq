@@ -99,7 +99,7 @@ node modes; see the [Node Setup](https://podseq.xyz/#/docs~setup) guide.
 
 ### Development faucet
 
-The Docker Compose stack includes an optional [eth-faucet](https://github.com/chainflag/eth-faucet)
+The testnet Docker Compose override includes an optional [eth-faucet](https://github.com/chainflag/eth-faucet)
 service that dispenses test ETH from the local Reth node. It is intended for
 development and testnet use only.
 
@@ -113,7 +113,7 @@ FAUCET_PRIVATE_KEY=0x<your-dev-key> docker compose \
 
 Set `FAUCET_PRIVATE_KEY` to the hex private key of a funded development account.
 To disable the faucet, comment out or remove the `faucet` service from
-`docker-compose.yml`.
+`docker-compose.testnet.yml`.
 
 > **Warning**: Never reuse the faucet key on mainnet. Production deployments
 > should use a dedicated funded wallet.
