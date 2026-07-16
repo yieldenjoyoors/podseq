@@ -25,6 +25,22 @@ services:
   blockscout-frontend:
     container_name: blockscout-frontend-testnet
 
+  faucet:
+    # Development-only ETH faucet. Connects to the local Reth JSON-RPC and
+    # dispenses test ETH. Disable by removing or commenting out this service.
+    #   FAUCET_PRIVATE_KEY=0x... docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d
+    container_name: faucet-testnet
+    image: chainflag/eth-faucet:latest
+    depends_on:
+      reth:
+        condition: service_started
+    environment:
+      WEB3_PROVIDER: http://reth:8545
+      PRIVATE_KEY: ${FAUCET_PRIVATE_KEY}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
   podseq:
     container_name: podseq-testnet
     volumes:

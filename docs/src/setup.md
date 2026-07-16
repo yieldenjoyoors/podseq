@@ -200,14 +200,11 @@ docker compose \
   -f docker-compose.yml -f docker-compose.testnet.yml up -d
 ```
 
-This starts Reth, podseq, and a **Blockscout block explorer** on
-`http://localhost:4000`. The explorer indexes blocks, transactions, contracts,
-and token transfers from the local Reth node. Contract verification is automatic
-via [Sourcify](https://sourcify.dev).
-
-### Disabling the explorer
-
-Comment out all `blockscout-*` services in `docker-compose.yml`.
+This starts Reth, podseq, a **Blockscout block explorer** (http://localhost:4000),
+and an optional **development faucet** (http://localhost:8080, requires `FAUCET_PRIVATE_KEY`).
+Both are preconfigured for local development. To disable either, comment out the
+relevant services in `docker-compose.yml` (explorer) or `docker-compose.testnet.yml`
+(faucet).
 
 ## Troubleshooting
 

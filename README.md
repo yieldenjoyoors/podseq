@@ -97,26 +97,19 @@ podseq start --config podseq.toml
 For a complete walkthrough: Reth setup, Walrus/Sui endpoints, key configuration, and
 node modes; see the [Node Setup](https://podseq.xyz/#/docs~setup) guide.
 
-### Block explorer
+### Block explorer and faucet
 
 The Docker Compose stack includes a [Blockscout](https://github.com/blockscout/blockscout)
-block explorer that indexes blocks, transactions, contracts, and token transfers
-from the local Reth node. Contract verification is automatic via
-[Sourcify](https://sourcify.dev).
+block explorer and an optional [eth-faucet](https://github.com/chainflag/eth-faucet),
+both preconfigured for local development.
 
 ```sh
-# Start the stack with the explorer
 docker compose \
   -f docker-compose.yml -f docker-compose.testnet.yml up -d
-
-# Explorer UI is available at http://localhost:4000
 ```
 
-The explorer starts automatically with `docker compose up` and begins indexing
-from block 0. No manual setup is required.
-
-To disable the explorer, comment out or remove all `blockscout-*` services from
-`docker-compose.yml`.
+- **Explorer UI**: http://localhost:4000
+- **Faucet UI**: http://localhost:8080 (requires `FAUCET_PRIVATE_KEY` env var)
 
 ### Useful CLI commands
 
