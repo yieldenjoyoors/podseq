@@ -66,6 +66,88 @@ services:
       - ./docker/secrets:/secrets:ro
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Blockscout block explorer. Indexes blocks, transactions, contracts, and
+  # token transfers from the local Reth node. Includes automatic contract
+  # verification via Sourcify.
+  #
+  # Disable by removing or commenting out all blockscout-* services.
+  # Explorer UI: http://localhost:4000
+  # ---------------------------------------------------------------------------
+
+  blockscout-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_PASSWORD: blockscout
+      POSTGRES_USER: blockscout
+      POSTGRES_DB: blockscout
+    volumes:
+      - blockscout-db:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  blockscout-redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+
+  blockscout-backend:
+    image: ghcr.io/blockscout/blockscout:latest
+    depends_on:
+      blockscout-db:
+        condition: service_started
+      blockscout-redis:
+        condition: service_started
+      reth:
+        condition: service_started
+    command: sh -c "bin/blockscout eval 'Elixir.Explorer.ReleaseTasks.create_and_migrate()' && bin/blockscout start"
+    environment:
+      ETHEREUM_JSONRPC_VARIANT: geth
+      ETHEREUM_JSONRPC_HTTP_URL: http://reth:8545/
+      ETHEREUM_JSONRPC_TRACE_URL: http://reth:8545/
+      ETHEREUM_JSONRPC_TRANSPORT: http
+      CHAIN_ID: "3735928814"
+      DATABASE_URL: postgresql://blockscout:blockscout@blockscout-db:5432/blockscout
+      SECRET_KEY_BASE: ${BLOCKSCOUT_SECRET_KEY_BASE:-56NtB48ear7+wMSf0IQuWDAAazhpb31qyc7GiyspBP2vh7t5zlCsF5QDv76chXeN}
+      PORT: "4000"
+      COIN: ETH
+      COIN_NAME: Ether
+      DISABLE_MARKET: "true"
+      ADMIN_PANEL_ENABLED: "false"
+      ECTO_SSL_MODE: disable
+      POOL_SIZE: "20"
+      POOL_SIZE_API: "5"
+      API_V1_READ_METHODS_DISABLED: "false"
+      API_V1_WRITE_METHODS_DISABLED: "false"
+      SOURCIFY_INTEGRATION_ENABLED: "true"
+      SOURCIFY_SERVER_URL: https://sourcify.dev/server
+      MICROSERVICE_SC_VERIFIER_TYPE: eth_bytecode_db
+      MICROSERVICE_VISUALIZE_SOL2UML_ENABLED: "false"
+      MICROSERVICE_SIG_PROVIDER_ENABLED: "false"
+      NFT_MEDIA_HANDLER_ENABLED: "false"
+      ACCOUNT_ENABLED: "false"
+      RE_CAPTCHA_DISABLED: "true"
+      INDEXER_DISABLE_PENDING_TRANSACTIONS_FETCHER: "true"
+      INDEXER_DISABLE_WITHDRAWALS_FETCHER: "true"
+    volumes:
+      - blockscout-logs:/app/logs
+    restart: unless-stopped
+
+  blockscout-frontend:
+    image: ghcr.io/blockscout/blockscout-frontend:latest
+    depends_on:
+      blockscout-backend:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_API_HOST: blockscout-backend
+      NEXT_PUBLIC_API_PORT: "4000"
+      NEXT_PUBLIC_API_PROTOCOL: http
+      NEXT_PUBLIC_STATS_API_HOST: blockscout-backend
+      NEXT_PUBLIC_STATS_API_PORT: "4000"
+    ports:
+      - "4000:3000"
+    restart: unless-stopped
+
 volumes:
   jwt:
   reth-data:
+  blockscout-db:
+  blockscout-logs:

@@ -196,17 +196,15 @@ settlement, at finality lag.
 The recommended way to run a local dev node is with Docker Compose:
 
 ```sh
-FAUCET_PRIVATE_KEY=0x<dev-key> docker compose \
+docker compose \
   -f docker-compose.yml -f docker-compose.testnet.yml up -d
 ```
 
-This starts Reth, podseq, and an optional **development faucet** on
-`http://localhost:8080`. The faucet connects to the local Reth JSON-RPC and
-dispenses test ETH. Disable it by commenting out the `faucet` service in
-`docker-compose.testnet.yml`.
-
-> **Security**: The faucet key is for development only. Never reuse it on
-> mainnet. Production deployments should use a dedicated funded wallet.
+This starts Reth, podseq, a **Blockscout block explorer** (http://localhost:4000),
+and an optional **development faucet** (http://localhost:8080, requires `FAUCET_PRIVATE_KEY`).
+Both are preconfigured for local development. To disable either, comment out the
+relevant services in `docker-compose.yml` (explorer) or `docker-compose.testnet.yml`
+(faucet).
 
 ## Troubleshooting
 

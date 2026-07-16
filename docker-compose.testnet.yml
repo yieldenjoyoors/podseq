@@ -13,6 +13,18 @@ services:
       - "9001:9001/tcp" # P2P
       - "9001:9001/udp"
 
+  blockscout-db:
+    container_name: blockscout-db-testnet
+
+  blockscout-redis:
+    container_name: blockscout-redis-testnet
+
+  blockscout-backend:
+    container_name: blockscout-backend-testnet
+
+  blockscout-frontend:
+    container_name: blockscout-frontend-testnet
+
   faucet:
     # Development-only ETH faucet. Connects to the local Reth JSON-RPC and
     # dispenses test ETH. Disable by removing or commenting out this service.
