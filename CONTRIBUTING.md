@@ -50,6 +50,28 @@ and are not expected to run on every commit:
 cargo test -p podseq-e2e -- --test-threads=1 --nocapture
 ```
 
+## CRAP regression
+
+Every PR is checked against a committed CRAP baseline
+([`crap_baseline.json`](./crap_baseline.json)) and fails if any function's CRAP
+score went up. Run the same check locally:
+
+```sh
+make crap-regression
+```
+
+Regenerate the baseline only when a PR improves scores (new tests,
+simplifications) or adds functions worth tracking. Treat it like a snapshot
+test: update it deliberately, in the same PR, not on a schedule.
+
+```sh
+make crap-baseline   # review and commit crap_baseline.json
+```
+
+Paths in the baseline are relative to the repo root. Do not pass `--workspace`
+to `cargo crap` when regenerating it: that emits absolute paths and leaks the
+local filesystem layout into the committed file.
+
 ## Documentation
 
 User-facing docs live in [`docs/src/`](./docs/src/) and are rendered at

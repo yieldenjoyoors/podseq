@@ -1,6 +1,9 @@
 /target
 **/*.rs.bk
 
+# Coverage (cargo-llvm-cov / cargo-crap)
+lcov.info
+
 # Local secrets and generated state (docker stack)
 /docker/secrets/*
 !/docker/secrets/README.txt

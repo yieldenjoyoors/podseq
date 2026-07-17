@@ -38,6 +38,34 @@ jobs:
       - name: Unit test
         run: cargo test --workspace --exclude podseq-e2e --locked
 
+  # Fails only when a PR makes a function's CRAP score worse than the
+  # committed baseline. Regenerate the baseline locally with
+  # `make crap-baseline` as part of a PR that improves CRAP scores.
+  crap:
+    name: cargo-crap
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install cargo-crap
+        run: cargo binstall -y --secure cargo-crap
+
+      - name: Generate LCOV coverage
+        run: cargo llvm-cov --workspace --exclude podseq-e2e --lcov --output-path lcov.info
+
+      - name: Fail on regression
+        run: cargo crap --lcov lcov.info --baseline crap_baseline.json --fail-regression
+
   move:
     name: move build
     runs-on: ubuntu-latest
