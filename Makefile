@@ -14,7 +14,7 @@ help: ## Show this help
 
 install-tools: ## Install cargo-llvm-cov and cargo-crap (skipped if present)
 	@command -v cargo-llvm-cov >/dev/null || cargo install cargo-llvm-cov
-	@command -v cargo-crap >/dev/null      || cargo binstall -y --secure cargo-crap
+	@command -v cargo-crap >/dev/null      || cargo install cargo-crap
 
 build: ## Debug build
 	cargo build --workspace $(EXCLUDE)

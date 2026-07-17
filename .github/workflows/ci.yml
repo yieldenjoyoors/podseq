@@ -54,11 +54,10 @@ jobs:
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Install cargo-crap
-        run: cargo binstall -y --secure cargo-crap
+      - name: Install cargo-llvm-cov and cargo-crap
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-crap
 
       - name: Generate LCOV coverage
         run: cargo llvm-cov --workspace --exclude podseq-e2e --lcov --output-path lcov.info
