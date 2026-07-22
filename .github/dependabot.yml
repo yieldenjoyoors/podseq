@@ -12,6 +12,12 @@ updates:
       minor:
         update-types:
           - minor
+      sui:
+        patterns:
+          - sui-*
+      walrus:
+        patterns:
+          - walrus-*
 
   - package-ecosystem: npm
     directory: /web
