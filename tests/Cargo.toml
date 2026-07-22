@@ -15,4 +15,4 @@ sui-crypto.workspace = true
 sui-sdk-types.workspace = true
 serde = { version = "1", features = ["derive"] }
 bcs = "0.1"
-rand = "0.8"
+rand = "0.9"
