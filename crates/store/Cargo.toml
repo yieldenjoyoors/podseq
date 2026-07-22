@@ -10,7 +10,7 @@ license.workspace = true
 podseq-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-bcs = "0.1"
+bcs = "0.2"
 thiserror.workspace = true
 tracing.workspace = true
 

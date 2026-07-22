@@ -14,5 +14,5 @@ podseq-sui.workspace = true
 sui-crypto.workspace = true
 sui-sdk-types.workspace = true
 serde = { version = "1", features = ["derive"] }
-bcs = "0.1"
+bcs = "0.2"
 rand = "0.8"
