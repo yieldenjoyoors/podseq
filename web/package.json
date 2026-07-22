@@ -16,7 +16,7 @@
     "svelte-check": "^4.0.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^7.0.2",
-    "vite": "^6.0.0"
+    "vite": "^8.1.5"
   },
   "dependencies": {
     "highlight.js": "^11.11.1",
