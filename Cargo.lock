@@ -1050,6 +1050,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bcs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "350f2b5fa7b76b498158ec1079dc0ea842c5b622b6b3f675005fddd889f2c9a7"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "bech32"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2341,7 +2350,7 @@ dependencies = [
  "ark-serialize 0.4.2",
  "auto_ops",
  "base64ct",
- "bcs",
+ "bcs 0.1.6",
  "bech32 0.9.1",
  "bincode",
  "blake2",
@@ -3966,7 +3975,7 @@ dependencies = [
 name = "podseq-store"
 version = "0.1.0"
 dependencies = [
- "bcs",
+ "bcs 0.2.1",
  "podseq-core",
  "serde",
  "serde_json",
@@ -3980,7 +3989,7 @@ name = "podseq-sui"
 version = "0.1.0"
 dependencies = [
  "base64",
- "bcs",
+ "bcs 0.2.1",
  "futures",
  "podseq-core",
  "reqwest",
@@ -4001,7 +4010,7 @@ dependencies = [
 name = "podseq-tests"
 version = "0.1.0"
 dependencies = [
- "bcs",
+ "bcs 0.2.1",
  "podseq-core",
  "podseq-sui",
  "rand 0.8.6",
@@ -5304,7 +5313,7 @@ version = "0.3.1"
 source = "git+https://github.com/MystenLabs/sui-rust-sdk#51ea346da9e032255cfdc371657f84d76d30c061"
 dependencies = [
  "base64",
- "bcs",
+ "bcs 0.1.6",
  "bytes",
  "futures",
  "http",
@@ -5327,7 +5336,7 @@ version = "0.3.1"
 source = "git+https://github.com/MystenLabs/sui-rust-sdk#51ea346da9e032255cfdc371657f84d76d30c061"
 dependencies = [
  "base64ct",
- "bcs",
+ "bcs 0.1.6",
  "blake2",
  "bnum",
  "bs58 0.5.1",
@@ -5348,7 +5357,7 @@ version = "0.3.1"
 source = "git+https://github.com/MystenLabs/sui-rust-sdk#51ea346da9e032255cfdc371657f84d76d30c061"
 dependencies = [
  "async-trait",
- "bcs",
+ "bcs 0.1.6",
  "futures",
  "serde",
  "sui-rpc",
@@ -6055,7 +6064,7 @@ version = "1.51.0"
 source = "git+https://github.com/MystenLabs/walrus#f02673fbe60df26d1aaf82acac1a19723efbfdb6"
 dependencies = [
  "base64",
- "bcs",
+ "bcs 0.1.6",
  "enum_dispatch",
  "fastcrypto",
  "hex",
