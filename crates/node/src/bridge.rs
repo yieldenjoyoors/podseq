@@ -596,13 +596,13 @@ fn selector(sig: &str) -> Vec<u8> {
     keccak256(sig.as_bytes())[..4].to_vec()
 }
 
-/// Normalizes a coin type string to the canonical form Move's
-/// `type_name::with_defining_ids` writes (full 32-byte addresses), as bytes.
-/// Falls back to the raw bytes if the string isn't a valid StructTag.
+/// Normalizes a coin type string to the form Move's
+/// `type_name::with_defining_ids` writes: full 32-byte hex address, no `0x`
+/// prefix (e.g. `0000...0002::sui::SUI`). Falls back to raw bytes on parse error.
 fn normalize_coin_type_bytes(coin_type: &str) -> Vec<u8> {
     use std::str::FromStr;
     match sui_sdk_types::StructTag::from_str(coin_type) {
-        Ok(tag) => tag.to_string().into_bytes(),
+        Ok(tag) => tag.to_string().trim_start_matches("0x").as_bytes().to_vec(),
         Err(_) => coin_type.as_bytes().to_vec(),
     }
 }
@@ -1060,7 +1060,8 @@ mod tests {
 
     #[test]
     fn normalize_coin_type_bytes_matches_move_form() {
-        // Move's type_name::with_defining_ids emits full 32-byte addresses.
+        // Move's type_name::with_defining_ids emits full 32-byte hex addresses
+        // without the 0x prefix.
         let short = normalize_coin_type_bytes("0x2::sui::SUI");
         let canonical = normalize_coin_type_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
@@ -1068,8 +1069,7 @@ mod tests {
         assert_eq!(short, canonical);
         assert_eq!(
             short,
-            b"0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
-                .to_vec()
+            b"0000000000000000000000000000000000000000000000000000000000000002::sui::SUI".to_vec()
         );
     }
 
