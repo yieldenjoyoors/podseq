@@ -157,7 +157,9 @@ impl BridgeRelayer {
             sui_bridge: Arc::new(Mutex::new(sui_bridge)),
             vault_id: vault_id.to_string(),
             coin_type,
-            coin_type_bytes: coin_type_str.into_bytes(),
+            // Canonicalize so it matches the form Move's type_name::with_defining_ids
+            // writes into DepositRecord (full 32-byte addresses).
+            coin_type_bytes: normalize_coin_type_bytes(&coin_type_str),
             l2_rpc: l2_rpc.to_string(),
             l2_token,
             signer,
@@ -592,6 +594,17 @@ struct Receipt {
 
 fn selector(sig: &str) -> Vec<u8> {
     keccak256(sig.as_bytes())[..4].to_vec()
+}
+
+/// Normalizes a coin type string to the canonical form Move's
+/// `type_name::with_defining_ids` writes (full 32-byte addresses), as bytes.
+/// Falls back to the raw bytes if the string isn't a valid StructTag.
+fn normalize_coin_type_bytes(coin_type: &str) -> Vec<u8> {
+    use std::str::FromStr;
+    match sui_sdk_types::StructTag::from_str(coin_type) {
+        Ok(tag) => tag.to_string().into_bytes(),
+        Err(_) => coin_type.as_bytes().to_vec(),
+    }
 }
 
 async fn eth_call_u64(
@@ -1043,6 +1056,21 @@ mod tests {
     #[test]
     fn decode_abi_string_rejects_short_buffer() {
         assert!(decode_abi_string(&[0u8; 10]).is_err());
+    }
+
+    #[test]
+    fn normalize_coin_type_bytes_matches_move_form() {
+        // Move's type_name::with_defining_ids emits full 32-byte addresses.
+        let short = normalize_coin_type_bytes("0x2::sui::SUI");
+        let canonical = normalize_coin_type_bytes(
+            "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
+        );
+        assert_eq!(short, canonical);
+        assert_eq!(
+            short,
+            b"0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
+                .to_vec()
+        );
     }
 
     #[test]

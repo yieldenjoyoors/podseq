@@ -76,8 +76,7 @@ impl Settlement {
             .map_err(SettlementError::Io)?
             .trim()
             .to_string();
-        let key = Ed25519PrivateKey::from_suiprivkey(&key_str)
-            .map_err(|e| SettlementError::Key(e.to_string()))?;
+        let key = crate::parse_signer_key(&key_str).map_err(SettlementError::Key)?;
         let sender = key.public_key().derive_address();
         let rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
         Ok(Self {
@@ -165,8 +164,7 @@ impl Settlement {
             .map_err(SettlementError::Io)?
             .trim()
             .to_string();
-        let key = Ed25519PrivateKey::from_suiprivkey(&key_str)
-            .map_err(|e| SettlementError::Key(e.to_string()))?;
+        let key = crate::parse_signer_key(&key_str).map_err(SettlementError::Key)?;
         let sender = key.public_key().derive_address();
         let mut rpc =
             sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
@@ -336,6 +334,13 @@ pub async fn latest_height(rpc_url: &str, registry_id: &str) -> Result<u64, Sett
     parse_latest_height(&contents)
 }
 
+/// Returns true if `coin_type` is `0x2::sui::SUI` in any valid form.
+fn is_sui_coin_type(coin_type: &str) -> bool {
+    use std::str::FromStr;
+    sui_sdk_types::StructTag::from_str(coin_type)
+        .is_ok_and(|tag| tag == sui_sdk_types::StructTag::sui())
+}
+
 /// Returns the total SUI balance of `owner` in mistos (1 SUI = 1e9 mistos).
 ///
 /// Read-only: does not touch the settlement signer, so it is safe to call
@@ -350,7 +355,7 @@ pub async fn sui_balance(rpc_url: &str, owner: &str) -> Result<u64, SettlementEr
     futures::pin_mut!(stream);
     while let Some(item) = stream.next().await {
         let balance = item.map_err(|e| SettlementError::Rpc(format!("list_balances: {e}")))?;
-        if balance.coin_type.as_deref() == Some("0x2::sui::SUI") {
+        if balance.coin_type.as_deref().is_some_and(is_sui_coin_type) {
             return Ok(balance.balance.unwrap_or(0));
         }
     }
@@ -630,5 +635,23 @@ mod tests {
     #[test]
     fn parse_field_blob_id_rejects_truncated_bcs() {
         assert!(parse_field_blob_id(&[0u8; 40]).is_err());
+    }
+
+    #[test]
+    fn is_sui_coin_type_accepts_short_and_canonical_form() {
+        // Short form used in config / Move source.
+        assert!(is_sui_coin_type("0x2::sui::SUI"));
+        // Canonical 32-byte form returned by the gRPC v2 ListBalances RPC.
+        assert!(is_sui_coin_type(
+            "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
+        ));
+    }
+
+    #[test]
+    fn is_sui_coin_type_rejects_non_sui_types() {
+        assert!(!is_sui_coin_type("0x2::coin::Coin<0x2::sui::SUI>"));
+        assert!(!is_sui_coin_type("0x3::test::TEST"));
+        assert!(!is_sui_coin_type("garbage"));
+        assert!(!is_sui_coin_type(""));
     }
 }

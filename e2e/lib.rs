@@ -231,6 +231,8 @@ pub struct FullStack {
     project: String,
     workdir: PathBuf,
     ports: Ports,
+    /// Path to the generated bridge relayer EVM key (32-byte secp256k1 hex).
+    relayer_key_path: PathBuf,
 }
 
 impl FullStack {
@@ -272,11 +274,19 @@ impl FullStack {
         // across `od` implementations and produced a 65-char key in CI once).
         std::fs::write(workdir.join("jwt.hex"), random_hex_32())?;
 
+        // Bridge relayer EVM key: a fresh 32-byte secp256k1 scalar. podseq loads
+        // it from `bridge.l2_relayer_key_path`; the test funds its address from
+        // the genesis account and calls `Bridge.initialize` with it.
+        let relayer_signer = alloy_signer_local::PrivateKeySigner::random();
+        let relayer_key_path = secrets_dir.join("relayer.key");
+        std::fs::write(&relayer_key_path, hex::encode(relayer_signer.to_bytes().0))?;
+
         // Write a config for this run and bind-mount it into the podseq
         // container. Same flow as a real deployment: `podseq start --config
         // podseq.toml` against a TOML file.
         let podseq_toml = r#"[reth]
 engine_url = "http://reth:8551"
+rpc_url = "http://reth:8545"
 jwt_path = "/jwt/jwt.hex"
 
 [walrus]
@@ -292,6 +302,10 @@ key_path = "/secrets/sui.key"
 
 [sequencer]
 block_time_ms = 5000
+
+[bridge]
+enabled = true
+l2_relayer_key_path = "/secrets/relayer.key"
 
 mode = "sequencer"
 "#;
@@ -333,6 +347,8 @@ mode = "sequencer"
     depends_on:
       reth:
         condition: service_started
+    environment:
+      RUST_LOG: "info,podseq=debug"
     volumes:
       - ./jwt.hex:/jwt/jwt.hex:ro
       - ./secrets:/secrets:ro
@@ -359,6 +375,7 @@ volumes:
                 rpc: rpc_port,
                 engine: engine_port,
             },
+            relayer_key_path,
         };
 
         // Reth readiness is the gating signal; podseq may still be deploying
@@ -382,6 +399,19 @@ volumes:
     /// IDs back here on first start.
     pub fn config_path(&self) -> std::path::PathBuf {
         self.workdir.join("podseq.toml")
+    }
+
+    /// Path to the generated bridge relayer EVM key (32-byte secp256k1 hex).
+    pub fn relayer_key_path(&self) -> &Path {
+        &self.relayer_key_path
+    }
+
+    /// Reads a `section.key` string from the config file podseq keeps updating.
+    /// Returns `Ok(None)` when the field is absent or the file doesn't parse yet
+    /// (e.g. before auto-deploy has written it back).
+    pub fn read_config_string(&self, section: &str, key: &str) -> Result<Option<String>> {
+        let path = self.config_path();
+        read_toml_field(&path, section, key)
     }
 
     /// Returns the podseq container's status, or `None` if `docker compose ps`
@@ -558,8 +588,9 @@ impl Drop for FullStack {
 /// key is available.
 fn sui_signer_key() -> Result<Option<String>> {
     if let Ok(k) = std::env::var("SUI_SIGNER_KEY") {
-        if !k.trim().is_empty() {
-            return Ok(Some(k.trim().to_string()));
+        let trimmed = k.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
         }
     }
     let path = workspace_root().join("docker/secrets/sui.key");
@@ -570,4 +601,26 @@ fn sui_signer_key() -> Result<Option<String>> {
         }
     }
     Ok(None)
+}
+
+/// Reads `section.key` as a string from a TOML file. Returns `Ok(None)` when the
+/// file is missing, doesn't parse, or the field is absent.
+fn read_toml_field(path: &Path, section: &str, key: &str) -> Result<Option<String>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return Ok(None),
+    };
+    let value: toml::Value = match toml::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let s = match value
+        .get(section)
+        .and_then(|s| s.get(key))
+        .and_then(|v| v.as_str())
+    {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    Ok(Some(s.to_string()))
 }

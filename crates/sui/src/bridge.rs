@@ -100,8 +100,7 @@ impl BridgeClient {
             .map_err(BridgeError::Io)?
             .trim()
             .to_string();
-        let key = Ed25519PrivateKey::from_suiprivkey(&key_str)
-            .map_err(|e| BridgeError::Key(e.to_string()))?;
+        let key = crate::parse_signer_key(&key_str).map_err(BridgeError::Key)?;
         let sender = key.public_key().derive_address();
         let rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
         Ok(Self {
@@ -189,8 +188,7 @@ impl BridgeClient {
             .map_err(BridgeError::Io)?
             .trim()
             .to_string();
-        let key = Ed25519PrivateKey::from_suiprivkey(&key_str)
-            .map_err(|e| BridgeError::Key(e.to_string()))?;
+        let key = crate::parse_signer_key(&key_str).map_err(BridgeError::Key)?;
         let sender = key.public_key().derive_address();
         let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
         let package = parse_address(package_id, "package id")?;

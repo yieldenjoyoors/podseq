@@ -49,13 +49,13 @@ impl From<WireBlock> for Block {
 }
 
 /// Serializes a batch of blocks into BCS bytes to store on Walrus.
-pub(crate) fn encode(blocks: &[Block]) -> Result<Vec<u8>, Error> {
+pub fn encode(blocks: &[Block]) -> Result<Vec<u8>, Error> {
     let wire: Vec<WireBlock> = blocks.iter().map(WireBlock::from).collect();
     bcs::to_bytes(&wire).map_err(|e| Error::Serde(serde::de::Error::custom(e.to_string())))
 }
 
 /// Deserializes a batch of blocks from BCS bytes retrieved from Walrus.
-pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<Block>, Error> {
+pub fn decode(bytes: &[u8]) -> Result<Vec<Block>, Error> {
     let wire: Vec<WireBlock> = bcs::from_bytes(bytes)
         .map_err(|e| Error::Serde(serde::de::Error::custom(e.to_string())))?;
     Ok(wire.into_iter().map(Block::from).collect())

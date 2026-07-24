@@ -3903,6 +3903,7 @@ dependencies = [
  "alloy-rpc-types-engine",
  "alloy-signer-local",
  "anyhow",
+ "futures",
  "hex",
  "podseq-core",
  "podseq-engine",
@@ -3911,6 +3912,10 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sui-crypto",
+ "sui-rpc",
+ "sui-sdk-types",
+ "sui-transaction-builder",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -3962,6 +3967,7 @@ dependencies = [
 name = "podseq-sequencer"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "podseq-core",
  "sui-crypto",
  "sui-sdk-types",

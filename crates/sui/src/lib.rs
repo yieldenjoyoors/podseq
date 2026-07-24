@@ -41,6 +41,42 @@ pub fn verify_block_signature(
 
 pub use settlement::{DeployedContract, Settlement as SettlementSigner, SettlementError};
 
+/// Parses a Sui signer key from a string, accepting both formats the Sui CLI
+/// produces:
+/// - Bech32 `suiprivkey1...` (the canonical encoding `from_suiprivkey` expects).
+/// - Raw base64 (the format inside `.key` files written by `sui keytool`: a
+///   33-byte payload = 1-byte scheme flag + 32-byte ed25519 scalar).
+///
+/// The string is lowercased first so mixed-case bech32 strings don't fail.
+pub fn parse_signer_key(s: &str) -> Result<sui_crypto::ed25519::Ed25519PrivateKey, String> {
+    let trimmed = s.trim();
+    // Bech32 suiprivkey strings start with the HRP prefix.
+    if trimmed.starts_with("suiprivkey") {
+        return sui_crypto::ed25519::Ed25519PrivateKey::from_suiprivkey(&trimmed.to_lowercase())
+            .map_err(|e| e.to_string());
+    }
+    // Otherwise try base64: the Sui CLI key file stores the raw 33-byte payload
+    // (flag + key) as base64.
+    let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, trimmed)
+        .map_err(|e| format!("not bech32 and not valid base64: {e}"))?;
+    if raw.len() != 33 {
+        return Err(format!(
+            "base64 payload is {} bytes, expected 33 (flag + ed25519 key)",
+            raw.len()
+        ));
+    }
+    // Flag byte 0x00 = Ed25519.
+    if raw[0] != 0x00 {
+        return Err(format!(
+            "unsupported key scheme flag: {} (expected 0 for ed25519)",
+            raw[0]
+        ));
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&raw[1..]);
+    Ok(sui_crypto::ed25519::Ed25519PrivateKey::new(key))
+}
+
 /// Default Walrus testnet aggregator endpoint.
 pub const TESTNET_AGGREGATOR: &str = "https://aggregator.walrus-testnet.walrus.space";
 /// Default Walrus testnet publisher endpoint.
@@ -65,6 +101,23 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("settlement error: {0}")]
     Settlement(String),
+}
+
+impl Error {
+    /// Whether a retry might succeed (network failure or blob not yet available).
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Error::Transport(_) => true,
+            Error::Read { status, .. } | Error::Store { status, .. } => {
+                matches!(status, 404 | 408 | 425 | 429 | 500..=599)
+            }
+            Error::Serde(_)
+            | Error::InvalidBlobId(_)
+            | Error::MissingBlobId
+            | Error::Url(_)
+            | Error::Settlement(_) => false,
+        }
+    }
 }
 
 /// Connection configuration for Walrus and the Sui RPC.
@@ -206,7 +259,7 @@ impl Client {
         blob_id::decode(blob_id_str)
     }
 
-    async fn fetch_blob(&self, id: &BlobId) -> Result<Vec<u8>, Error> {
+    pub async fn fetch_blob(&self, id: &BlobId) -> Result<Vec<u8>, Error> {
         let encoded = blob_id::encode(id);
         let url = format!("{}/v1/blobs/{encoded}", self.config.aggregator_url);
         debug!(%url, "reading blob from Walrus");
@@ -361,5 +414,56 @@ mod tests {
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].header, block.header);
         assert_eq!(back[0].data, block.data);
+    }
+
+    #[test]
+    fn parse_signer_key_accepts_base64_and_bech32() {
+        // Same key in two formats, both should produce the same public key.
+        let base64_key = "ADhADnnmAaqhAkr/uv4TsBvpGlJL3OFKeqSnzL8Vn619";
+        let bech32_key = "suiprivkey1qquyqrneucq64ggzftlm4lsnkqd7jxjjf0wwzjn65jnue0c4n7kh6nj0zzk";
+
+        let from_b64 = parse_signer_key(base64_key).expect("base64 key should parse");
+        let from_bech32 = parse_signer_key(bech32_key).expect("bech32 key should parse");
+
+        assert_eq!(
+            from_b64.public_key(),
+            from_bech32.public_key(),
+            "both formats must derive the same public key"
+        );
+    }
+
+    #[test]
+    fn parse_signer_key_rejects_garbage() {
+        assert!(parse_signer_key("not-a-key").is_err());
+        assert!(parse_signer_key("").is_err());
+    }
+
+    #[tokio::test]
+    async fn is_transient_classifies_each_variant() {
+        // Connecting to a closed port yields a transport error we can wrap.
+        let transport = reqwest::Client::new()
+            .get("http://127.0.0.1:1/unreachable")
+            .send()
+            .await;
+        if let Err(e) = transport {
+            assert!(Error::from(e).is_transient());
+        }
+        assert!(Error::Read {
+            status: 404,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(Error::Read {
+            status: 503,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(!Error::Read {
+            status: 400,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(!Error::InvalidBlobId("bad".into()).is_transient());
+        assert!(!Error::MissingBlobId.is_transient());
     }
 }
