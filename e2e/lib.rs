@@ -541,7 +541,6 @@ volumes:
                 "-f",
                 "docker-compose.yml",
                 "logs",
-                "--tail=500",
             ])
             .current_dir(&self.workdir)
             .output();
