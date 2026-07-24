@@ -386,8 +386,10 @@ impl BridgeRelayer {
 /// ABI-encodes `mint(address,uint256,uint64)` calldata (selector + 3 fixed words).
 fn mint_calldata(recipient: Address, amount: u64, nonce: u64) -> Vec<u8> {
     let mut out = keccak256(b"mint(address,uint256,uint64)")[..4].to_vec();
-    out.extend_from_slice(recipient.as_ref()); // 20 bytes, left-aligned in its word
-    out.extend_from_slice(&[0u8; 12]); // right-pad recipient to 32 bytes
+    // address is right-aligned in a 32-byte word
+    let mut recipient_word = [0u8; 32];
+    recipient_word[12..].copy_from_slice(recipient.as_ref());
+    out.extend_from_slice(&recipient_word);
     let mut amount_word = [0u8; 32];
     amount_word[24..].copy_from_slice(&amount.to_be_bytes());
     out.extend_from_slice(&amount_word);
@@ -958,13 +960,22 @@ mod tests {
     }
 
     #[test]
+    fn mint_calldata_right_aligns_address() {
+        let recipient = Address::from([0xaa; 20]);
+        let calldata = mint_calldata(recipient, 0, 0);
+        // address word: 12 zero bytes then 20 bytes of 0xaa
+        assert_eq!(&calldata[4..16], &[0u8; 12]);
+        assert_eq!(&calldata[16..36], &[0xaa; 20]);
+    }
+
+    #[test]
     fn mint_calldata_encodes_fixed_words() {
         let recipient = Address::with_last_byte(0x42);
         let calldata = mint_calldata(recipient, 0xab, 0x05);
         assert_eq!(calldata.len(), 4 + 96); // selector + 3 words
-                                            // recipient word right-padded.
-        assert_eq!(calldata[4..24].to_vec(), recipient.0 .0.to_vec());
-        assert_eq!(&calldata[4 + 20..4 + 32], &[0u8; 12]);
+                                            // recipient word left-padded (right-aligned): 12 zeros then address.
+        assert_eq!(&calldata[4..16], &[0u8; 12]);
+        assert_eq!(calldata[4 + 31], 0x42);
         // amount in the low byte of its word.
         assert_eq!(calldata[4 + 32 + 31], 0xab);
         // nonce in the low byte of its word.
