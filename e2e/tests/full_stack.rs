@@ -223,7 +223,7 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     // Direction 2: L2 burn → Sui release.
     let sui_recipient_bytes = sender.into_inner();
     let reserve_before =
-        sui_query_retrying(|| async { sui_vault_deposit_nonce(&vault_id).await }).await?;
+        sui_query_retrying(|| async { sui_vault_withdraw_nonce(&vault_id).await }).await?;
     initiate_withdrawal(
         &http,
         &rpc_url,
@@ -928,25 +928,26 @@ async fn wait_for_l2_balance(
     }
 }
 
-/// Polls the vault's deposit_nonce until it advances (release observed).
+/// Polls the vault's withdraw_nonce until it advances (release observed).
 async fn wait_for_sui_release(vault_id: &str, before: u64, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match sui_vault_deposit_nonce(vault_id).await {
+        match sui_vault_withdraw_nonce(vault_id).await {
             Ok(now) if now != before => return Ok(()),
             Ok(_) => {}
             Err(e) if Instant::now() < deadline => eprintln!("e2e: sui vault nonce retrying: {e}"),
             Err(e) => return Err(e),
         }
         if Instant::now() >= deadline {
-            bail!("Sui vault deposit_nonce never changed from {before}");
+            bail!("Sui vault withdraw_nonce never changed from {before}");
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
 /// Reads the vault's deposit_nonce from raw BCS contents.
-async fn sui_vault_deposit_nonce(vault_id: &str) -> Result<u64> {
+/// Reads a little-endian u64 at `offset` from the vault's raw BCS contents.
+async fn sui_vault_u64(vault_id: &str, offset: usize, label: &str) -> Result<u64> {
     use sui_rpc::proto::sui::rpc::v2::GetObjectRequest;
 
     let mut rpc = sui_rpc::Client::new(SUI_RPC).map_err(|e| anyhow!("sui rpc: {e}"))?;
@@ -968,10 +969,14 @@ async fn sui_vault_deposit_nonce(vault_id: &str) -> Result<u64> {
         .and_then(|o| o.contents)
         .and_then(|c| c.value)
         .context("vault has no contents")?;
-    if bytes.len() < 40 {
-        bail!("vault BCS too short: {} bytes", bytes.len());
-    }
-    Ok(u64::from_le_bytes(bytes[32..40].try_into().unwrap()))
+    let end = offset.checked_add(8).context("offset overflow")?;
+    anyhow::ensure!(bytes.len() >= end, "vault BCS too short for {label}");
+    Ok(u64::from_le_bytes(bytes[offset..end].try_into().unwrap()))
+}
+
+/// The vault's `withdraw_nonce` (BCS offset 40: after UID + deposit_nonce).
+async fn sui_vault_withdraw_nonce(vault_id: &str) -> Result<u64> {
+    sui_vault_u64(vault_id, 40, "withdraw_nonce").await
 }
 
 /// `balanceOf(address)` via eth_call.
