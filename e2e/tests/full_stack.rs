@@ -227,7 +227,7 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     initiate_withdrawal(
         &http,
         &rpc_url,
-        &relayer_signer,
+        &signer,
         chain_id,
         sui_recipient_bytes,
         BRIDGE_AMOUNT,
