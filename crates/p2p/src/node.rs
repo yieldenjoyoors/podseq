@@ -109,7 +109,10 @@ impl BlockReceiver {
     /// Waits for the block with `digest` to arrive, then returns it.
     pub async fn receive(&self, digest: &Digest) -> Option<podseq_core::Block> {
         let receiver = self.mailbox.subscribe(*digest);
-        receiver.await.ok().map(|BlockMessage(block)| block)
+        receiver
+            .await
+            .ok()
+            .map(|msg: Arc<BlockMessage>| podseq_core::Block::from((*msg).clone()))
     }
 
     /// Polls for the next block announce with a short timeout; returns None if none arrives.

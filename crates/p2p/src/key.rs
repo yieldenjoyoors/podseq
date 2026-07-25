@@ -7,7 +7,6 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use commonware_cryptography::ed25519::{self};
 use commonware_math::algebra::Random;
-use rand::rngs::OsRng;
 use tracing::info;
 
 use crate::IdentityKey;
@@ -31,7 +30,7 @@ pub fn load_or_generate_key(path: &Path) -> Result<IdentityKey> {
         info!(key = %path.display(), "p2p identity key loaded");
         Ok(key)
     } else {
-        let key = IdentityKey::random(&mut OsRng);
+        let key = IdentityKey::random(rand::rng());
         let hex_str = hex::encode(key_seed(&key));
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
