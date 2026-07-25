@@ -3973,7 +3973,7 @@ dependencies = [
 name = "podseq-sequencer"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "podseq-core",
  "sui-crypto",
  "sui-sdk-types",
