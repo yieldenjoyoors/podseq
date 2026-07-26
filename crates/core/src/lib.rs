@@ -2,7 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod keys;
 pub mod runtime;
+
+pub use keys::parse_signer_key;
 
 use std::fmt;
 use std::future::Future;

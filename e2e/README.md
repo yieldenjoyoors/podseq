@@ -58,7 +58,7 @@ Requirements: Docker with the Compose v2 plugin.
 # Fast, deterministic — no funded key required.
 cargo test -p podseq-e2e --test engine_integration -- --test-threads=1 --nocapture
 
-# Full stack (includes bridge) — requires docker/secrets/sui.key (or SUI_SIGNER_KEY in env).
+# Full stack: requires docker/secrets/sui.key (or SUI_SIGNER_KEY in env).
 cargo test -p podseq-e2e --test full_stack -- --test-threads=1 --nocapture
 ```
 

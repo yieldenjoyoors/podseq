@@ -4094,8 +4094,10 @@ dependencies = [
 name = "podseq-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.0",
  "commonware-runtime",
  "serde",
+ "sui-crypto",
 ]
 
 [[package]]
@@ -4173,7 +4175,6 @@ dependencies = [
 name = "podseq-sequencer"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.0",
  "podseq-core",
  "sui-crypto",
  "sui-sdk-types",
