@@ -4,10 +4,10 @@ Two test suites, with different scope and infrastructure requirements.
 
 ## What is covered
 
-| Test                 | What it verifies                                                                                                                                      | Stack                                    |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `engine_integration` | `Engine::build` / `accept` / `finalize` advance the head on a real Reth node. Fast, deterministic.                                                    | Reth only                                |
-| `full_stack`         | The real `podseq` binary produces blocks, user txs land on Reth, settlement advances on Sui, and Walrus blobs decode for settled heights. End-to-end. | Reth + podseq, public Sui/Walrus testnet |
+| Test                 | What it verifies                                                                                                                                                                                   | Stack                                    |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `engine_integration` | `Engine::build` / `accept` / `finalize` advance the head on a real Reth node. Fast, deterministic.                                                                                                 | Reth only                                |
+| `full_stack`         | The real `podseq` binary produces blocks, user txs land on Reth, settlement advances on Sui, Walrus blobs decode, and the bridge relays both directions (deposit→mint, burn→withdraw). End-to-end. | Reth + podseq, public Sui/Walrus testnet |
 
 ## Scope and limitations
 
@@ -29,7 +29,15 @@ surfaces immediately.
 - **Local**: drop the funded key into `docker/secrets/sui.key` (gitignored).
 
 The test is slow (several minutes — real Sui checkpoint latency + Walrus
-publication).
+publication + bridge relay cycles).
+
+The bridge section runs after settlement is confirmed, reusing the same
+deployed settlement package (so SUI gas is spent once, not twice). It generates
+a fresh relayer EVM key, funds it from the genesis account, calls
+`Bridge.initialize` on the L2 predeploy, then verifies both directions:
+
+- Sui `deposit<SUI>` → relayer mints the bridged ERC20 on L2.
+- L2 `initiateWithdrawal` → relayer releases the locked SUI on Sui.
 
 ## Layout
 
@@ -50,7 +58,7 @@ Requirements: Docker with the Compose v2 plugin.
 # Fast, deterministic — no funded key required.
 cargo test -p podseq-e2e --test engine_integration -- --test-threads=1 --nocapture
 
-# Full stack — requires docker/secrets/sui.key (or SUI_SIGNER_KEY in env).
+# Full stack: requires docker/secrets/sui.key (or SUI_SIGNER_KEY in env).
 cargo test -p podseq-e2e --test full_stack -- --test-threads=1 --nocapture
 ```
 
@@ -61,5 +69,7 @@ must run serially (`--test-threads=1`).
 
 The `e2e (engine only)` job runs the deterministic test on every PR. The
 `e2e (full stack)` job also runs on every PR and fails if `SUI_SIGNER_KEY` is
-unset; it is allowed to fail so public-testnet flakiness doesn't block PRs.
-See `.github/workflows/ci.yml`.
+unset; it runs the full-stack test (which includes bridge assertions) and is
+allowed to fail so public-testnet flakiness doesn't block PRs. A daily scheduled
+run re-runs it as blocking to catch silent regressions on `main`. See
+`.github/workflows/ci.yml`.

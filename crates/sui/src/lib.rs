@@ -39,6 +39,7 @@ pub fn verify_block_signature(
     })
 }
 
+pub use podseq_core::parse_signer_key;
 pub use settlement::{DeployedContract, Settlement as SettlementSigner, SettlementError};
 
 /// Default Walrus testnet aggregator endpoint.
@@ -65,6 +66,23 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("settlement error: {0}")]
     Settlement(String),
+}
+
+impl Error {
+    /// Whether a retry might succeed (network failure or blob not yet available).
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Error::Transport(_) => true,
+            Error::Read { status, .. } | Error::Store { status, .. } => {
+                matches!(status, 404 | 408 | 425 | 429 | 500..=599)
+            }
+            Error::Serde(_)
+            | Error::InvalidBlobId(_)
+            | Error::MissingBlobId
+            | Error::Url(_)
+            | Error::Settlement(_) => false,
+        }
+    }
 }
 
 /// Connection configuration for Walrus and the Sui RPC.
@@ -206,7 +224,7 @@ impl Client {
         blob_id::decode(blob_id_str)
     }
 
-    async fn fetch_blob(&self, id: &BlobId) -> Result<Vec<u8>, Error> {
+    pub async fn fetch_blob(&self, id: &BlobId) -> Result<Vec<u8>, Error> {
         let encoded = blob_id::encode(id);
         let url = format!("{}/v1/blobs/{encoded}", self.config.aggregator_url);
         debug!(%url, "reading blob from Walrus");
@@ -361,5 +379,34 @@ mod tests {
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].header, block.header);
         assert_eq!(back[0].data, block.data);
+    }
+
+    #[tokio::test]
+    async fn is_transient_classifies_each_variant() {
+        // Connecting to a closed port yields a transport error we can wrap.
+        let transport = reqwest::Client::new()
+            .get("http://127.0.0.1:1/unreachable")
+            .send()
+            .await;
+        if let Err(e) = transport {
+            assert!(Error::from(e).is_transient());
+        }
+        assert!(Error::Read {
+            status: 404,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(Error::Read {
+            status: 503,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(!Error::Read {
+            status: 400,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(!Error::InvalidBlobId("bad".into()).is_transient());
+        assert!(!Error::MissingBlobId.is_transient());
     }
 }

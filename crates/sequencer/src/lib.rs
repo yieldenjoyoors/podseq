@@ -30,12 +30,16 @@ pub struct Ed25519BlockSigner {
 
 impl Ed25519BlockSigner {
     /// Loads the signer key from a suiprivkey file.
+    ///
+    /// Accepts both formats the Sui CLI produces: Bech32 `suiprivkey1...` and
+    /// raw base64 (33-byte flag + key payload). Parsing is shared with the
+    /// Sui-layer clients via `podseq_core::parse_signer_key`.
     pub fn from_suiprivkey_file(path: &Path) -> Result<Self, Error> {
         let key_str = std::fs::read_to_string(path)
             .map_err(|e| Error::Execution(format!("reading block key: {e}")))?
             .trim()
             .to_string();
-        let key = Ed25519PrivateKey::from_suiprivkey(&key_str)
+        let key = podseq_core::parse_signer_key(&key_str)
             .map_err(|e| Error::Execution(format!("invalid block key: {e}")))?;
         Ok(Self { key })
     }

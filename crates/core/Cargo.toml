@@ -7,9 +7,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-serde = { workspace = true, optional = true }
+serde = { workspace = true }
 commonware-runtime = { workspace = true }
-
-[features]
-default = ["serde"]
-serde = ["dep:serde"]
+sui-crypto.workspace = true
+base64.workspace = true

@@ -126,7 +126,7 @@ jobs:
   e2e-full:
     name: e2e (full stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     continue-on-error: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v7

@@ -38,6 +38,16 @@ pub const BRIDGE_PREDEPLOY_ADDRESS_HEX: &str = "0x420000000000000000000000000000
 /// Gas limit for a mint transaction.
 const MINT_GAS_LIMIT: u64 = 120_000;
 
+// Minimal L2 token interface for the only function the relayer calls.
+alloy_sol_types::sol! {
+    #[derive(Debug)]
+    interface IL2Token {
+        function mint(address recipient, uint256 amount, uint64 nonce) external;
+    }
+}
+
+use alloy_sol_types::SolCall;
+
 /// Relayer cursors, persisted next to the chain state.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Cursors {
@@ -157,7 +167,8 @@ impl BridgeRelayer {
             sui_bridge: Arc::new(Mutex::new(sui_bridge)),
             vault_id: vault_id.to_string(),
             coin_type,
-            coin_type_bytes: coin_type_str.into_bytes(),
+            coin_type_bytes: move_type_name_bytes(&coin_type_str)
+                .context("normalizing L2 coinType to Move type_name form")?,
             l2_rpc: l2_rpc.to_string(),
             l2_token,
             signer,
@@ -381,18 +392,16 @@ impl BridgeRelayer {
 
 // ---------- ABI helpers ----------
 
-/// ABI-encodes `mint(address,uint256,uint64)` calldata (selector + 3 fixed words).
+/// ABI-encodes `mint(address,uint256,uint64)` calldata via the typed
+/// `IL2Token::mintCall` wrapper, so the selector and word layout are derived
+/// from the signature at compile time.
 fn mint_calldata(recipient: Address, amount: u64, nonce: u64) -> Vec<u8> {
-    let mut out = keccak256(b"mint(address,uint256,uint64)")[..4].to_vec();
-    out.extend_from_slice(recipient.as_ref()); // 20 bytes, left-aligned in its word
-    out.extend_from_slice(&[0u8; 12]); // right-pad recipient to 32 bytes
-    let mut amount_word = [0u8; 32];
-    amount_word[24..].copy_from_slice(&amount.to_be_bytes());
-    out.extend_from_slice(&amount_word);
-    let mut nonce_word = [0u8; 32];
-    nonce_word[24..].copy_from_slice(&nonce.to_be_bytes());
-    out.extend_from_slice(&nonce_word);
-    out
+    IL2Token::mintCall {
+        recipient,
+        amount: alloy_primitives::U256::from(amount),
+        nonce,
+    }
+    .abi_encode()
 }
 
 /// keccak256("WithdrawalInitiated(uint64,address,bytes32,uint256)").
@@ -592,6 +601,18 @@ struct Receipt {
 
 fn selector(sig: &str) -> Vec<u8> {
     keccak256(sig.as_bytes())[..4].to_vec()
+}
+
+/// Encodes a coin type string as the bytes Move's `type_name::with_defining_ids`
+/// emits on-chain: full 32-byte hex address, no `0x` prefix
+/// (e.g. `0000...0002::sui::SUI`). Returns an error if `coin_type` does not parse
+/// as a Sui `StructTag`: a malformed config would otherwise compare unequal to
+/// every on-chain record and the relayer would silently never relay.
+fn move_type_name_bytes(coin_type: &str) -> Result<Vec<u8>, anyhow::Error> {
+    use std::str::FromStr;
+    let tag = sui_sdk_types::StructTag::from_str(coin_type)
+        .context("parsing coin type as a Sui StructTag")?;
+    Ok(tag.to_string().trim_start_matches("0x").as_bytes().to_vec())
 }
 
 async fn eth_call_u64(
@@ -940,22 +961,29 @@ mod tests {
 
     #[test]
     fn mint_selector_is_stable() {
-        let selector = &mint_calldata(Address::ZERO, 0, 0)[..4];
-        assert_eq!(selector, &keccak256(b"mint(address,uint256,uint64)")[..4]);
+        // Selector is derived from the signature by the `sol!` macro at compile
+        // time; pin the known-good value so a rename is caught at test time.
+        assert_eq!(
+            IL2Token::mintCall::SELECTOR,
+            keccak256(b"mint(address,uint256,uint64)")[..4]
+        );
     }
 
     #[test]
-    fn mint_calldata_encodes_fixed_words() {
+    fn mint_calldata_roundtrips() {
         let recipient = Address::with_last_byte(0x42);
-        let calldata = mint_calldata(recipient, 0xab, 0x05);
-        assert_eq!(calldata.len(), 4 + 96); // selector + 3 words
-                                            // recipient word right-padded.
-        assert_eq!(calldata[4..24].to_vec(), recipient.0 .0.to_vec());
-        assert_eq!(&calldata[4 + 20..4 + 32], &[0u8; 12]);
-        // amount in the low byte of its word.
-        assert_eq!(calldata[4 + 32 + 31], 0xab);
-        // nonce in the low byte of its word.
-        assert_eq!(calldata[4 + 64 + 31], 0x05);
+        let amount = 0xab_u64;
+        let nonce = 0x05_u64;
+
+        let calldata = mint_calldata(recipient, amount, nonce);
+
+        // Selector + 3 head words, no tail (all args fit in static slots).
+        assert_eq!(calldata.len(), 4 + 96);
+
+        let decoded = IL2Token::mintCall::abi_decode(&calldata).expect("decode");
+        assert_eq!(decoded.recipient, recipient);
+        assert_eq!(decoded.amount, U256::from(amount));
+        assert_eq!(decoded.nonce, nonce);
     }
 
     #[test]
@@ -1043,6 +1071,30 @@ mod tests {
     #[test]
     fn decode_abi_string_rejects_short_buffer() {
         assert!(decode_abi_string(&[0u8; 10]).is_err());
+    }
+
+    #[test]
+    fn move_type_name_bytes_matches_move_form() {
+        // Move's type_name::with_defining_ids emits full 32-byte hex addresses
+        // without the 0x prefix.
+        let short = move_type_name_bytes("0x2::sui::SUI").expect("short form should parse");
+        let canonical = move_type_name_bytes(
+            "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
+        )
+        .expect("canonical form should parse");
+        assert_eq!(short, canonical);
+        assert_eq!(
+            short,
+            b"0000000000000000000000000000000000000000000000000000000000000002::sui::SUI".to_vec()
+        );
+    }
+
+    #[test]
+    fn move_type_name_bytes_rejects_malformed() {
+        // A bad config should fail loudly at construction, not silently never
+        // match any on-chain record.
+        assert!(move_type_name_bytes("not-a-coin-type").is_err());
+        assert!(move_type_name_bytes("").is_err());
     }
 
     #[test]

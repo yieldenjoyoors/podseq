@@ -48,6 +48,7 @@ alloy-eips = "2"
 alloy-network = "2"
 alloy-signer = "2"
 alloy-signer-local = "2"
+alloy-sol-types = "1"
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 
 # HTTP
@@ -58,13 +59,14 @@ hex = "0.4"
 rand = "0.8"
 
 # Walrus core (lightweight: blob encoding & types, no Sui SDK)
-walrus-core = { git = "https://github.com/MystenLabs/walrus", default-features = false }
+walrus-core = { git = "https://github.com/MystenLabs/walrus", rev = "f02673fbe60df26d1aaf82acac1a19723efbfdb6", default-features = false }
 
-# Sui SDK (lightweight: sui-rust-sdk, in-process signing)
-sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk", features = ["hash", "serde"] }
-sui-transaction-builder = { git = "https://github.com/MystenLabs/sui-rust-sdk", features = ["intents"] }
-sui-crypto = { git = "https://github.com/MystenLabs/sui-rust-sdk", features = ["ed25519", "bech32"] }
-sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk" }
+# Sui SDK (lightweight: sui-rust-sdk, in-process signing). Pinned to a rev so
+# `cargo --locked` stays reproducible as the upstream default branch moves.
+sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da9e032255cfdc371657f84d76d30c061", features = ["hash", "serde"] }
+sui-transaction-builder = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da9e032255cfdc371657f84d76d30c061", features = ["intents"] }
+sui-crypto = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da9e032255cfdc371657f84d76d30c061", features = ["ed25519", "bech32"] }
+sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da9e032255cfdc371657f84d76d30c061" }
 
 # Observability
 prometheus-client = "0.25"
