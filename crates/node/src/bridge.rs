@@ -157,9 +157,8 @@ impl BridgeRelayer {
             sui_bridge: Arc::new(Mutex::new(sui_bridge)),
             vault_id: vault_id.to_string(),
             coin_type,
-            // Canonicalize so it matches the form Move's type_name::with_defining_ids
-            // writes into DepositRecord (full 32-byte addresses).
-            coin_type_bytes: normalize_coin_type_bytes(&coin_type_str),
+            coin_type_bytes: move_type_name_bytes(&coin_type_str)
+                .context("normalizing L2 coinType to Move type_name form")?,
             l2_rpc: l2_rpc.to_string(),
             l2_token,
             signer,
@@ -598,15 +597,16 @@ fn selector(sig: &str) -> Vec<u8> {
     keccak256(sig.as_bytes())[..4].to_vec()
 }
 
-/// Normalizes a coin type string to the form Move's
-/// `type_name::with_defining_ids` writes: full 32-byte hex address, no `0x`
-/// prefix (e.g. `0000...0002::sui::SUI`). Falls back to raw bytes on parse error.
-fn normalize_coin_type_bytes(coin_type: &str) -> Vec<u8> {
+/// Encodes a coin type string as the bytes Move's `type_name::with_defining_ids`
+/// emits on-chain: full 32-byte hex address, no `0x` prefix
+/// (e.g. `0000...0002::sui::SUI`). Returns an error if `coin_type` does not parse
+/// as a Sui `StructTag`: a malformed config would otherwise compare unequal to
+/// every on-chain record and the relayer would silently never relay.
+fn move_type_name_bytes(coin_type: &str) -> Result<Vec<u8>, anyhow::Error> {
     use std::str::FromStr;
-    match sui_sdk_types::StructTag::from_str(coin_type) {
-        Ok(tag) => tag.to_string().trim_start_matches("0x").as_bytes().to_vec(),
-        Err(_) => coin_type.as_bytes().to_vec(),
-    }
+    let tag = sui_sdk_types::StructTag::from_str(coin_type)
+        .context("parsing coin type as a Sui StructTag")?;
+    Ok(tag.to_string().trim_start_matches("0x").as_bytes().to_vec())
 }
 
 async fn eth_call_u64(
@@ -1070,18 +1070,27 @@ mod tests {
     }
 
     #[test]
-    fn normalize_coin_type_bytes_matches_move_form() {
+    fn move_type_name_bytes_matches_move_form() {
         // Move's type_name::with_defining_ids emits full 32-byte hex addresses
         // without the 0x prefix.
-        let short = normalize_coin_type_bytes("0x2::sui::SUI");
-        let canonical = normalize_coin_type_bytes(
+        let short = move_type_name_bytes("0x2::sui::SUI").expect("short form should parse");
+        let canonical = move_type_name_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
-        );
+        )
+        .expect("canonical form should parse");
         assert_eq!(short, canonical);
         assert_eq!(
             short,
             b"0000000000000000000000000000000000000000000000000000000000000002::sui::SUI".to_vec()
         );
+    }
+
+    #[test]
+    fn move_type_name_bytes_rejects_malformed() {
+        // A bad config should fail loudly at construction, not silently never
+        // match any on-chain record.
+        assert!(move_type_name_bytes("not-a-coin-type").is_err());
+        assert!(move_type_name_bytes("").is_err());
     }
 
     #[test]

@@ -1,7 +1,4 @@
 //! Sui signer key parsing, shared across crates.
-//!
-//! Centralised here so the sequencer (`Ed25519BlockSigner`) and the Sui-layer
-//! clients (`Bridge`, `Settlement`) parse keys identically.
 
 use sui_crypto::ed25519::Ed25519PrivateKey;
 
