@@ -3,17 +3,25 @@
   "version": "0.3.0",
   "entries": [
     {
+      "file": "./crates/core/src/keys.rs",
+      "function": "parse_signer_key",
+      "line": 13,
+      "cyclomatic": 5.0,
+      "coverage": null,
+      "crap": 30.0
+    },
+    {
       "file": "./crates/core/src/lib.rs",
       "function": "Error::fmt",
-      "line": 83,
+      "line": 86,
       "cyclomatic": 6.0,
-      "coverage": 62.5,
-      "crap": 7.8984375
+      "coverage": 40.0,
+      "crap": 13.776
     },
     {
       "file": "./crates/core/src/lib.rs",
       "function": "Header::signing_message",
-      "line": 62,
+      "line": 65,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -21,7 +29,7 @@
     {
       "file": "./crates/core/src/lib.rs",
       "function": "deserialize",
-      "line": 105,
+      "line": 108,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -29,7 +37,7 @@
     {
       "file": "./crates/core/src/lib.rs",
       "function": "serialize",
-      "line": 101,
+      "line": 104,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -221,15 +229,15 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "BridgeRelayer::fmt",
-      "line": 70,
+      "line": 80,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "BridgeRelayer::mint_on_l2",
-      "line": 280,
+      "line": 289,
       "cyclomatic": 6.0,
       "coverage": 0.0,
       "crap": 42.0
@@ -237,15 +245,15 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "BridgeRelayer::new",
-      "line": 86,
-      "cyclomatic": 13.0,
+      "line": 96,
+      "cyclomatic": 14.0,
       "coverage": 0.0,
-      "crap": 182.0
+      "crap": 210.0
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "BridgeRelayer::relay_deposits",
-      "line": 224,
+      "line": 233,
       "cyclomatic": 13.0,
       "coverage": 0.0,
       "crap": 182.0
@@ -253,15 +261,15 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "BridgeRelayer::relay_withdrawals",
-      "line": 329,
+      "line": 338,
       "cyclomatic": 8.0,
-      "coverage": 0.0,
-      "crap": 72.0
+      "coverage": 8.571428571428571,
+      "crap": 56.91316618075801
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "BridgeRelayer::run",
-      "line": 177,
+      "line": 186,
       "cyclomatic": 8.0,
       "coverage": 0.0,
       "crap": 72.0
@@ -269,23 +277,23 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "decode_abi_address",
-      "line": 696,
+      "line": 704,
       "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0
+      "coverage": 0.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "decode_abi_string",
-      "line": 651,
+      "line": 659,
       "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0
+      "coverage": 33.33333333333333,
+      "crap": 1.2962962962962963
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_block_number",
-      "line": 480,
+      "line": 487,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -293,15 +301,15 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_call_address",
-      "line": 681,
+      "line": 689,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0
+      "coverage": 33.33333333333333,
+      "crap": 5.666666666666668
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_call_bool",
-      "line": 622,
+      "line": 630,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -309,7 +317,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_call_request",
-      "line": 662,
+      "line": 670,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -317,15 +325,15 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_call_string",
-      "line": 636,
+      "line": 644,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0
+      "coverage": 33.33333333333333,
+      "crap": 5.666666666666668
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_call_u64",
-      "line": 610,
+      "line": 618,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -333,7 +341,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_chain_id",
-      "line": 492,
+      "line": 499,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -341,7 +349,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_gas_price",
-      "line": 517,
+      "line": 524,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -349,7 +357,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_get_code",
-      "line": 671,
+      "line": 679,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -357,7 +365,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_get_logs",
-      "line": 458,
+      "line": 465,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -365,7 +373,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_get_transaction_count",
-      "line": 502,
+      "line": 509,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -373,7 +381,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_mint_cursor",
-      "line": 547,
+      "line": 554,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -381,7 +389,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "eth_send_raw_transaction",
-      "line": 529,
+      "line": 536,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -389,7 +397,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "hex_to_fixed32",
-      "line": 439,
+      "line": 446,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -397,7 +405,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "load_cursors",
-      "line": 927,
+      "line": 935,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0
@@ -405,7 +413,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "log_data_u64",
-      "line": 431,
+      "line": 438,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -413,31 +421,31 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "mint_calldata",
-      "line": 387,
+      "line": 398,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
     },
     {
       "file": "./crates/node/src/bridge.rs",
-      "function": "normalize_coin_type_bytes",
-      "line": 602,
-      "cyclomatic": 3.0,
-      "coverage": 80.0,
-      "crap": 3.072
+      "function": "move_type_name_bytes",
+      "line": 611,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "parse_hex_qty",
-      "line": 788,
+      "line": 796,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "parse_withdrawal_log",
-      "line": 410,
+      "line": 417,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0
@@ -445,7 +453,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "persist_cursors",
-      "line": 940,
+      "line": 948,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -453,7 +461,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "relay_until_ready",
-      "line": 831,
+      "line": 839,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0
@@ -461,7 +469,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "rpc_call",
-      "line": 763,
+      "line": 771,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0
@@ -469,7 +477,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "rpc_call_raw",
-      "line": 743,
+      "line": 751,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -477,7 +485,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "selector",
-      "line": 595,
+      "line": 602,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -485,7 +493,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "setup_relayer",
-      "line": 876,
+      "line": 884,
       "cyclomatic": 8.0,
       "coverage": 0.0,
       "crap": 72.0
@@ -493,7 +501,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "spawn",
-      "line": 801,
+      "line": 809,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -501,7 +509,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "verify_l2_bridge_predeploy",
-      "line": 707,
+      "line": 715,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0
@@ -509,7 +517,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "wait_for_receipt_success",
-      "line": 562,
+      "line": 569,
       "cyclomatic": 6.0,
       "coverage": 0.0,
       "crap": 42.0
@@ -517,7 +525,7 @@
     {
       "file": "./crates/node/src/bridge.rs",
       "function": "word_u64",
-      "line": 425,
+      "line": 432,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1109,7 +1117,7 @@
     {
       "file": "./crates/p2p/src/key.rs",
       "function": "key_seed",
-      "line": 58,
+      "line": 57,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1117,7 +1125,7 @@
     {
       "file": "./crates/p2p/src/key.rs",
       "function": "load_from_seed",
-      "line": 50,
+      "line": 49,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -1125,7 +1133,7 @@
     {
       "file": "./crates/p2p/src/key.rs",
       "function": "load_or_generate_key",
-      "line": 17,
+      "line": 16,
       "cyclomatic": 10.0,
       "coverage": 78.57142857142857,
       "crap": 10.98396501457726
@@ -1221,7 +1229,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "BlockReceiver::poll_next",
-      "line": 116,
+      "line": 119,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0
@@ -1237,7 +1245,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::broadcaster",
-      "line": 255,
+      "line": 258,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -1245,7 +1253,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::new",
-      "line": 150,
+      "line": 153,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0
@@ -1253,7 +1261,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::receiver",
-      "line": 260,
+      "line": 263,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -1261,7 +1269,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "load_pubkey",
-      "line": 268,
+      "line": 271,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -1269,7 +1277,7 @@
     {
       "file": "./crates/sequencer/src/lib.rs",
       "function": "Ed25519BlockSigner::address",
-      "line": 52,
+      "line": 53,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -1277,7 +1285,7 @@
     {
       "file": "./crates/sequencer/src/lib.rs",
       "function": "Ed25519BlockSigner::from_suiprivkey_file",
-      "line": 36,
+      "line": 37,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0
@@ -1285,7 +1293,7 @@
     {
       "file": "./crates/sequencer/src/lib.rs",
       "function": "Ed25519BlockSigner::pub_key",
-      "line": 47,
+      "line": 48,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -1293,18 +1301,10 @@
     {
       "file": "./crates/sequencer/src/lib.rs",
       "function": "Ed25519BlockSigner::sign_header",
-      "line": 58,
+      "line": 59,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
-    },
-    {
-      "file": "./crates/sequencer/src/lib.rs",
-      "function": "parse_ed25519_key",
-      "line": 73,
-      "cyclomatic": 5.0,
-      "coverage": 100.0,
-      "crap": 5.0
     },
     {
       "file": "./crates/store/src/block_store.rs",
@@ -1565,15 +1565,15 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::aggregator_url",
-      "line": 205,
+      "line": 170,
       "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0
+      "coverage": 0.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::commit",
-      "line": 294,
+      "line": 259,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -1581,7 +1581,7 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::fetch",
-      "line": 287,
+      "line": 252,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -1589,7 +1589,7 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::fetch_blob",
-      "line": 262,
+      "line": 227,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0
@@ -1597,7 +1597,7 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::has_settlement",
-      "line": 178,
+      "line": 143,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -1605,15 +1605,15 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::new",
-      "line": 160,
+      "line": 125,
       "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0
+      "coverage": 25.0,
+      "crap": 3.6875
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::publish",
-      "line": 282,
+      "line": 247,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0
@@ -1621,7 +1621,7 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::publisher_url",
-      "line": 201,
+      "line": 166,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1629,7 +1629,7 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::rpc_url",
-      "line": 197,
+      "line": 162,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1637,63 +1637,55 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::store_blob",
-      "line": 209,
+      "line": 174,
       "cyclomatic": 9.0,
-      "coverage": 0.0,
-      "crap": 90.0
+      "coverage": 22.5,
+      "crap": 46.704234375000006
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::sui_balance",
-      "line": 187,
+      "line": 152,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0
+      "coverage": 20.0,
+      "crap": 1.512
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::with_settlement",
-      "line": 172,
+      "line": 137,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/lib.rs",
+      "function": "Config::default",
+      "line": 99,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
-      "function": "Config::default",
-      "line": 134,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0
-    },
-    {
-      "file": "./crates/sui/src/lib.rs",
       "function": "Error::is_transient",
-      "line": 108,
+      "line": 73,
       "cyclomatic": 4.0,
-      "coverage": 63.63636363636363,
-      "crap": 4.769346356123216
+      "coverage": 45.45454545454545,
+      "crap": 6.5965439519158515
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "StoreResponse::blob_id",
-      "line": 322,
+      "line": 287,
       "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0
-    },
-    {
-      "file": "./crates/sui/src/lib.rs",
-      "function": "parse_signer_key",
-      "line": 51,
-      "cyclomatic": 5.0,
-      "coverage": 83.33333333333334,
-      "crap": 5.1157407407407405
+      "coverage": 0.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "to_core",
-      "line": 309,
+      "line": 274,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0
@@ -1885,7 +1877,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::config_path",
-      "line": 397,
+      "line": 400,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -1893,7 +1885,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::drop",
-      "line": 561,
+      "line": 563,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -1901,7 +1893,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::dump_logs",
-      "line": 532,
+      "line": 535,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -1909,7 +1901,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::extract_from_log",
-      "line": 492,
+      "line": 495,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -1917,7 +1909,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::podseq_exited",
-      "line": 452,
+      "line": 455,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -1925,7 +1917,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::podseq_state",
-      "line": 417,
+      "line": 420,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -1933,7 +1925,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::ports",
-      "line": 391,
+      "line": 394,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -1941,7 +1933,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::read_config_string",
-      "line": 409,
+      "line": 412,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -1949,7 +1941,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::relayer_key_path",
-      "line": 402,
+      "line": 405,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -1965,7 +1957,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::wait_for_log",
-      "line": 460,
+      "line": 463,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -2045,7 +2037,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "read_toml_field",
-      "line": 605,
+      "line": 607,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
@@ -2053,7 +2045,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "sui_signer_key",
-      "line": 586,
+      "line": 588,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -2117,7 +2109,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "abi_word_len",
-      "line": 599,
+      "line": 610,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -2125,7 +2117,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "decode_abi_string_at",
-      "line": 607,
+      "line": 618,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -2133,7 +2125,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "decode_revert_string",
-      "line": 724,
+      "line": 735,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -2141,7 +2133,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "encode_initialize",
-      "line": 622,
+      "line": 633,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -2149,7 +2141,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_balance_of",
-      "line": 967,
+      "line": 983,
       "cyclomatic": 8.0,
       "coverage": null,
       "crap": 72.0
@@ -2157,7 +2149,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_block_number",
-      "line": 403,
+      "line": 414,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -2165,7 +2157,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_call_string",
-      "line": 1007,
+      "line": 1023,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -2173,7 +2165,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_chain_id",
-      "line": 408,
+      "line": 419,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -2181,7 +2173,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_get_transaction_count",
-      "line": 413,
+      "line": 424,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -2189,7 +2181,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_get_transaction_receipt",
-      "line": 428,
+      "line": 439,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -2197,7 +2189,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "fetch_blob_retrying",
-      "line": 344,
+      "line": 355,
       "cyclomatic": 8.0,
       "coverage": null,
       "crap": 72.0
@@ -2213,7 +2205,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "fund_relayer",
-      "line": 539,
+      "line": 550,
       "cyclomatic": 13.0,
       "coverage": null,
       "crap": 182.0
@@ -2221,7 +2213,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "initialize_l2_bridge",
-      "line": 645,
+      "line": 656,
       "cyclomatic": 17.0,
       "coverage": null,
       "crap": 306.0
@@ -2229,7 +2221,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "initiate_withdrawal",
-      "line": 835,
+      "line": 846,
       "cyclomatic": 14.0,
       "coverage": null,
       "crap": 210.0
@@ -2237,7 +2229,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "load_relayer_signer",
-      "line": 517,
+      "line": 528,
       "cyclomatic": 4.0,
       "coverage": null,
       "crap": 20.0
@@ -2245,7 +2237,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "preflight_sui_balance",
-      "line": 254,
+      "line": 265,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -2253,7 +2245,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "require_docker",
-      "line": 238,
+      "line": 249,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -2261,7 +2253,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "rpc_call",
-      "line": 378,
+      "line": 389,
       "cyclomatic": 4.0,
       "coverage": null,
       "crap": 20.0
@@ -2269,7 +2261,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "selector",
-      "line": 594,
+      "line": 605,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -2277,7 +2269,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "send_self_transfer",
-      "line": 456,
+      "line": 467,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -2285,7 +2277,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_deposit",
-      "line": 750,
+      "line": 761,
       "cyclomatic": 15.0,
       "coverage": null,
       "crap": 240.0
@@ -2293,7 +2285,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_query_retrying",
-      "line": 322,
+      "line": 333,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -2301,23 +2293,31 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_signer_key",
-      "line": 525,
+      "line": 536,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
     },
     {
       "file": "./e2e/tests/full_stack.rs",
-      "function": "sui_vault_deposit_nonce",
-      "line": 938,
+      "function": "sui_vault_u64",
+      "line": 950,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
     },
     {
       "file": "./e2e/tests/full_stack.rs",
+      "function": "sui_vault_withdraw_nonce",
+      "line": 978,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_config_id",
-      "line": 496,
+      "line": 507,
       "cyclomatic": 8.0,
       "coverage": null,
       "crap": 72.0
@@ -2325,7 +2325,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_height",
-      "line": 284,
+      "line": 295,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -2333,7 +2333,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_l2_balance",
-      "line": 897,
+      "line": 908,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
@@ -2341,7 +2341,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_relayer_ready",
-      "line": 733,
+      "line": 744,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -2349,7 +2349,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_settlement",
-      "line": 304,
+      "line": 315,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -2357,7 +2357,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_sui_release",
-      "line": 921,
+      "line": 932,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
