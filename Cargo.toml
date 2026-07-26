@@ -48,6 +48,7 @@ alloy-eips = "2"
 alloy-network = "2"
 alloy-signer = "2"
 alloy-signer-local = "2"
+alloy-sol-types = "1"
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 
 # HTTP

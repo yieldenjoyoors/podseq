@@ -26,6 +26,7 @@ alloy-eips.workspace = true
 alloy-network.workspace = true
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
+alloy-sol-types.workspace = true
 reqwest.workspace = true
 hex.workspace = true
 sui-crypto.workspace = true

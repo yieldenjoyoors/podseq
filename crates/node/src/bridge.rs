@@ -38,6 +38,16 @@ pub const BRIDGE_PREDEPLOY_ADDRESS_HEX: &str = "0x420000000000000000000000000000
 /// Gas limit for a mint transaction.
 const MINT_GAS_LIMIT: u64 = 120_000;
 
+// Minimal L2 token interface for the only function the relayer calls.
+alloy_sol_types::sol! {
+    #[derive(Debug)]
+    interface IL2Token {
+        function mint(address recipient, uint256 amount, uint64 nonce) external;
+    }
+}
+
+use alloy_sol_types::SolCall;
+
 /// Relayer cursors, persisted next to the chain state.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Cursors {
@@ -382,20 +392,16 @@ impl BridgeRelayer {
 
 // ---------- ABI helpers ----------
 
-/// ABI-encodes `mint(address,uint256,uint64)` calldata (selector + 3 fixed words).
+/// ABI-encodes `mint(address,uint256,uint64)` calldata via the typed
+/// `IL2Token::mintCall` wrapper, so the selector and word layout are derived
+/// from the signature at compile time.
 fn mint_calldata(recipient: Address, amount: u64, nonce: u64) -> Vec<u8> {
-    let mut out = keccak256(b"mint(address,uint256,uint64)")[..4].to_vec();
-    // address is right-aligned in a 32-byte word
-    let mut recipient_word = [0u8; 32];
-    recipient_word[12..].copy_from_slice(recipient.as_ref());
-    out.extend_from_slice(&recipient_word);
-    let mut amount_word = [0u8; 32];
-    amount_word[24..].copy_from_slice(&amount.to_be_bytes());
-    out.extend_from_slice(&amount_word);
-    let mut nonce_word = [0u8; 32];
-    nonce_word[24..].copy_from_slice(&nonce.to_be_bytes());
-    out.extend_from_slice(&nonce_word);
-    out
+    IL2Token::mintCall {
+        recipient,
+        amount: alloy_primitives::U256::from(amount),
+        nonce,
+    }
+    .abi_encode()
 }
 
 /// keccak256("WithdrawalInitiated(uint64,address,bytes32,uint256)").
@@ -955,31 +961,29 @@ mod tests {
 
     #[test]
     fn mint_selector_is_stable() {
-        let selector = &mint_calldata(Address::ZERO, 0, 0)[..4];
-        assert_eq!(selector, &keccak256(b"mint(address,uint256,uint64)")[..4]);
+        // Selector is derived from the signature by the `sol!` macro at compile
+        // time; pin the known-good value so a rename is caught at test time.
+        assert_eq!(
+            IL2Token::mintCall::SELECTOR,
+            keccak256(b"mint(address,uint256,uint64)")[..4]
+        );
     }
 
     #[test]
-    fn mint_calldata_right_aligns_address() {
-        let recipient = Address::from([0xaa; 20]);
-        let calldata = mint_calldata(recipient, 0, 0);
-        // address word: 12 zero bytes then 20 bytes of 0xaa
-        assert_eq!(&calldata[4..16], &[0u8; 12]);
-        assert_eq!(&calldata[16..36], &[0xaa; 20]);
-    }
-
-    #[test]
-    fn mint_calldata_encodes_fixed_words() {
+    fn mint_calldata_roundtrips() {
         let recipient = Address::with_last_byte(0x42);
-        let calldata = mint_calldata(recipient, 0xab, 0x05);
-        assert_eq!(calldata.len(), 4 + 96); // selector + 3 words
-                                            // recipient word left-padded (right-aligned): 12 zeros then address.
-        assert_eq!(&calldata[4..16], &[0u8; 12]);
-        assert_eq!(calldata[4 + 31], 0x42);
-        // amount in the low byte of its word.
-        assert_eq!(calldata[4 + 32 + 31], 0xab);
-        // nonce in the low byte of its word.
-        assert_eq!(calldata[4 + 64 + 31], 0x05);
+        let amount = 0xab_u64;
+        let nonce = 0x05_u64;
+
+        let calldata = mint_calldata(recipient, amount, nonce);
+
+        // Selector + 3 head words, no tail (all args fit in static slots).
+        assert_eq!(calldata.len(), 4 + 96);
+
+        let decoded = IL2Token::mintCall::abi_decode(&calldata).expect("decode");
+        assert_eq!(decoded.recipient, recipient);
+        assert_eq!(decoded.amount, U256::from(amount));
+        assert_eq!(decoded.nonce, nonce);
     }
 
     #[test]
