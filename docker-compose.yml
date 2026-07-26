@@ -43,7 +43,7 @@ services:
       - --datadir=/data
       - --instance=2
       - --disable-discovery
-      - --jit.enabled
+      - --jit
     volumes:
       - jwt:/jwt:ro
       - reth-data:/data
