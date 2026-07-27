@@ -93,6 +93,7 @@ impl Stack {
       - --http.api=eth,net,web3,debug,txpool,trace
       - --datadir=/data
       - --disable-discovery
+      - --jit
     ports:
       - "{rpc_port}:8545"
       - "{engine_port}:8551"
@@ -330,6 +331,7 @@ mode = "sequencer"
       - --http.api=eth,net,web3,debug,txpool,trace
       - --datadir=/data
       - --disable-discovery
+      - --jit
     ports:
       - "{rpc_port}:8545"
       - "{engine_port}:8551"
