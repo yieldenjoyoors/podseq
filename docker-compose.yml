@@ -133,7 +133,7 @@ services:
     restart: unless-stopped
 
   blockscout-frontend:
-    image: ghcr.io/blockscout/blockscout-frontend:latest
+    image: ghcr.io/blockscout/frontend:latest
     depends_on:
       blockscout-backend:
         condition: service_started
