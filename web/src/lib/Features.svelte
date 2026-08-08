@@ -33,47 +33,94 @@
     ];
 </script>
 
-<section id="why" class="border-t border-line section-accent py-20 sm:py-28">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8">
-        <div
-            class="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-12"
-        >
-            <div class="max-w-2xl">
-                <span class="label">Why Podseq</span>
-                <h2
-                    class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5"
-                >
-                    Built for teams that are done with shared infrastructure.
-                </h2>
-                <p class="mt-4 text-muted text-lg leading-relaxed">
-                    Six reasons the best teams run their own chain instead of
-                    renting space on someone else's.
-                </p>
-            </div>
+<section
+    id="why"
+    class="border-b-2 border-[var(--border)] bg-[var(--surface)] py-16"
+>
+    <div class="mx-auto max-w-5xl px-4">
+        <div class="max-w-2xl mb-10">
+            <span class="label">Why podseq</span>
+            <h2
+                class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
+            >
+                Done with shared infrastructure.
+            </h2>
+            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                Six reasons the best teams run their own chain instead of
+                renting space on someone else's.
+            </p>
         </div>
 
-        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="pillars-grid">
             {#each pillars as p (p.n)}
-                <div class="card p-6 group">
+                <div class="pillar">
                     <div class="flex items-center justify-between mb-4">
-                        <span
-                            class="font-display font-bold text-2xl text-brand/20 group-hover:text-brand/30 transition-colors"
-                            >{p.n}</span
-                        >
-                        <span
-                            class="w-2 h-2 rounded-full bg-brand/20 group-hover:bg-brand/40 transition-colors"
-                        ></span>
+                        <span class="pillar-num">{p.n}</span>
+                        <span class="pillar-dot"></span>
                     </div>
-                    <h3
-                        class="font-display font-semibold text-ink text-xl mb-2"
-                    >
-                        {p.title}
-                    </h3>
-                    <p class="text-[15px] text-muted leading-relaxed">
-                        {p.body}
-                    </p>
+                    <h3 class="pillar-title">{p.title}</h3>
+                    <p class="pillar-body">{p.body}</p>
                 </div>
             {/each}
         </div>
     </div>
 </section>
+
+<style>
+    /* Grid with overlapping borders so internal lines collapse to 2px. */
+    .pillars-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        border: 2px solid var(--border);
+        background: var(--border);
+        gap: 2px;
+    }
+    @media (min-width: 640px) {
+        .pillars-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+    @media (min-width: 1024px) {
+        .pillars-grid {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+    .pillar {
+        padding: 1.5rem;
+        background: var(--bg);
+        transition: background 0.1s ease;
+    }
+    .pillar:hover {
+        background: var(--surface);
+    }
+    .pillar:hover .pillar-num {
+        color: var(--brand);
+    }
+    .pillar:hover .pillar-dot {
+        background: var(--brand);
+    }
+    .pillar-num {
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: var(--faint);
+        transition: color 0.1s ease;
+    }
+    .pillar-dot {
+        width: 10px;
+        height: 10px;
+        background: var(--faint);
+        transition: background 0.1s ease;
+    }
+    .pillar-title {
+        font-weight: 700;
+        font-size: 1rem;
+        text-transform: uppercase;
+        letter-spacing: -0.01em;
+        margin-bottom: 0.5rem;
+    }
+    .pillar-body {
+        font-size: 0.78rem;
+        line-height: 1.6;
+        color: var(--muted);
+    }
+</style>

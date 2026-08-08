@@ -158,7 +158,7 @@
         <div class="side-foot">
             <a
                 href="#/"
-                class="font-mono text-[11px] text-faint hover:text-brand-ink transition-colors"
+                class="text-[11px] text-[var(--muted)] hover:text-[var(--brand)] transition-colors"
             >
                 ← back to overview
             </a>
@@ -167,10 +167,10 @@
 
     <!-- main -->
     <main class="docs-main">
-        <div class="docs-breadcrumb font-mono text-[11px] text-faint">
-            <a href="#/docs" class="hover:text-brand-ink">docs</a>
+        <div class="docs-breadcrumb">
+            <a href="#/docs">docs</a>
             <span class="sep">/</span>
-            <span class="text-muted"
+            <span
                 >{doc === DEFAULT_DOC
                     ? "introduction"
                     : doc.replace(/\//g, " / ")}</span
@@ -245,21 +245,23 @@
         display: inline-flex;
         align-items: center;
         gap: 0.5rem;
-        font-family: var(--font-mono);
-        font-size: 0.75rem;
-        color: var(--color-muted);
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--fg);
         margin: 1.25rem 0 0.5rem;
         padding: 0.5rem 0.8rem;
-        border: 1px solid var(--color-line);
-        border-radius: 2px;
+        border: 2px solid var(--border);
+        background: var(--bg);
         width: fit-content;
     }
 
     .docs-backdrop {
         position: fixed;
         inset: 0;
-        top: 4rem;
-        background: rgba(23, 23, 29, 0.4);
+        top: 3.5rem;
+        background: rgba(10, 10, 10, 0.4);
         z-index: 40;
         border: none;
         cursor: pointer;
@@ -272,12 +274,12 @@
     .docs-side.open {
         display: block;
         position: fixed;
-        top: 4rem;
+        top: 3.5rem;
         left: 0;
         bottom: 0;
         width: 17rem;
-        background: var(--color-paper);
-        border-right: 1px solid var(--color-line);
+        background: var(--bg);
+        border-right: 2px solid var(--border);
         z-index: 45;
         padding: 1rem 1rem 2rem;
         overflow-y: auto;
@@ -288,62 +290,61 @@
         align-items: center;
         gap: 0.5rem;
         padding: 0.5rem 0.7rem;
-        border: 1px solid var(--color-line);
-        border-radius: 2px;
-        color: var(--color-faint);
+        border: 2px solid var(--border);
+        background: var(--bg);
+        color: var(--muted);
         margin-bottom: 1.2rem;
     }
     .side-search input {
         background: none;
         border: none;
         outline: none;
-        color: var(--color-ink);
-        font-family: var(--font-mono);
+        color: var(--fg);
         font-size: 0.78rem;
         width: 100%;
     }
     .side-search input::placeholder {
-        color: var(--color-faint);
+        color: var(--faint);
     }
 
     .side-section {
         margin-bottom: 1.4rem;
     }
     .side-heading {
-        font-family: var(--font-mono);
         font-size: 0.66rem;
         letter-spacing: 0.18em;
         text-transform: uppercase;
-        color: var(--color-faint);
+        color: var(--muted);
         margin-bottom: 0.5rem;
         padding-left: 0.6rem;
+        font-weight: 700;
     }
     .side-link {
         display: block;
-        padding: 0.32rem 0.6rem;
-        border-left: 1px solid transparent;
-        font-size: 0.85rem;
-        color: var(--color-muted);
-        border-radius: 0;
+        padding: 0.4rem 0.6rem;
+        border-left: 2px solid transparent;
+        font-size: 0.82rem;
+        color: var(--muted);
         transition:
             color 0.15s ease,
             border-color 0.15s ease,
             background 0.15s ease;
     }
     .side-link:hover {
-        color: var(--color-ink);
-        background: var(--color-surface-2);
+        color: var(--fg);
+        background: var(--surface);
     }
     .side-link.active {
-        color: var(--color-brand-ink);
-        border-left-color: var(--color-brand);
-        background: rgba(240, 81, 43, 0.08);
+        color: var(--brand);
+        border-left-color: var(--brand);
+        background: var(--surface);
+        font-weight: 700;
     }
 
     .side-foot {
         margin-top: 1.5rem;
         padding: 0.6rem;
-        border-top: 1px solid var(--color-line);
+        border-top: 2px solid var(--border);
     }
 
     .docs-main {
@@ -352,6 +353,11 @@
     }
     .docs-breadcrumb {
         margin-bottom: 1.5rem;
+        color: var(--muted);
+        font-size: 0.72rem;
+    }
+    .docs-breadcrumb a:hover {
+        color: var(--brand);
     }
     .docs-breadcrumb .sep {
         margin: 0 0.5rem;
@@ -364,47 +370,46 @@
         gap: 1rem;
         margin-top: 4rem;
         padding-top: 1.5rem;
-        border-top: 1px solid var(--color-line);
+        border-top: 2px solid var(--border);
     }
     .pager-link {
         display: flex;
         flex-direction: column;
         gap: 0.35rem;
         padding: 0.8rem 1rem;
-        border: 1px solid var(--color-line);
-        border-radius: 12px;
+        border: 2px solid var(--border);
+        background: var(--bg);
         transition:
-            border-color 0.18s ease,
-            box-shadow 0.18s ease;
+            transform 0.08s ease,
+            box-shadow 0.08s ease;
         max-width: 48%;
     }
     .pager-link:hover {
-        border-color: var(--color-brand);
-        box-shadow: 0 10px 24px -18px rgba(67, 56, 202, 0.4);
+        transform: translate(-2px, -2px);
+        box-shadow: 4px 4px 0 0 var(--border);
     }
     .pager-link.right {
         text-align: right;
         margin-left: auto;
     }
     .pager-title {
-        font-family: var(--font-display);
-        font-weight: 600;
-        color: var(--color-ink);
-        font-size: 0.95rem;
+        font-weight: 700;
+        color: var(--fg);
+        font-size: 0.92rem;
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
     }
     .pager-link:hover .pager-title {
-        color: var(--color-brand-ink);
+        color: var(--brand);
     }
 
     .docs-kicker {
-        font-family: var(--font-mono);
         font-size: 0.64rem;
         letter-spacing: 0.16em;
         text-transform: uppercase;
-        color: var(--color-faint);
+        color: var(--muted);
+        font-weight: 700;
     }
 
     .docs-outline {
@@ -412,10 +417,10 @@
     }
     .outline-link {
         display: block;
-        font-size: 0.8rem;
-        color: var(--color-faint);
+        font-size: 0.78rem;
+        color: var(--muted);
         padding: 0.22rem 0 0.22rem 0.75rem;
-        border-left: 1px solid var(--color-line);
+        border-left: 2px solid var(--border);
         transition:
             color 0.15s ease,
             border-color 0.15s ease;
@@ -424,8 +429,8 @@
         padding-left: 1.4rem;
     }
     .outline-link:hover {
-        color: var(--color-brand-ink);
-        border-left-color: var(--color-brand);
+        color: var(--brand);
+        border-left-color: var(--brand);
     }
 
     @media (min-width: 1024px) {
@@ -443,9 +448,9 @@
         .docs-side {
             display: block;
             position: sticky;
-            top: 4rem;
+            top: 3.5rem;
             align-self: start;
-            height: calc(100vh - 4rem);
+            height: calc(100vh - 3.5rem);
             overflow-y: auto;
             padding: 1.5rem 0.5rem 2rem 0;
         }
@@ -461,9 +466,9 @@
         .docs-outline {
             display: block;
             position: sticky;
-            top: 4rem;
+            top: 3.5rem;
             align-self: start;
-            height: calc(100vh - 4rem);
+            height: calc(100vh - 3.5rem);
             overflow-y: auto;
             padding: 2.5rem 0 2rem 2rem;
         }

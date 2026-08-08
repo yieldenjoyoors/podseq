@@ -2,9 +2,9 @@
     let open = $state(false);
 
     const links = [
-        { label: "WHY PODSEQ", href: "#why" },
-        { label: "HOW IT WORKS", href: "#how" },
-        { label: "DOCS", href: "#/docs" },
+        { label: "Why", href: "#why" },
+        { label: "How", href: "#how" },
+        { label: "Docs", href: "#/docs" },
     ];
 
     function close() {
@@ -13,43 +13,28 @@
 </script>
 
 <header
-    class="fixed top-0 inset-x-0 z-50 backdrop-blur-xl bg-paper/85 border-b border-line"
+    class="fixed top-0 inset-x-0 z-50 border-b-2 border-[var(--border)] bg-[var(--bg)]"
 >
     <div
-        class="mx-auto max-w-7xl px-5 sm:px-8 h-16 flex items-center justify-between gap-6"
+        class="mx-auto max-w-5xl px-4 h-14 flex items-center justify-between gap-6"
     >
-        <a href="#hero" class="flex items-center gap-2.5 group" onclick={close}>
+        <a href="#hero" class="flex items-center gap-2" onclick={close}>
             <span class="mark" aria-hidden="true">
-                <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-                    <rect
-                        x="2"
-                        y="3"
-                        width="18"
-                        height="3"
-                        rx="1"
-                        fill="currentColor"
-                    />
+                <svg width="24" height="24" viewBox="0 0 22 22" fill="none">
+                    <rect x="0" y="0" width="22" height="22" fill="#0a0a0a" />
+                    <rect x="2" y="3" width="18" height="3" fill="#fafaf7" />
                     <rect
                         x="2"
                         y="9.5"
                         width="13"
                         height="3"
-                        rx="1"
-                        fill="currentColor"
+                        fill="#fafaf7"
                         opacity="0.5"
                     />
-                    <rect
-                        x="2"
-                        y="16"
-                        width="7"
-                        height="3"
-                        rx="1"
-                        fill="var(--color-brand)"
-                    />
+                    <rect x="2" y="16" width="7" height="3" fill="#e85f00" />
                 </svg>
             </span>
-            <span
-                class="font-display font-bold tracking-tight text-ink text-[17px]"
+            <span class="font-extrabold tracking-tight uppercase text-lg"
                 >podseq</span
             >
         </a>
@@ -58,17 +43,17 @@
             {#each links as link (link.href)}
                 <a
                     href={link.href}
-                    class="text-sm font-medium text-muted hover:text-ink px-3 py-2 transition-colors"
+                    class="text-xs font-bold uppercase tracking-wide text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--surface)] px-3 py-1.5 transition-colors"
                 >
                     {link.label}
                 </a>
             {/each}
         </nav>
 
-        <div class="flex items-center gap-2.5">
+        <div class="flex items-center gap-2">
             <a
                 href="#/docs/setup"
-                class="btn btn-brand !py-1.5 !px-3.5 !text-[13px] hidden sm:inline-flex"
+                class="btn btn-brand hidden sm:inline-flex !py-1.5 !px-3"
             >
                 Start building
                 <svg
@@ -88,11 +73,11 @@
                 rel="noopener"
                 aria-label="GitHub"
                 title="GitHub"
-                class="w-9 h-9 grid place-items-center rounded-full border border-line text-muted hover:text-ink hover:border-ink/30 transition-colors"
+                class="w-9 h-9 grid place-items-center border-2 border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface)] transition-colors"
             >
                 <svg
-                    width="17"
-                    height="17"
+                    width="16"
+                    height="16"
                     viewBox="0 0 24 24"
                     fill="currentColor"
                 >
@@ -104,7 +89,7 @@
                 </svg>
             </a>
             <button
-                class="md:hidden w-9 h-9 grid place-items-center rounded-full border border-line text-ink"
+                class="md:hidden w-9 h-9 grid place-items-center border-2 border-[var(--border)] text-[var(--fg)]"
                 onclick={() => (open = !open)}
                 aria-label="Menu"
             >
@@ -127,28 +112,18 @@
     </div>
 
     {#if open}
-        <div
-            class="md:hidden border-t border-line bg-paper/95 px-5 py-3 flex flex-col gap-1"
+        <nav
+            class="md:hidden border-t-2 border-[var(--border)] bg-[var(--bg)] px-4 py-2 flex flex-col gap-0"
         >
             {#each links as link (link.href)}
                 <a
                     href={link.href}
                     onclick={close}
-                    class="text-sm font-medium text-muted hover:text-ink py-2"
+                    class="text-xs font-bold uppercase tracking-wide text-[var(--muted)] hover:text-[var(--fg)] py-2.5 border-b-2 border-[var(--border)] last:border-b-0"
                 >
                     {link.label}
                 </a>
             {/each}
-        </div>
+        </nav>
     {/if}
 </header>
-
-<style>
-    .mark {
-        color: var(--color-ink);
-        transition: color 0.2s ease;
-    }
-    a.group:hover .mark {
-        color: var(--color-brand);
-    }
-</style>

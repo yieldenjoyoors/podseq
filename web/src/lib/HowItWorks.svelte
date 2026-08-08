@@ -8,7 +8,7 @@
         {
             n: "2",
             title: "Run the sequencer",
-            body: "Run Podseq and Reth binaries and they'll communicate over the Engine API to build blocks and gossips soft confirmations over P2P.",
+            body: "Run Podseq and Reth binaries and they'll communicate over the Engine API to build blocks and gossip soft confirmations over P2P.",
         },
         {
             n: "3",
@@ -18,27 +18,27 @@
     ];
 </script>
 
-<section id="how" class="border-t border-line py-20 sm:py-28">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8">
+<section id="how" class="border-b-2 border-[var(--border)] py-16">
+    <div class="mx-auto max-w-5xl px-4">
         <div
-            class="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-12"
+            class="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-10"
         >
             <div class="max-w-2xl">
                 <span class="label">How it works</span>
                 <h2
-                    class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5"
+                    class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
                 >
                     From zero to a verified chain.
                 </h2>
-                <p class="mt-4 text-muted text-lg leading-relaxed">
+                <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
                     In three steps only.
                 </p>
             </div>
-            <a href="#/docs/block-production" class="btn btn-ghost shrink-0">
+            <a href="#/docs/block-production" class="btn shrink-0">
                 Full data flow
                 <svg
-                    width="14"
-                    height="14"
+                    width="13"
+                    height="13"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
@@ -49,30 +49,58 @@
             </a>
         </div>
 
-        <div class="grid md:grid-cols-3 gap-4">
-            {#each steps as step, i (step.n)}
-                <div class="card p-7 relative group">
-                    <div class="flex items-center gap-3 mb-4">
-                        <span
-                            class="w-11 h-11 rounded-full bg-ink text-white font-display font-bold grid place-items-center text-lg"
-                            >{step.n}</span
-                        >
-                        {#if i < steps.length - 1}
-                            <span
-                                class="hidden md:block flex-1 h-px bg-gradient-to-r from-line-2 to-transparent"
-                            ></span>
-                        {/if}
-                    </div>
-                    <h3
-                        class="font-display font-semibold text-ink text-xl mb-2"
-                    >
-                        {step.title}
-                    </h3>
-                    <p class="text-[15px] text-muted leading-relaxed">
-                        {step.body}
-                    </p>
+        <div class="steps-grid">
+            {#each steps as step (step.n)}
+                <div class="step">
+                    <div class="step-num">{step.n}</div>
+                    <h3 class="step-title">{step.title}</h3>
+                    <p class="step-body">{step.body}</p>
                 </div>
             {/each}
         </div>
     </div>
 </section>
+
+<style>
+    .steps-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        border: 2px solid var(--border);
+        background: var(--border);
+        gap: 2px;
+    }
+    @media (min-width: 768px) {
+        .steps-grid {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+    .step {
+        padding: 1.75rem;
+        background: var(--bg);
+    }
+    .step-num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.75rem;
+        height: 2.75rem;
+        border: 2px solid var(--border);
+        background: var(--fg);
+        color: var(--bg);
+        font-weight: 800;
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+    }
+    .step-title {
+        font-weight: 700;
+        font-size: 1.1rem;
+        text-transform: uppercase;
+        letter-spacing: -0.01em;
+        margin-bottom: 0.6rem;
+    }
+    .step-body {
+        font-size: 0.82rem;
+        line-height: 1.6;
+        color: var(--muted);
+    }
+</style>

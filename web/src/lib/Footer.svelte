@@ -36,43 +36,31 @@
     ];
 </script>
 
-<footer class="border-t border-line mt-24 bg-surface-2/40">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8 py-14">
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-10">
+<footer class="border-t-2 border-[var(--border)]">
+    <div class="mx-auto max-w-5xl px-4 py-12">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-8">
             <div class="col-span-2">
-                <div class="flex items-center gap-2.5">
-                    <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-                        <rect
-                            x="2"
-                            y="3"
-                            width="18"
-                            height="3"
-                            rx="1"
-                            fill="currentColor"
-                        />
+                <div class="flex items-center gap-2">
+                    <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                        <rect x="0" y="0" width="22" height="22" fill="#0a0a0a" />
+                        <rect x="2" y="3" width="18" height="3" fill="#fafaf7" />
                         <rect
                             x="2"
                             y="9.5"
                             width="13"
                             height="3"
-                            rx="1"
-                            fill="currentColor"
+                            fill="#fafaf7"
                             opacity="0.5"
                         />
-                        <rect
-                            x="2"
-                            y="16"
-                            width="7"
-                            height="3"
-                            rx="1"
-                            fill="var(--color-brand)"
-                        />
+                        <rect x="2" y="16" width="7" height="3" fill="#e85f00" />
                     </svg>
-                    <span class="font-display font-bold text-ink text-[17px]"
+                    <span class="font-extrabold uppercase tracking-tight text-lg"
                         >podseq</span
                     >
                 </div>
-                <p class="mt-4 text-sm text-muted max-w-xs leading-relaxed">
+                <p
+                    class="mt-4 text-xs leading-relaxed text-[var(--muted)] max-w-xs"
+                >
                     Deploy your own EVM L2 on Sui.
                 </p>
             </div>
@@ -80,11 +68,11 @@
             {#each cols as col (col.title)}
                 <div>
                     <h4
-                        class="text-xs font-semibold uppercase tracking-wider text-faint mb-3"
+                        class="text-[0.65rem] font-extrabold uppercase tracking-widest text-[var(--muted)] mb-3"
                     >
                         {col.title}
                     </h4>
-                    <ul class="space-y-2">
+                    <ul class="space-y-1.5">
                         {#each col.links as link (link.href)}
                             <li>
                                 <a
@@ -93,7 +81,7 @@
                                         ? "_blank"
                                         : undefined}
                                     rel={link.external ? "noopener" : undefined}
-                                    class="text-sm text-muted hover:text-brand-ink transition-colors"
+                                    class="text-xs font-bold uppercase tracking-wide text-[var(--fg)] hover:text-[var(--brand)] transition-colors"
                                 >
                                     {link.label}
                                 </a>
@@ -103,21 +91,22 @@
                 </div>
             {/each}
         </div>
-
+    </div>
+    <div class="border-t-2 border-[var(--border)]">
         <div
-            class="mt-6 pt-6 border-t border-line flex flex-col items-center justify-between gap-3"
+            class="mx-auto flex max-w-5xl items-center justify-center px-4 py-3 text-[0.65rem] uppercase tracking-wide text-[var(--muted)]"
         >
-            <p class="text-xs text-faint">
-                © {new Date().getFullYear()}
+            <span
+                >© {new Date().getFullYear()}
                 <a
                     href="https://yieldenjoyoors.com"
                     target="_blank"
                     rel="noopener"
-                    class="hover:text-brand-ink transition-colors"
+                    class="hover:text-[var(--fg)]"
                 >
                     Yield Enjoyoors B.V.
-                </a>
-            </p>
+                </a></span
+            >
         </div>
     </div>
 </footer>

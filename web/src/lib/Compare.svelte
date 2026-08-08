@@ -43,22 +43,22 @@
     ];
 </script>
 
-<section id="compare" class="border-t border-line py-20 sm:py-28">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8">
-        <div class="max-w-2xl mb-12">
+<section id="compare" class="border-b-2 border-[var(--border)] py-16">
+    <div class="mx-auto max-w-5xl px-4">
+        <div class="max-w-2xl mb-10">
             <span class="label">How it differs</span>
             <h2
-                class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5"
+                class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
             >
                 Different by design.
             </h2>
-            <p class="mt-4 text-muted text-lg leading-relaxed">
-                A direct comparison against the typical rollup stack, so you
-                can see where Podseq makes different trade-offs.
+            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                A direct comparison against the typical rollup stack, so you can
+                see where Podseq makes different trade-offs.
             </p>
         </div>
 
-        <div class="compare-wrap card overflow-hidden p-0">
+        <div class="compare-wrap">
             <div class="compare-head">
                 <span></span>
                 <span>Typical rollup stack</span>
@@ -67,7 +67,7 @@
             {#each rows as row (row.label)}
                 <div class="compare-row">
                     <span class="compare-label">{row.label}</span>
-                    <span class="text-muted">{row.typical}</span>
+                    <span class="compare-typical">{row.typical}</span>
                     <span class="podseq-cell">{row.podseq}</span>
                 </div>
             {/each}
@@ -78,6 +78,7 @@
 <style>
     .compare-wrap {
         overflow-x: auto;
+        border: 2px solid var(--border);
     }
     .compare-head,
     .compare-row {
@@ -89,40 +90,45 @@
         min-width: 640px;
     }
     .compare-head {
-        background: var(--color-surface-2);
-        border-bottom: 1px solid var(--color-line);
-        font-size: 0.72rem;
-        font-weight: 600;
-        letter-spacing: 0.04em;
+        background: var(--surface);
+        border-bottom: 2px solid var(--border);
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
-        color: var(--color-faint);
+        color: var(--muted);
     }
     .podseq-head {
-        color: var(--color-brand-ink);
+        color: var(--brand);
     }
     .compare-row {
-        border-bottom: 1px solid var(--color-line);
-        font-size: 0.92rem;
-        transition: background 0.15s ease;
+        border-bottom: 2px solid var(--border);
+        font-size: 0.85rem;
+        transition: background 0.1s ease;
     }
     .compare-row:last-child {
         border-bottom: none;
     }
     .compare-row:hover {
-        background: var(--color-surface-2);
+        background: var(--surface);
     }
     .compare-label {
-        font-weight: 600;
-        color: var(--color-ink);
-        font-size: 0.86rem;
+        font-weight: 700;
+        color: var(--fg);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+    }
+    .compare-typical {
+        color: var(--muted);
+        font-size: 0.82rem;
     }
     .podseq-cell {
-        color: var(--color-ink);
-        font-weight: 600;
-        padding: 0.35rem 0.7rem;
-        margin: -0.35rem -0.7rem;
-        background: rgba(16, 185, 129, 0.06);
-        border-left: 3px solid var(--color-brand);
-        border-radius: 0 6px 6px 0;
+        color: var(--fg);
+        font-weight: 700;
+        padding: 0.4rem 0.7rem;
+        margin: -0.4rem -0.7rem;
+        background: var(--brand-ink);
+        border-left: 4px solid var(--brand);
     }
 </style>

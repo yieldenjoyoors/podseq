@@ -15,28 +15,31 @@
     ];
 </script>
 
-<section class="border-y border-line bg-surface-2/60">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8 py-8">
-        <div class="flex flex-col md:flex-row md:items-center gap-6 md:gap-10">
+<section class="border-b-2 border-[var(--border)] bg-[var(--surface)]">
+    <div class="mx-auto max-w-5xl px-4 py-6">
+        <div class="flex flex-col gap-4 md:flex-row md:items-center md:gap-8">
             <p
-                class="text-sm font-semibold text-muted md:max-w-[13rem] shrink-0"
+                class="text-[0.7rem] font-bold uppercase tracking-widest text-[var(--muted)] md:max-w-[12rem] shrink-0"
             >
-                Assembled from proven primitives. Not reinvented.
+                // Assembled from proven primitives
             </p>
-            <div class="grid grid-cols-2 md:flex md:flex-1 gap-3">
-                {#each stack as item (item.name)}
+            <div
+                class="grid grid-cols-2 border-2 border-[var(--border)] md:flex md:flex-1"
+            >
+                {#each stack as item, i (item.name)}
                     <a
                         href={item.href}
                         target="_blank"
                         rel="noopener"
-                        class="group flex-1 flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-surface border border-line hover:border-brand/30 transition-all hover:shadow-sm"
+                        class="group flex-1 flex items-center justify-between gap-3 px-4 py-3 bg-[var(--bg)] transition-colors hover:bg-[var(--brand)] hover:text-white {i > 0 ? 'border-l-2 border-l-[var(--border)]' : ''} {i >= 2 ? 'border-t-2 border-t-[var(--border)] md:border-t-0' : ''}"
                     >
                         <span>
                             <span
-                                class="font-display font-semibold text-ink text-[15px] group-hover:text-brand-ink transition-colors"
+                                class="font-bold text-sm uppercase tracking-tight"
                                 >{item.name}</span
                             >
-                            <span class="block text-xs text-faint mt-0.5"
+                            <span
+                                class="block text-[0.65rem] uppercase tracking-wide text-[var(--muted)] group-hover:text-white/70 mt-0.5"
                                 >{item.role}</span
                             >
                         </span>
@@ -47,7 +50,7 @@
                             fill="none"
                             stroke="currentColor"
                             stroke-width="2"
-                            class="text-faint group-hover:text-brand-ink transition-colors shrink-0"
+                            class="text-[var(--faint)] group-hover:text-white shrink-0"
                         >
                             <path d="M7 17L17 7M9 7h8v8" />
                         </svg>

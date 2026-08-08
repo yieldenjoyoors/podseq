@@ -24,26 +24,26 @@
     ];
 </script>
 
-<section id="architecture" class="border-t border-line py-20 sm:py-28">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8">
-        <div class="max-w-2xl mb-12">
+<section id="architecture" class="border-b-2 border-[var(--border)] py-16">
+    <div class="mx-auto max-w-5xl px-4">
+        <div class="max-w-2xl mb-10">
             <span class="label">Architecture</span>
             <h2
-                class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5"
+                class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
             >
                 Built to be verified.
             </h2>
-            <p class="mt-4 text-muted text-lg leading-relaxed">
+            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
                 Ordering, execution, availability, and settlement are kept apart.
                 Each in its own crate, communicating through the
                 zero-dependency traits in
-                <span class="font-semibold text-ink">podseq-core</span>. This
+                <span class="font-bold text-[var(--fg)]">podseq-core</span>. This
                 separation is what lets any full node re-derive and audit the
                 entire chain from public data alone.
             </p>
         </div>
 
-        <div class="flow card p-5 sm:p-7">
+        <div class="flow">
             {#each nodes as node, i (node.label)}
                 <div class="flow-node" class:hot={node.hot}>
                     <span class="node-tag">{node.tag}</span>
@@ -58,7 +58,9 @@
             {/each}
         </div>
 
-        <p class="mt-6 text-sm text-faint max-w-2xl leading-relaxed">
+        <p
+            class="mt-6 text-xs max-w-2xl leading-relaxed text-[var(--muted)]"
+        >
             The sequencer broadcasts soft confirmations over P2P for sub-second
             latency. The finalizer posts each block to Walrus and anchors the
             blob ID on Sui. Full nodes reconstruct the chain from DA +
@@ -73,6 +75,9 @@
         align-items: stretch;
         gap: 0;
         overflow-x: auto;
+        border: 2px solid var(--border);
+        background: var(--bg);
+        padding: 1rem;
     }
     .flow-node {
         flex: 1 1 0;
@@ -81,43 +86,43 @@
         display: flex;
         flex-direction: column;
         gap: 0.25rem;
-        border-radius: 12px;
-        background: var(--color-surface-2);
-        border: 1px solid var(--color-line);
+        background: var(--surface);
+        border: 2px solid var(--border);
     }
     .flow-node.hot {
-        border-color: transparent;
-        background: rgba(16, 185, 129, 0.08);
-        box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+        background: var(--brand);
+        color: #fff;
     }
     .node-tag {
-        font-family: var(--font-mono);
         font-size: 0.6rem;
         letter-spacing: 0.16em;
         text-transform: uppercase;
-        color: var(--color-faint);
-    }
-    .flow-node.hot .node-tag {
-        color: var(--color-brand-ink);
-    }
-    .node-label {
-        font-family: var(--font-display);
-        font-size: 1.1rem;
-        color: var(--color-ink);
+        color: var(--faint);
         font-weight: 700;
     }
+    .flow-node.hot .node-tag {
+        color: rgba(255, 255, 255, 0.7);
+    }
+    .node-label {
+        font-size: 1.1rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: -0.01em;
+    }
     .node-sub {
-        font-size: 0.76rem;
-        color: var(--color-muted);
+        font-size: 0.72rem;
+        color: var(--muted);
+    }
+    .flow-node.hot .node-sub {
+        color: rgba(255, 255, 255, 0.85);
     }
     .flow-link {
         position: relative;
         align-self: center;
-        width: 40px;
-        min-width: 28px;
+        width: 32px;
+        min-width: 24px;
         height: 2px;
-        background: var(--color-line-2);
-        border-radius: 2px;
+        background: var(--border);
     }
     .pulse {
         position: absolute;
@@ -125,14 +130,11 @@
         width: 8px;
         height: 8px;
         margin-top: -4px;
-        border-radius: 50%;
-        background: var(--color-brand);
-        box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2);
+        background: var(--brand);
         animation: flowx 2.8s linear infinite;
     }
     .flow-link:nth-child(even) .pulse {
-        background: var(--color-brand-2);
-        box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
+        background: var(--fg);
         animation-delay: 1.4s;
     }
 
@@ -151,23 +153,6 @@
             margin-left: -4px;
             margin-top: 0;
             animation: flowy 2.6s linear infinite;
-        }
-    }
-
-    @keyframes flowy {
-        0% {
-            top: -6px;
-            opacity: 0;
-        }
-        15% {
-            opacity: 1;
-        }
-        85% {
-            opacity: 1;
-        }
-        100% {
-            top: 100%;
-            opacity: 0;
         }
     }
 </style>

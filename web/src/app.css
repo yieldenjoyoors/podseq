@@ -1,55 +1,69 @@
 @import "tailwindcss";
 
+/*
+ * Podseq design system: brutalist / minimal.
+ * Mirrors glean.at aesthetic: monochrome base (ink / paper) with a single
+ * accent (brand orange). Sharp corners, thick borders, hard offset shadows,
+ * monospace for everything.
+ */
+
 @theme {
-    /* Surfaces */
-    --color-paper: #f8f8f7;
-    --color-surface: #ffffff;
-    --color-surface-2: #f1f2f0;
+    --font-sans:
+        "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
+        monospace;
 
-    /* Text */
-    --color-ink: #0a0a09;
-    --color-muted: #44403c;
-    --color-faint: #78716c;
+    --color-ink: #0a0a0a;
+    --color-paper: #fafaf7;
+    --color-line: #0a0a0a;
 
-    /* Lines */
-    --color-line: rgba(10, 10, 9, 0.08);
-    --color-line-2: rgba(10, 10, 9, 0.14);
+    --color-brand: #e85f00;
+    --color-brand-ink: #fff3e8;
 
-    /* Primary accent: emerald green */
-    --color-brand: #10b981;
-    --color-brand-2: #059669;
-    --color-brand-ink: #047857;
+    --color-muted: #6b6b6b;
+    --color-faint: #c8c8c2;
+    --color-surface: #f0efe9;
 
-    /* Secondary accent: warm amber for depth & contrast */
-    --color-accent: #f59e0b;
-    --color-accent-2: #d97706;
+    --radius-brutal: 0px;
 
-    --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
-    --font-sans: "Schibsted Grotesk", ui-sans-serif, system-ui, sans-serif;
-    --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+    --shadow-hard: 4px 4px 0 0 var(--color-ink);
+    --shadow-hard-sm: 2px 2px 0 0 var(--color-ink);
+}
 
-    --radius: 16px;
+:root {
+    color-scheme: light;
+    --bg: #fafaf7;
+    --fg: #0a0a0a;
+    --surface: #f0efe9;
+    --border: #0a0a0a;
+    --muted: #6b6b6b;
+    --faint: #c8c8c2;
+    --brand: #e85f00;
+    --brand-ink: #fff3e8;
+}
+
+* {
+    border-color: var(--border);
 }
 
 @layer base {
     html {
-        color-scheme: light;
         scroll-behavior: smooth;
-        scroll-padding-top: 5.5rem;
+        scroll-padding-top: 5rem;
         -webkit-text-size-adjust: 100%;
     }
 
     body {
-        background-color: var(--color-paper);
-        color: var(--color-ink);
+        background: var(--bg);
+        color: var(--fg);
         font-family: var(--font-sans);
+        font-feature-settings: "ss01", "cv01";
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
         overflow-x: hidden;
     }
 
     ::selection {
-        background: var(--color-brand);
+        background: var(--brand);
         color: #fff;
     }
 
@@ -59,142 +73,74 @@
     }
 
     ::-webkit-scrollbar {
-        width: 11px;
-        height: 11px;
+        width: 10px;
+        height: 10px;
     }
     ::-webkit-scrollbar-track {
-        background: var(--color-paper);
+        background: var(--bg);
     }
     ::-webkit-scrollbar-thumb {
-        background: #d6d3c8;
-        border: 3px solid var(--color-paper);
-        border-radius: 20px;
+        background: var(--fg);
+        border: 2px solid var(--bg);
     }
-    ::-webkit-scrollbar-thumb:hover {
-        background: #bfbcaf;
-    }
-}
-
-/* ---------- atmosphere ---------- */
-
-.atmosphere {
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    overflow: hidden;
-}
-
-.atmosphere::before {
-    content: "";
-    position: absolute;
-    inset: -20%;
-    background:
-        radial-gradient(
-            60rem 42rem at 50% -14%,
-            rgba(16, 185, 129, 0.07),
-            transparent 62%
-        ),
-        radial-gradient(
-            50rem 30rem at 85% 10%,
-            rgba(245, 158, 11, 0.04),
-            transparent 50%
-        ),
-        radial-gradient(
-            40rem 36rem at 15% 30%,
-            rgba(16, 185, 129, 0.03),
-            transparent 55%
-        );
-}
-
-.bg-dots {
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    background-image: radial-gradient(var(--color-line) 1px, transparent 1px);
-    background-size: 24px 24px;
-    -webkit-mask-image: radial-gradient(
-        ellipse 80% 60% at 50% 0%,
-        #000 20%,
-        transparent 75%
-    );
-    mask-image: radial-gradient(
-        ellipse 80% 60% at 50% 0%,
-        #000 20%,
-        transparent 75%
-    );
-}
-
-.bg-grain {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    pointer-events: none;
-    opacity: 0.022;
-    mix-blend-mode: multiply;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 /* ---------- shared bits ---------- */
 
-.font-display {
-    font-family: var(--font-display);
-}
 .mono {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 
+/* eyebrow label: small uppercase tag introducing a section */
 .label {
     display: inline-flex;
     align-items: center;
-    gap: 0.45rem;
-    font-family: var(--font-sans);
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--color-brand-ink);
-    padding: 0.3rem 0.75rem;
-    border: 1px solid rgba(16, 185, 129, 0.2);
-    border-radius: 999px;
-    background: rgba(16, 185, 129, 0.06);
+    gap: 0.4rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
 }
 
+.label::before {
+    content: "//";
+    color: var(--brand);
+    font-weight: 800;
+}
+
+/* live status dot */
 .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--color-brand);
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+    width: 8px;
+    height: 8px;
+    background: var(--brand);
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--brand);
     animation: blink 2s ease-in-out infinite;
 }
 
 .accent {
-    color: var(--color-brand-ink);
+    color: var(--brand);
 }
 
 .text-gradient {
-    color: var(--color-brand-ink);
+    color: var(--brand);
 }
 
+/* ---------- cards / panels ---------- */
+
 .card {
-    background: var(--color-surface);
-    border: 1px solid var(--color-line);
-    border-radius: 16px;
-    box-shadow:
-        0 1px 2px rgba(10, 10, 9, 0.03),
-        0 8px 24px -16px rgba(10, 10, 9, 0.1);
+    background: var(--bg);
+    border: 2px solid var(--border);
     transition:
-        transform 0.25s ease,
-        box-shadow 0.25s ease,
-        border-color 0.25s ease;
+        transform 0.08s ease,
+        box-shadow 0.08s ease;
 }
-.card:hover {
-    transform: translateY(-2px);
-    box-shadow:
-        0 1px 2px rgba(10, 10, 9, 0.03),
-        0 16px 36px -16px rgba(10, 10, 9, 0.16);
-    border-color: var(--color-line-2);
+.card-press {
+    box-shadow: var(--shadow-hard-sm);
+}
+.card-press:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 var(--border);
 }
 
 /* ---------- buttons ---------- */
@@ -202,71 +148,83 @@
 .btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
     font-family: var(--font-sans);
-    font-weight: 600;
-    font-size: 0.9rem;
-    padding: 0.72rem 1.4rem;
-    border-radius: 999px;
-    border: 1px solid transparent;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    border: 2px solid var(--border);
+    padding: 0.6rem 1rem;
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: var(--shadow-hard-sm);
     cursor: pointer;
     transition:
-        transform 0.18s ease,
-        box-shadow 0.18s ease,
-        background 0.18s ease,
-        color 0.18s ease,
-        border-color 0.18s ease;
+        transform 0.08s ease,
+        box-shadow 0.08s ease;
 }
-.btn-primary {
-    background: var(--color-ink);
-    color: #fff;
+.btn:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 var(--border);
 }
-.btn-primary:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 14px 28px -12px rgba(10, 10, 9, 0.45);
-}
-.btn-ghost {
-    background: var(--color-surface);
-    border-color: var(--color-line-2);
-    color: var(--color-ink);
-}
-.btn-ghost:hover {
-    border-color: var(--color-ink);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px -6px rgba(10, 10, 9, 0.1);
+.btn:active {
+    transform: translate(1px, 1px);
+    box-shadow: 0 0 0 0 var(--border);
 }
 .btn-brand {
-    background: linear-gradient(
-        135deg,
-        var(--color-brand),
-        var(--color-brand-2)
-    );
+    background: var(--brand);
     color: #fff;
-    box-shadow: 0 4px 16px -6px rgba(16, 185, 129, 0.4);
 }
-.btn-brand:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 10px 24px -8px rgba(16, 185, 129, 0.5);
+.btn-ghost {
+    box-shadow: none;
+    border-color: var(--border);
+    background: transparent;
+}
+.btn-ghost:hover {
+    box-shadow: var(--shadow-hard-sm);
+    transform: translate(-1px, -1px);
+}
+
+/* ---------- chips & tags ---------- */
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    border: 1.5px solid var(--border);
+    padding: 0.1rem 0.5rem;
+    background: var(--bg);
+}
+
+.tag {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    border: 1px solid var(--border);
+    padding: 0.05rem 0.4rem;
+    background: var(--surface);
 }
 
 /* ---------- reveal ---------- */
 
 .reveal {
     opacity: 0;
-    transform: translateY(22px);
-    animation: rise 0.75s cubic-bezier(0.18, 0.7, 0.18, 1) forwards;
+    transform: translateY(16px);
+    animation: rise 0.5s ease forwards;
 }
 
-/* ---------- section accent band ---------- */
+/* ---------- section accents ---------- */
 
 .section-accent {
-    position: relative;
-    background: linear-gradient(
-        180deg,
-        rgba(16, 185, 129, 0.03) 0%,
-        transparent 50%,
-        rgba(16, 185, 129, 0.02) 100%
-    );
+    background: var(--surface);
 }
 
 /* ---------- stat badge ---------- */
@@ -275,26 +233,18 @@
     display: inline-flex;
     align-items: baseline;
     gap: 0.3rem;
-    font-family: var(--font-display);
+    font-weight: 800;
 }
 .stat-badge .stat-num {
     font-size: 2.4rem;
-    font-weight: 800;
     line-height: 1;
     letter-spacing: -0.03em;
-    background: linear-gradient(
-        135deg,
-        var(--color-brand),
-        var(--color-brand-2)
-    );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--brand);
 }
 .stat-badge .stat-unit {
     font-size: 0.85rem;
     font-weight: 600;
-    color: var(--color-muted);
+    color: var(--muted);
 }
 
 /* ---------- keyframes ---------- */
@@ -312,16 +262,6 @@
     to {
         opacity: 1;
         transform: translateY(0);
-    }
-}
-@keyframes rise-scale {
-    from {
-        opacity: 0;
-        transform: translateY(28px) scale(0.97);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
     }
 }
 @keyframes flowx {
@@ -356,30 +296,13 @@
         opacity: 0;
     }
 }
-@keyframes floaty {
-    0%,
-    100% {
-        transform: translateY(0);
-    }
-    50% {
-        transform: translateY(-8px);
-    }
-}
-@keyframes shimmer {
-    0% {
-        transform: translateX(-100%);
-    }
-    100% {
-        transform: translateX(200%);
-    }
-}
 
-/* ---------- docs prose (light) ---------- */
+/* ---------- docs prose (brutalist) ---------- */
 
 .prose-docs {
-    font-size: 1.05rem;
-    line-height: 1.75;
-    color: #34343c;
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: var(--fg);
     max-width: 74ch;
 }
 .prose-docs > *:first-child {
@@ -387,13 +310,13 @@
 }
 
 .prose-docs h1 {
-    font-family: var(--font-display);
-    font-size: 2.5rem;
+    font-size: 2rem;
     line-height: 1.1;
-    letter-spacing: -0.02em;
-    color: var(--color-ink);
+    letter-spacing: -0.01em;
+    color: var(--fg);
     margin: 0 0 0.5rem;
-    font-weight: 700;
+    font-weight: 800;
+    text-transform: uppercase;
 }
 .prose-docs h1 + p,
 .prose-docs h1 + blockquote {
@@ -401,21 +324,20 @@
 }
 
 .prose-docs h2 {
-    font-family: var(--font-display);
-    font-size: 1.6rem;
-    letter-spacing: -0.015em;
-    color: var(--color-ink);
+    font-size: 1.4rem;
+    letter-spacing: -0.01em;
+    color: var(--fg);
     margin: 3rem 0 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--color-line);
+    border-bottom: 2px solid var(--border);
     scroll-margin-top: 6rem;
-    font-weight: 700;
+    font-weight: 800;
+    text-transform: uppercase;
 }
 .prose-docs h3 {
-    font-family: var(--font-display);
-    font-size: 1.2rem;
+    font-size: 1.1rem;
     letter-spacing: -0.01em;
-    color: var(--color-ink);
+    color: var(--fg);
     margin: 2.2rem 0 0.7rem;
     scroll-margin-top: 6rem;
     font-weight: 700;
@@ -426,19 +348,18 @@
 }
 
 .prose-docs a {
-    color: var(--color-brand-2);
+    color: var(--brand);
     text-decoration: underline;
-    text-decoration-color: rgba(67, 56, 202, 0.4);
     text-underline-offset: 3px;
-    font-weight: 500;
+    font-weight: 600;
 }
 .prose-docs a:hover {
-    text-decoration-color: var(--color-brand-2);
+    text-decoration-thickness: 2px;
 }
 
 .prose-docs strong {
-    color: var(--color-ink);
-    font-weight: 600;
+    color: var(--fg);
+    font-weight: 700;
 }
 
 .prose-docs ul,
@@ -450,73 +371,67 @@
     margin: 0.4rem 0;
 }
 .prose-docs li::marker {
-    color: var(--color-brand);
+    color: var(--brand);
 }
 
 .prose-docs blockquote {
     margin: 1.4rem 0;
-    padding: 0.7rem 1.2rem;
-    border-left: 3px solid var(--color-brand);
-    background: var(--color-surface);
-    border-radius: 0 8px 8px 0;
-    color: var(--color-muted);
+    padding: 0.4rem 0 0.4rem 1.2rem;
+    border-left: 4px solid var(--brand);
+    color: var(--muted);
+    font-style: italic;
 }
 
 .prose-docs hr {
     border: none;
-    border-top: 1px solid var(--color-line);
+    border-top: 2px solid var(--border);
     margin: 2.4rem 0;
 }
 
 .prose-docs code {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 0.85em;
-    background: var(--color-surface-2);
-    color: var(--color-brand-ink);
-    padding: 0.14em 0.4em;
-    border-radius: 5px;
-    border: 1px solid var(--color-line);
+    background: var(--surface);
+    color: var(--fg);
+    padding: 0.1em 0.35em;
+    border: 1px solid var(--border);
 }
 
-/* code BLOCKS stay dark */
+/* code BLOCKS stay dark — high-contrast terminal aesthetic */
 .prose-docs pre {
     position: relative;
     margin: 1.5rem 0;
     padding: 1.9rem 1.2rem 1.1rem;
-    background: #0c0e11;
-    border: 1px solid #20242b;
-    border-radius: 12px;
+    background: #0a0a0a;
+    border: 2px solid var(--border);
+    box-shadow: var(--shadow-hard-sm);
     overflow-x: auto;
-    font-size: 0.84rem;
+    font-size: 0.82rem;
     line-height: 1.6;
-    box-shadow: 0 14px 30px -20px rgba(23, 23, 29, 0.4);
 }
 .prose-docs pre::before {
     content: attr(data-lang);
     position: absolute;
     top: 0;
     left: 0;
-    font-family: var(--font-mono);
     font-size: 0.62rem;
     letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: #6a6b6e;
+    color: #9a9a9a;
     padding: 0.32rem 0.6rem;
-    border-right: 1px solid #20242b;
-    border-bottom: 1px solid #20242b;
-    border-bottom-right-radius: 8px;
+    border-right: 1px solid #3a3a3a;
+    border-bottom: 1px solid #3a3a3a;
 }
 .prose-docs .doc-copy {
     position: absolute;
     top: 0;
     right: 0;
-    font-family: var(--font-mono);
     font-size: 0.62rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #8c8c95;
+    color: #9a9a9a;
     background: none;
-    border: 1px solid #20242b;
+    border: 1px solid #3a3a3a;
     border-top: none;
     border-right: none;
     padding: 0.32rem 0.6rem;
@@ -524,22 +439,22 @@
     transition: color 0.15s ease;
 }
 .prose-docs .doc-copy:hover {
-    color: var(--color-brand);
+    color: var(--brand);
 }
 .prose-docs .doc-copy.copied {
-    color: var(--color-brand);
+    color: var(--brand);
 }
 .prose-docs pre code {
     background: none;
     border: none;
-    color: #d8d4ca;
+    color: #d8d8d2;
     padding: 0;
     font-size: inherit;
     line-height: inherit;
 }
 .prose-docs pre code.language-text,
 .prose-docs pre code.language-txt {
-    color: #d8d4ca;
+    color: #d8d8d2;
     line-height: 1.4;
 }
 
@@ -555,9 +470,8 @@
     transform: translateY(-50%);
     width: 1.1rem;
     text-align: center;
-    color: var(--color-faint);
+    color: var(--faint);
     text-decoration: none;
-    font-family: var(--font-mono);
     font-weight: 400;
     opacity: 0;
     transition:
@@ -573,23 +487,22 @@
     opacity: 1;
 }
 .prose-docs .heading-anchor:hover {
-    color: var(--color-brand-ink);
+    color: var(--brand);
     text-decoration: none;
 }
 
 /*
- * Syntax highlighting for docs code blocks.
- * Palette mirrors the landing-page terminal (QuickStart.svelte) so the two
- * stay visually consistent: One Dark base + brand emerald for keywords.
+ * Syntax highlighting for docs code blocks + landing terminal.
+ * Monochrome-leaning with brand green for keywords.
  */
 .prose-docs pre code.hljs {
-    color: #d8d4ca;
+    color: #d8d8d2;
     background: none;
     padding: 0;
 }
 .prose-docs .hljs-comment,
 .prose-docs .hljs-quote {
-    color: #6b7280;
+    color: #6b6b6b;
     font-style: italic;
 }
 .prose-docs .hljs-keyword,
@@ -597,7 +510,7 @@
 .prose-docs .hljs-literal,
 .prose-docs .hljs-section,
 .prose-docs .hljs-link {
-    color: #10b981;
+    color: #f59a52;
     font-weight: 600;
 }
 .prose-docs .hljs-string,
@@ -642,26 +555,26 @@
     width: 100%;
     margin: 1.5rem 0;
     border-collapse: collapse;
-    font-size: 0.94rem;
+    font-size: 0.9rem;
     display: block;
     overflow-x: auto;
 }
 .prose-docs thead {
-    background: var(--color-surface-2);
+    background: var(--surface);
 }
 .prose-docs th,
 .prose-docs td {
     text-align: left;
-    padding: 0.65rem 0.9rem;
-    border-bottom: 1px solid var(--color-line);
+    padding: 0.6rem 0.9rem;
+    border: 1.5px solid var(--border);
     vertical-align: top;
 }
 .prose-docs th {
-    font-family: var(--font-sans);
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--color-muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--fg);
 }
 .prose-docs td code,
 .prose-docs th code {
