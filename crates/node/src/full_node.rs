@@ -11,8 +11,9 @@ use anyhow::{Context, Result};
 use podseq_core::DataAvailability;
 use podseq_engine::{Engine, PARENT_BEACON_BLOCK_ROOT};
 use podseq_p2p::BlockReceiver;
-use podseq_store::StateStore;
 use podseq_sui::Client as SuiClient;
+
+use crate::store::StateStore;
 use std::str::FromStr;
 use tokio::signal;
 use tracing::{debug, error, info, warn};
@@ -51,7 +52,7 @@ impl FullNode {
         config: &Config,
         p2p_receiver: Option<BlockReceiver>,
     ) -> Result<Self> {
-        podseq_store::init(&config.data_dir)
+        crate::store::init(&config.data_dir)
             .with_context(|| format!("initializing storage under {}", config.data_dir.display()))?;
         let poll_interval = Duration::from_millis(config.sequencer.block_time_ms.max(100));
 
@@ -353,7 +354,7 @@ impl FullNode {
             .await
             .context("advancing finalized via engine_forkchoiceUpdatedV3")?;
 
-        if let Err(e) = self.state_store.save(&podseq_store::ChainState {
+        if let Err(e) = self.state_store.save(&crate::store::ChainState {
             head: format!("{:#x}", self.head),
             safe: format!("{:#x}", self.safe),
             finalized: format!("{:#x}", self.finalized),
@@ -409,7 +410,7 @@ impl FullNode {
 /// Returns `None` if any hash is missing or unparseable, so the caller falls
 /// back to discovering the head from Reth. Empty strings (a fresh or partial
 /// state file) are treated as absent rather than errors.
-fn parse_forkchoice(state: &podseq_store::ChainState) -> Option<(B256, B256, B256)> {
+fn parse_forkchoice(state: &crate::store::ChainState) -> Option<(B256, B256, B256)> {
     let parse = |s: &str| {
         let s = s.trim();
         if s.is_empty() {

@@ -1,6 +1,11 @@
-//! Sui signer key parsing, shared across crates.
+//! Sui signer key parsing and block signing, shared across crates.
 
+use std::path::Path;
+
+use crate::{BlockSigner, Error, Header, Signature};
 use sui_crypto::ed25519::Ed25519PrivateKey;
+use sui_crypto::Signer;
+use sui_sdk_types::{Address, Ed25519PublicKey, SimpleSignature};
 
 /// Parses a Sui ed25519 signer key from a string, accepting both formats the
 /// Sui CLI produces:
@@ -33,6 +38,54 @@ pub fn parse_signer_key(s: &str) -> Result<Ed25519PrivateKey, String> {
     let mut key = [0u8; 32];
     key.copy_from_slice(&raw[1..]);
     Ok(Ed25519PrivateKey::new(key))
+}
+
+/// Signs block headers with an ed25519 key loaded from a suiprivkey file.
+///
+/// This is the canonical `BlockSigner` implementation; it lives next to the
+/// trait so the interface and its reference impl stay coupled.
+pub struct Ed25519BlockSigner {
+    key: Ed25519PrivateKey,
+}
+
+impl Ed25519BlockSigner {
+    /// Loads the signer key from a suiprivkey file.
+    ///
+    /// Accepts both formats the Sui CLI produces: Bech32 `suiprivkey1...` and
+    /// raw base64 (33-byte flag + key payload), via `parse_signer_key`.
+    pub fn from_suiprivkey_file(path: &Path) -> Result<Self, Error> {
+        let key_str = std::fs::read_to_string(path)
+            .map_err(|e| Error::Execution(format!("reading block key: {e}")))?
+            .trim()
+            .to_string();
+        let key = parse_signer_key(&key_str)
+            .map_err(|e| Error::Execution(format!("invalid block key: {e}")))?;
+        Ok(Self { key })
+    }
+
+    /// Returns the sequencer's ed25519 public key.
+    pub fn pub_key(&self) -> Ed25519PublicKey {
+        self.key.public_key()
+    }
+
+    /// Returns the Sui address derived from the public key.
+    pub fn address(&self) -> Address {
+        self.key.public_key().derive_address()
+    }
+}
+
+impl BlockSigner for Ed25519BlockSigner {
+    fn sign_header(&self, header: &Header) -> Result<Signature, Error> {
+        let msg = header.signing_message();
+        let sig: SimpleSignature = self
+            .key
+            .try_sign(&msg)
+            .map_err(|e| Error::Execution(format!("signing header: {e}")))?;
+        let SimpleSignature::Ed25519 { signature, .. } = sig else {
+            return Err(Error::Execution("unexpected signature scheme".into()));
+        };
+        Ok(signature.into())
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::StoreError;
+use super::StoreError;
 
 /// Persistent chain state: fork-choice hashes plus sync metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
