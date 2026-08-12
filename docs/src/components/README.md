@@ -25,9 +25,3 @@ traits defined in [`podseq-core`](./core.md).
 | `sui`    | Walrus DA + Sui settlement + bridge vault                                  | `DataAvailability`, `Settlement` |
 | `p2p`    | Block propagation via Commonware                                           | (none)                           |
 | `node`   | Binary: CLI, config, runner, full node, bridge relayer, persistent storage | (none)                           |
-
-Block signing used to be its own crate (`podseq-sequencer`); it has been folded
-into `podseq-core` next to the `BlockSigner` trait. Persistent storage used to
-be `podseq-store`; it now lives as the `store` module inside the `node` binary
-(its only consumer). See [Block signing](./sequencer.md) and
-[Store](./store.md).
