@@ -9,6 +9,7 @@ mod keyring;
 mod metrics;
 mod runner;
 mod settlement;
+mod store;
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -336,7 +337,7 @@ async fn start_sequencer(
         .context("invalid genesis_hash")?;
 
     let block_signer = {
-        let signer = podseq_sequencer::Ed25519BlockSigner::from_suiprivkey_file(&signer_key_path)
+        let signer = podseq_core::Ed25519BlockSigner::from_suiprivkey_file(&signer_key_path)
             .context("loading signer key for block signing")?;
         info!(key = %signer_key_path.display(), "signer key loaded");
         info!(address = %signer.address(), "sequencer address (Sui, ed25519)");

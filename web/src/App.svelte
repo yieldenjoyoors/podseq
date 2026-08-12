@@ -58,18 +58,14 @@
     });
 </script>
 
-<div class="atmosphere"></div>
-<div class="bg-dots"></div>
-<div class="bg-grain"></div>
-
 <Nav />
 
 {#if route.kind === "docs"}
-    <div class="pt-16 min-h-screen">
+    <div class="pt-14 min-h-screen">
         <Docs doc={route.doc} anchor={route.anchor} />
     </div>
 {:else}
-    <main class="pt-16">
+    <main class="pt-14">
         <Hero />
         <Stack />
         <ByDesign />

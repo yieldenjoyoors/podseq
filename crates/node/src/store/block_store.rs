@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use podseq_core::Block;
 
-use crate::StoreError;
+use super::StoreError;
 
 /// Filesystem-backed store for blocks indexed by height.
 pub struct BlockStore {
@@ -44,6 +44,7 @@ impl BlockStore {
     }
 
     /// Returns whether a block at the given height is stored.
+    #[allow(dead_code)]
     pub fn has(&self, height: u64) -> bool {
         self.dir.join(format!("{height}")).exists()
     }

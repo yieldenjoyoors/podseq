@@ -36,13 +36,16 @@ handled by Reth, not podseq: see [Sequencer](./components/sequencer.md).)
 
 ```text
 crates/
-├── core/        # Interfaces only
+├── core/        # Interfaces, types, Ed25519BlockSigner, Commonware runtime bridge
 ├── engine/      # Reth Engine API client
-├── sequencer/   # Block header signing
-├── store/       # Persistent storage (blocks, state, pending crash-recovery)
 ├── sui/         # Sui layer: Walrus DA + settlement + bridge vault (one wallet)
 ├── p2p/         # Block propagation (Commonware discovery + broadcast)
-└── node/        # Binary: CLI, config, runner, full node, bridge relayer
+└── node/        # Binary: CLI, config, runner, full node, bridge relayer,
+                 #        and the `store` module (blocks, state, crash recovery)
+move/            # Settlement contract (Sui Move)
+solidity/        # EVM-side contracts
+e2e/             # Integration tests against a real Reth container
+docs/            # Project documentation
 ```
 
 `podseq-sui` owns Walrus data availability, Sui settlement, and the Sui side of
@@ -52,12 +55,15 @@ same crate. See [Sui Settlement](./components/sui.md) and
 
 ## Design principles
 
-1. **Zero-dependency core.** `podseq-core` contains only traits and types with no
-   external dependencies. Interfaces are stable; any implementation can be swapped
-   without touching consumers.
+1. **Zero-dependency core.** `podseq-core` contains only traits, types, and the
+   canonical `BlockSigner` implementation, with no external dependencies beyond
+   the Sui signer primitives. Interfaces are stable; any implementation can be
+   swapped without touching consumers.
 
-2. **One responsibility per crate.** Sequencing, execution, DA, settlement, and
-   networking each live in their own crate and communicate only through core traits.
+2. **One responsibility per crate.** Execution, DA/settlement, and networking
+   each live in their own crate and communicate only through core traits. Block
+   signing and persistent storage are single-consumer concerns and live next to
+   their consumers (signing in `core`, storage in the `node` binary).
 
 3. **Rust-native stack.** Async with Tokio, errors via `thiserror` in libraries and
    `anyhow` in the binary, serialization with Serde.

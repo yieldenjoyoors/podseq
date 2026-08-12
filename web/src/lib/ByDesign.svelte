@@ -28,40 +28,41 @@
     ];
 </script>
 
-<section id="design" class="border-t border-line py-20 sm:py-28">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8">
-        <div class="max-w-2xl mb-12">
+<section id="design" class="border-b-2 border-[var(--border)] py-16">
+    <div class="mx-auto max-w-5xl px-4">
+        <div class="max-w-2xl mb-10">
             <span class="label">The stack</span>
             <h2
-                class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5"
+                class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
             >
                 Four layers. One coherent system.
             </h2>
-            <p class="mt-4 text-muted text-lg leading-relaxed">
-                Podseq as secquencer, EVM execution on Reth, data availability
-                on Walrus, settlement on Sui. Because Walrus blobs are Sui
-                objects, there's no trust hop between DA and settlement.
+            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                Podseq as sequencer, EVM execution on Reth, data availability on
+                Walrus, settlement on Sui. Because Walrus blobs are Sui objects,
+                there's no trust hop between DA and settlement.
             </p>
         </div>
 
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            {#each stats as s (s.label)}
+        <div
+            class="grid grid-cols-2 border-2 border-[var(--border)] md:grid-cols-4"
+        >
+            {#each stats as s, i (s.label)}
                 <div
-                    class="card p-6 group{s.featured
-                        ? ' bg-surface-2 ring-1 ring-brand/40'
-                        : ''}"
+                    class="p-6 {i > 0 ? 'border-l-2 border-l-[var(--border)]' : ''} {i >= 2 ? 'border-t-2 border-t-[var(--border)] md:border-t-0' : ''} {s.featured ? 'bg-[var(--brand)] text-white' : 'bg-[var(--bg)]'}"
                 >
                     <span
-                        class="font-display font-extrabold text-5xl leading-none {s.featured
-                            ? 'text-brand-ink'
-                            : 'text-ink'}">{s.big}</span
+                        class="font-extrabold text-3xl uppercase tracking-tight leading-none block"
+                        >{s.big}</span
                     >
                     <div
-                        class="mt-3 font-display font-bold text-ink text-lg tracking-tight"
+                        class="mt-3 font-bold text-sm uppercase tracking-wide {s.featured ? 'text-white' : 'text-[var(--fg)]'}"
                     >
                         {s.label}
                     </div>
-                    <p class="mt-1.5 text-sm text-muted leading-relaxed">
+                    <p
+                        class="mt-1.5 text-xs leading-relaxed {s.featured ? 'text-white/80' : 'text-[var(--muted)]'}"
+                    >
                         {s.sub}
                     </p>
                 </div>

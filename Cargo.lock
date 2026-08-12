@@ -4069,14 +4069,13 @@ dependencies = [
  "alloy-signer-local",
  "alloy-sol-types",
  "anyhow",
+ "bcs 0.2.1",
  "clap",
  "commonware-cryptography",
  "hex",
  "podseq-core",
  "podseq-engine",
  "podseq-p2p",
- "podseq-sequencer",
- "podseq-store",
  "podseq-sui",
  "prometheus-client 0.25.0",
  "rand 0.8.7",
@@ -4085,6 +4084,7 @@ dependencies = [
  "serde_json",
  "sui-crypto",
  "sui-sdk-types",
+ "thiserror 2.0.19",
  "tokio",
  "toml 0.8.23",
  "tracing",
@@ -4099,6 +4099,7 @@ dependencies = [
  "commonware-runtime",
  "serde",
  "sui-crypto",
+ "sui-sdk-types",
 ]
 
 [[package]]
@@ -4165,28 +4166,6 @@ dependencies = [
  "hex",
  "podseq-core",
  "rand 0.10.2",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "podseq-sequencer"
-version = "0.1.0"
-dependencies = [
- "podseq-core",
- "sui-crypto",
- "sui-sdk-types",
-]
-
-[[package]]
-name = "podseq-store"
-version = "0.1.0"
-dependencies = [
- "bcs 0.2.1",
- "podseq-core",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

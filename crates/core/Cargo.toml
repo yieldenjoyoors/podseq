@@ -10,4 +10,5 @@ license.workspace = true
 serde = { workspace = true }
 commonware-runtime = { workspace = true }
 sui-crypto.workspace = true
+sui-sdk-types.workspace = true
 base64.workspace = true

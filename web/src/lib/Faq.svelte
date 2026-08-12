@@ -29,59 +29,57 @@
     let open = $state<number | null>(0);
 </script>
 
-<section id="faq" class="border-t border-line section-accent py-20 sm:py-28">
-    <div class="mx-auto max-w-3xl px-5 sm:px-8">
-        <div class="mb-10 text-center">
+<section
+    id="faq"
+    class="border-b-2 border-[var(--border)] bg-[var(--surface)] py-16"
+>
+    <div class="mx-auto max-w-3xl px-4">
+        <div class="mb-10">
             <span class="label">FAQ</span>
             <h2
-                class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5"
+                class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
             >
                 Questions teams ask before committing.
             </h2>
         </div>
 
-        <div class="card overflow-hidden p-0">
+        <div class="faq-list">
             {#each faqs as faq, i (faq.q)}
-                <button
-                    class="faq-q"
-                    class:open={open === i}
-                    onclick={() => (open = open === i ? null : i)}
-                    aria-expanded={open === i}
-                >
-                    <span
-                        class="font-display font-semibold text-ink text-[16px] text-left"
-                        >{faq.q}</span
+                <div class="faq-item" class:open={open === i}>
+                    <button
+                        class="faq-q"
+                        class:open={open === i}
+                        onclick={() => (open = open === i ? null : i)}
+                        aria-expanded={open === i}
                     >
-                    <span
-                        class="faq-icon"
-                        class:rot={open === i}
-                        aria-hidden="true"
-                    >
-                        <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2.4"
-                        >
-                            <path d="M12 5v14M5 12h14" />
-                        </svg>
-                    </span>
-                </button>
-                {#if open === i}
-                    <div class="faq-a">
-                        <p class="text-muted leading-relaxed">{faq.a}</p>
-                    </div>
-                {/if}
+                        <span class="faq-q-text">{faq.q}</span>
+                        <span class="faq-icon" class:rot={open === i} aria-hidden="true">
+                            <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.4"
+                            >
+                                <path d="M12 5v14M5 12h14" />
+                            </svg>
+                        </span>
+                    </button>
+                    {#if open === i}
+                        <div class="faq-a">
+                            <p>{faq.a}</p>
+                        </div>
+                    {/if}
+                </div>
             {/each}
         </div>
 
-        <p class="mt-8 text-center text-sm text-muted">
+        <p class="mt-8 text-center text-xs text-[var(--muted)]">
             Still have questions?
             <a
                 href="#/docs"
-                class="text-brand-ink font-semibold underline decoration-brand/40 underline-offset-4 hover:decoration-brand"
+                class="font-bold text-[var(--brand)] underline underline-offset-4 hover:no-underline"
             >
                 Read the full documentation
             </a>
@@ -90,42 +88,54 @@
 </section>
 
 <style>
+    .faq-list {
+        border: 2px solid var(--border);
+        background: var(--bg);
+    }
+    .faq-item {
+        border-bottom: 2px solid var(--border);
+    }
+    .faq-item:last-child {
+        border-bottom: none;
+    }
+    .faq-item.open {
+        background: var(--surface);
+    }
     .faq-q {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
         width: 100%;
-        padding: 1.15rem 1.4rem;
+        padding: 1.1rem 1.4rem;
         border: none;
-        border-bottom: 1px solid var(--color-line);
         background: transparent;
         cursor: pointer;
-        transition: background 0.15s ease;
+        text-align: left;
     }
-    .faq-q:last-of-type {
-        border-bottom: none;
-    }
-    .faq-q:hover {
-        background: var(--color-surface-2);
-    }
-    .faq-q.open {
-        background: var(--color-surface-2);
+    .faq-q-text {
+        font-weight: 700;
+        font-size: 0.92rem;
+        text-transform: uppercase;
+        letter-spacing: -0.01em;
     }
     .faq-icon {
-        color: var(--color-faint);
+        color: var(--muted);
         flex-shrink: 0;
         transition:
-            transform 0.2s ease,
-            color 0.2s ease;
+            transform 0.15s ease,
+            color 0.15s ease;
     }
     .faq-icon.rot {
         transform: rotate(45deg);
-        color: var(--color-brand-ink);
+        color: var(--brand);
     }
     .faq-a {
-        padding: 0.2rem 1.4rem 1.3rem;
-        background: var(--color-surface-2);
-        border-bottom: 1px solid var(--color-line);
+        padding: 0 1.4rem 1.3rem;
+    }
+    .faq-a p {
+        font-size: 0.85rem;
+        line-height: 1.7;
+        color: var(--muted);
     }
 </style>

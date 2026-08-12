@@ -8,8 +8,6 @@ license = "Apache-2.0"
 members = [
     "crates/core",
     "crates/engine",
-    "crates/sequencer",
-    "crates/store",
     "crates/sui",
     "crates/p2p",
     "crates/node",
@@ -22,10 +20,8 @@ resolver = "2"
 # Internal crates
 podseq-core = { path = "crates/core" }
 podseq-engine = { path = "crates/engine" }
-podseq-sequencer = { path = "crates/sequencer" }
 podseq-sui = { path = "crates/sui" }
 podseq-p2p = { path = "crates/p2p" }
-podseq-store = { path = "crates/store" }
 
 # General
 anyhow = "1"
@@ -72,14 +68,14 @@ sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da
 prometheus-client = "0.25"
 
 # Commonware (p2p, storage, runtime)
-commonware-runtime = "2026.5"
-commonware-storage = "2026.5"
-commonware-p2p = "2026.5"
-commonware-broadcast = "2026.5"
-commonware-cryptography = "2026.5"
-commonware-codec = "2026.5"
-commonware-math = "2026.5"
-commonware-utils = "2026.5"
+commonware-runtime = "2026.7"
+commonware-storage = "2026.7"
+commonware-p2p = "2026.7"
+commonware-broadcast = "2026.7"
+commonware-cryptography = "2026.7"
+commonware-codec = "2026.7"
+commonware-math = "2026.7"
+commonware-utils = "2026.7"
 
 [profile.release]
 opt-level = 3

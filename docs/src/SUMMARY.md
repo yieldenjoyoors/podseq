@@ -22,7 +22,7 @@
 - [Overview](./components/README.md)
 - [Core](./components/core.md)
 - [Engine](./components/engine.md)
-- [Sequencer](./components/sequencer.md)
+- [Block signing](./components/sequencer.md)
 - [Store](./components/store.md)
 - [Sui (DA + Settlement + Bridge)](./components/sui.md)
 - [P2P](./components/p2p.md)

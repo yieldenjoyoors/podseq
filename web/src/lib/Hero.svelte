@@ -3,129 +3,119 @@
     const finBlocks = [0, 1, 2];
 </script>
 
-<section
-    id="hero"
-    class="relative pt-32 sm:pt-40 pb-24 sm:pb-32 overflow-hidden"
->
-    <div class="mx-auto max-w-7xl px-5 sm:px-8 pt-14 sm:pt-20">
-        <div
-            class="grid lg:grid-cols-[1.05fr_0.95fr] gap-14 lg:gap-20 items-center"
-        >
-            <!-- copy -->
-            <div>
-                <h1
-                    class="reveal font-display font-extrabold tracking-[-0.04em] text-ink leading-[0.94] text-[3.4rem] sm:text-7xl lg:text-[5rem]"
-                    style="animation-delay:80ms"
-                >
-                    Ship your own<br />
-                    <span class="text-gradient">EVM chain.</span>
-                </h1>
+<section id="hero" class="border-b-2 border-[var(--border)]">
+    <div
+        class="mx-auto grid max-w-5xl grid-cols-1 gap-12 px-4 py-16 lg:grid-cols-2 lg:items-center lg:py-24"
+    >
+        <!-- copy -->
+        <div>
+            <h1
+                class="reveal text-4xl font-extrabold uppercase leading-[0.95] tracking-tight md:text-6xl"
+                style="animation-delay:60ms"
+            >
+                Ship your own<br />
+                <span class="text-[var(--brand)]">EVM chain.</span>
+            </h1>
 
-                <p
-                    class="reveal mt-8 text-lg sm:text-xl text-muted leading-relaxed max-w-lg"
-                    style="animation-delay:180ms"
-                >
-                    Deploy EVM smart contracts on dedicated infrastructure with
-                    verifiable data availability and settlement anchored to Sui.
-                    Predictable throughput, no surprises.
-                </p>
+            <p
+                class="reveal mt-6 max-w-md text-sm leading-relaxed text-[var(--muted)]"
+                style="animation-delay:140ms"
+            >
+                Deploy EVM smart contracts on dedicated infrastructure with
+                verifiable data availability and settlement anchored to Sui.
+                Predictable throughput, no surprises.
+            </p>
 
-                <div
-                    class="reveal mt-10 flex flex-wrap items-center gap-3"
-                    style="animation-delay:260ms"
-                >
-                    <a href="#/docs/setup" class="btn btn-brand">
-                        Start building
-                        <svg
-                            width="15"
-                            height="15"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2.4"
-                        >
-                            <path d="M5 12h14M13 6l6 6-6 6" />
-                        </svg>
-                    </a>
-                    <a href="#/docs" class="btn btn-ghost">Explore the docs</a>
-                </div>
-
-                <!-- trust badges -->
-                <div
-                    class="reveal mt-10 flex flex-wrap items-center gap-x-6 gap-y-2"
-                    style="animation-delay:320ms"
-                >
-                    <a
-                        href="mailto:hello@podseq.xyz"
-                        class="text-sm text-brand-ink font-semibold hover:underline underline-offset-4"
+            <div
+                class="reveal mt-8 flex flex-col gap-3 sm:flex-row"
+                style="animation-delay:220ms"
+            >
+                <a href="#/docs/setup" class="btn btn-brand">
+                    Start building
+                    <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
                     >
-                        Need a custom chain? Let's talk.
-                    </a>
-                </div>
+                        <path d="M5 12h14M13 6l6 6-6 6" />
+                    </svg>
+                </a>
+                <a href="#/docs" class="btn">Explore the docs</a>
             </div>
 
-            <!-- the sequence visual -->
-            <div class="reveal" style="animation-delay:200ms">
-                <div class="seq-card">
-                    <div class="seq-head">
-                        <span
-                            class="flex items-center gap-2 text-sm font-semibold text-ink"
-                        >
-                            <span class="dot"></span> sequencer
-                        </span>
-                        <span
-                            class="font-mono text-[10px] tracking-[0.18em] text-brand font-semibold"
-                        >
-                            LIVE
-                        </span>
-                    </div>
+            <div
+                class="reveal mt-8 flex flex-wrap items-center gap-x-6 gap-y-2"
+                style="animation-delay:280ms"
+            >
+                <a
+                    href="mailto:hello@podseq.xyz"
+                    class="text-xs font-bold uppercase tracking-wide text-[var(--brand)] underline underline-offset-4 hover:no-underline"
+                >
+                    Need a custom chain? Let's talk.
+                </a>
+            </div>
+        </div>
 
-                    <div class="seq-stages">
-                        <span>build</span>
-                        <span>p2p</span>
-                        <span>walrus</span>
-                        <span>sui</span>
-                    </div>
-
-                    <div class="seq-lanes">
-                        <div class="lane">
-                            <div class="lane-label">
-                                <span class="lane-title">production</span>
-                                <span class="lane-note">sub-second</span>
-                            </div>
-                            <div class="lane-track">
-                                {#each prodBlocks as b (b)}
-                                    <span
-                                        class="pill pill-prod"
-                                        style="animation-delay:{b * 0.75}s"
-                                    ></span>
-                                {/each}
-                            </div>
-                        </div>
-
-                        <div class="lane">
-                            <div class="lane-label">
-                                <span class="lane-title lane-title-2"
-                                    >finalization</span
-                                >
-                                <span class="lane-note">walrus → sui</span>
-                            </div>
-                            <div class="lane-track">
-                                {#each finBlocks as b (b)}
-                                    <span
-                                        class="pill pill-fin"
-                                        style="animation-delay:{b * 1.4}s"
-                                    ></span>
-                                {/each}
-                            </div>
-                        </div>
-                    </div>
-
-                    <p class="seq-foot">
-                        Production runs concurrently with finalization. Block
-                        time is never gated by data availability latency.
-                    </p>
+        <!-- the sequence visual -->
+        <div class="reveal" style="animation-delay:180ms">
+            <div class="seq-card">
+                <div class="seq-head">
+                    <span class="flex items-center gap-2 text-xs font-bold">
+                        <span class="dot"></span> sequencer
+                    </span>
+                    <span class="text-[0.65rem] font-extrabold uppercase tracking-widest text-[var(--brand)]">
+                        Live
+                    </span>
                 </div>
+
+                <div class="seq-stages">
+                    <span>build</span>
+                    <span>p2p</span>
+                    <span>walrus</span>
+                    <span>sui</span>
+                </div>
+
+                <div class="seq-lanes">
+                    <div class="lane">
+                        <div class="lane-label">
+                            <span class="lane-title">production</span>
+                            <span class="lane-note">sub-second</span>
+                        </div>
+                        <div class="lane-track">
+                            {#each prodBlocks as b (b)}
+                                <span
+                                    class="pill pill-prod"
+                                    style="animation-delay:{b * 0.75}s"
+                                ></span>
+                            {/each}
+                        </div>
+                    </div>
+
+                    <div class="lane">
+                        <div class="lane-label">
+                            <span class="lane-title lane-title-2"
+                                >finalization</span
+                            >
+                            <span class="lane-note">walrus → sui</span>
+                        </div>
+                        <div class="lane-track">
+                            {#each finBlocks as b (b)}
+                                <span
+                                    class="pill pill-fin"
+                                    style="animation-delay:{b * 1.4}s"
+                                ></span>
+                            {/each}
+                        </div>
+                    </div>
+                </div>
+
+                <p class="seq-foot">
+                    Production runs concurrently with finalization. Block time
+                    is never gated by data availability latency.
+                </p>
             </div>
         </div>
     </div>
@@ -133,19 +123,18 @@
 
 <style>
     .seq-card {
-        background: var(--color-surface);
-        border: 1px solid var(--color-line);
-        border-radius: 20px;
+        background: var(--bg);
+        border: 2px solid var(--border);
+        box-shadow: 6px 6px 0 0 var(--border);
         padding: 1.2rem 1.4rem 1.3rem;
-        box-shadow:
-            0 1px 2px rgba(10, 10, 9, 0.03),
-            0 32px 64px -32px rgba(16, 185, 129, 0.2);
     }
     .seq-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
         margin-bottom: 1.1rem;
+        padding-bottom: 0.9rem;
+        border-bottom: 2px solid var(--border);
     }
 
     .seq-stages {
@@ -156,11 +145,11 @@
         margin-bottom: 0.5rem;
     }
     .seq-stages span {
-        font-family: var(--font-mono);
         font-size: 0.6rem;
         letter-spacing: 0.16em;
         text-transform: uppercase;
-        color: var(--color-faint);
+        color: var(--faint);
+        font-weight: 700;
     }
 
     .seq-lanes {
@@ -175,24 +164,25 @@
         margin-bottom: 0.5rem;
     }
     .lane-title {
-        font-family: var(--font-sans);
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: var(--color-brand-ink);
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        color: var(--brand);
     }
     .lane-title-2 {
-        color: var(--color-muted);
+        color: var(--muted);
     }
     .lane-note {
-        font-family: var(--font-mono);
         font-size: 0.6rem;
-        color: var(--color-faint);
+        color: var(--faint);
+        font-weight: 600;
     }
     .lane-track {
         position: relative;
         height: 18px;
-        background: var(--color-surface-2);
-        border-radius: 999px;
+        background: var(--surface);
+        border: 1.5px solid var(--border);
         overflow: hidden;
     }
     /* stage dividers */
@@ -204,46 +194,40 @@
             linear-gradient(
                 90deg,
                 transparent 24.5%,
-                var(--color-line) 25%,
+                var(--border) 25%,
                 transparent 25.5%
             ),
             linear-gradient(
                 90deg,
                 transparent 49.5%,
-                var(--color-line) 50%,
+                var(--border) 50%,
                 transparent 50.5%
             ),
             linear-gradient(
                 90deg,
                 transparent 74.5%,
-                var(--color-line) 75%,
+                var(--border) 75%,
                 transparent 75.5%
             );
-        opacity: 0.6;
+        opacity: 0.4;
     }
 
     .pill {
         position: absolute;
-        top: 4px;
+        top: 3px;
         left: -10%;
         height: 10px;
-        border-radius: 999px;
         opacity: 0;
     }
     .pill-prod {
         width: 44px;
-        background: linear-gradient(
-            90deg,
-            var(--color-brand-2),
-            var(--color-brand)
-        );
-        box-shadow: 0 0 8px -1px rgba(16, 185, 129, 0.5);
+        background: var(--brand);
         animation: seq-prod 3.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     }
     .pill-fin {
         width: 34px;
-        background: #a8a29e;
-        box-shadow: 0 0 6px -1px rgba(120, 113, 108, 0.4);
+        background: var(--fg);
+        opacity: 0.6;
         animation: seq-fin 6.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     }
 
@@ -274,10 +258,10 @@
             opacity: 0;
         }
         8% {
-            opacity: 1;
+            opacity: 0.6;
         }
         92% {
-            opacity: 1;
+            opacity: 0.6;
         }
         100% {
             left: 104%;
@@ -288,23 +272,24 @@
     .seq-foot {
         margin-top: 1.2rem;
         padding-top: 0.9rem;
-        border-top: 1px solid var(--color-line);
+        border-top: 1.5px solid var(--border);
         font-size: 0.72rem;
         line-height: 1.5;
-        color: var(--color-faint);
+        color: var(--muted);
     }
 
     @media (prefers-reduced-motion: reduce) {
         .pill-prod,
         .pill-fin {
             animation: none;
-            opacity: 1;
         }
         .pill-prod {
             left: 30%;
+            opacity: 1;
         }
         .pill-fin {
             left: 65%;
+            opacity: 0.6;
         }
     }
 </style>

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::StoreError;
+use super::StoreError;
 
 /// Invariant: heights are sorted and unique.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -88,6 +88,7 @@ impl PendingStore {
     }
 
     /// Returns whether there are no pending heights.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> Result<bool, StoreError> {
         Ok(self.load_raw()?.heights.is_empty())
     }

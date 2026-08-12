@@ -78,25 +78,25 @@ podseq start --config podseq.toml --mode full`,
     }
 </script>
 
-<section class="border-t border-line py-12 sm:py-16">
-    <div class="mx-auto max-w-7xl px-5 sm:px-8">
-        <div class="grid lg:grid-cols-[0.9fr_1.1fr] gap-12 items-start">
+<section class="border-b-2 border-[var(--border)] py-12">
+    <div class="mx-auto max-w-5xl px-4">
+        <div class="grid lg:grid-cols-[0.9fr_1.1fr] gap-10 items-start">
             <div class="lg:sticky lg:top-24">
                 <span class="label">Quick start</span>
                 <h2
-                    class="font-display font-bold tracking-tight text-3xl sm:text-4xl text-ink mt-5"
+                    class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
                 >
                     A running node in four commands.
                 </h2>
-                <p class="mt-4 text-muted text-lg leading-relaxed">
+                <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
                     Create your keys, write a minimal config, and start.
                     Everything else defaults to testnet.
                 </p>
-                <a href="#/docs/setup" class="btn btn-ghost mt-7">
+                <a href="#/docs/setup" class="btn mt-6">
                     Full setup guide
                     <svg
-                        width="14"
-                        height="14"
+                        width="13"
+                        height="13"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -127,7 +127,7 @@ podseq start --config podseq.toml --mode full`,
                                 fill="none"
                                 stroke="currentColor"
                                 stroke-width="2.4"
-                                class="text-[#10b981]"
+                                class="text-[#f59a52]"
                             >
                                 <path d="M20 6L9 17l-5-5" />
                             </svg>
@@ -145,7 +145,6 @@ podseq start --config podseq.toml --mode full`,
                                     y="9"
                                     width="11"
                                     height="11"
-                                    rx="1.5"
                                 />
                                 <path d="M5 15V5a1 1 0 0 1 1-1h10" />
                             </svg>
@@ -161,72 +160,75 @@ podseq start --config podseq.toml --mode full`,
 
 <style>
     .terminal {
-        border: 1px solid #20242b;
-        border-radius: 14px;
-        overflow: hidden;
-        background: #0c0e11;
-        box-shadow: 0 28px 60px -34px rgba(23, 23, 29, 0.5);
+        border: 2px solid var(--border);
+        background: #0a0a0a;
+        box-shadow: 6px 6px 0 0 var(--border);
     }
     .term-tabs {
         display: flex;
         align-items: center;
-        border-bottom: 1px solid #20242b;
-        background: #0a0c0f;
+        border-bottom: 2px solid var(--border);
+        background: #161616;
     }
     .term-tab {
-        font-family: var(--font-mono);
-        font-size: 0.78rem;
-        color: #8c8c95;
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #9a9a9a;
         padding: 0.7rem 1rem;
-        border-right: 1px solid #20242b;
+        border-right: 1px solid #3a3a3a;
         cursor: pointer;
         transition:
             color 0.15s ease,
             background 0.15s ease;
     }
     .term-tab:hover {
-        color: #f4f2ec;
+        color: #f5f5ef;
     }
     .term-tab.active {
-        color: #10b981;
-        background: #0c0e11;
-        box-shadow: inset 0 -2px 0 #10b981;
+        color: #f59a52;
+        background: #0a0a0a;
+        box-shadow: inset 0 -2px 0 #f59a52;
     }
     .copy {
         margin-left: auto;
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
-        font-family: var(--font-mono);
-        font-size: 0.72rem;
-        color: #8c8c95;
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #9a9a9a;
         padding: 0.7rem 0.9rem;
         cursor: pointer;
         transition: color 0.15s ease;
+        background: none;
+        border: none;
     }
     .copy:hover {
-        color: #10b981;
+        color: #f59a52;
     }
     .term-body {
         margin: 0;
         padding: 1.2rem 1.3rem;
         overflow-x: auto;
-        font-family: var(--font-mono);
-        font-size: 0.82rem;
+        font-size: 0.8rem;
         line-height: 1.7;
-        color: #d8d4ca;
-        background: #0c0e11;
+        color: #d8d8d2;
+        background: #0a0a0a;
     }
     .term-body code {
         white-space: pre;
-        color: #d8d4ca;
+        color: #d8d8d2;
         background: none;
         border: none;
         padding: 0;
     }
     .term-body :global(.hljs-comment),
     .term-body :global(.hljs-quote) {
-        color: #6b7280;
+        color: #6b6b6b;
         font-style: italic;
     }
     .term-body :global(.hljs-string),
@@ -246,7 +248,7 @@ podseq start --config podseq.toml --mode full`,
     .term-body :global(.hljs-literal),
     .term-body :global(.hljs-section),
     .term-body :global(.hljs-link) {
-        color: #10b981;
+        color: #f59a52;
         font-weight: 600;
     }
     .term-body :global(.hljs-title),

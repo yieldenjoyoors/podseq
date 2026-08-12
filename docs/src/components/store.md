@@ -1,6 +1,7 @@
-# Store (`podseq-store`)
+# Store (in `podseq` binary)
 
-Persistent storage for block data, chain state, and crash recovery.
+Persistent storage for block data, chain state, and crash recovery. Lives in
+the `node` crate as the `store` module (`crates/node/src/store/`).
 
 ## Components
 
@@ -26,6 +27,8 @@ settlement does not lose blocks.
 ## API
 
 ```rust
+use crate::store::{BlockStore, PendingStore, StateStore};
+
 // Block store
 block_store.put(&block)?;
 let block = block_store.get(height)?;

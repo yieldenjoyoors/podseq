@@ -7,23 +7,21 @@ traits defined in [`podseq-core`](./core.md).
                    ┌──────────────────────────┐
                    │        node (bin)        │
                    │  wires everything together │
+                   │  (+ store, + signing)    │
                    └────────────┬─────────────┘
-        ┌───────────┬──────────┼──────────┬────────────┬──────────┐
-        ▼           ▼          ▼          ▼            ▼          ▼
-   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-   │sequencer│ │ engine  │ │   sui   │ │  store  │ │   p2p   │ │ runtime │
-   │ signing │ │  Reth   │ │DA+settle│ │persist  │ │ network │ │ bridge  │
-   └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘
-        │           │           │           │           │           │
-        └───────────┴───────────┴───────────┴───────────┴──► podseq-core (traits)
+        ┌───────────┬──────────┼──────────┐
+        ▼           ▼          ▼          ▼
+   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+   │  core   │ │ engine  │ │   sui   │ │   p2p   │
+   │ traits  │ │  Reth   │ │DA+settle│ │ network │
+   │ +signer │ │         │ │+ bridge │ │         │
+   └─────────┘ └─────────┘ └─────────┘ └─────────┘
 ```
 
-| Crate       | Responsibility                                         | Core trait                       |
-| ----------- | ------------------------------------------------------ | -------------------------------- |
-| `core`      | Interfaces and Commonware runtime bridge               | (defines them)                   |
-| `engine`    | Reth Engine API client                                 | (none)                           |
-| `sequencer` | Block header signing (Ed25519)                         | `BlockSigner`                    |
-| `sui`       | Walrus DA + Sui settlement + bridge vault              | `DataAvailability`, `Settlement` |
-| `store`     | Persistent storage + crash recovery                    | (none)                           |
-| `p2p`       | Block propagation via Commonware                       | (none)                           |
-| `node`      | Binary: CLI, config, runner, full node, bridge relayer | (none)                           |
+| Crate    | Responsibility                                                             | Core trait                       |
+| -------- | -------------------------------------------------------------------------- | -------------------------------- |
+| `core`   | Interfaces, types, `Ed25519BlockSigner`, Commonware runtime bridge         | (defines them)                   |
+| `engine` | Reth Engine API client                                                     | (none)                           |
+| `sui`    | Walrus DA + Sui settlement + bridge vault                                  | `DataAvailability`, `Settlement` |
+| `p2p`    | Block propagation via Commonware                                           | (none)                           |
+| `node`   | Binary: CLI, config, runner, full node, bridge relayer, persistent storage | (none)                           |

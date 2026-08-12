@@ -50,13 +50,12 @@ documentation at **[podseq.xyz/#/docs](https://podseq.xyz/#/docs)**.
 
 ```text
 crates/
-├── core/        # Interfaces, types, Commonware runtime bridge
+├── core/        # Interfaces, types, Ed25519BlockSigner, Commonware runtime bridge
 ├── engine/      # Reth Engine API client (build, accept, finalize, JWT)
-├── sequencer/   # Ed25519BlockSigner (block header signing)
-├── store/       # Persistent storage (blocks, chain state, recovery)
 ├── sui/         # Walrus DA (HTTP) + Sui settlement + bridge vault client
 ├── p2p/         # Commonware networking (discovery + broadcast + announce)
-└── node/        # Binary: CLI, config, runner, full node sync, bridge relayer
+└── node/        # Binary: CLI, config, runner, full node sync, bridge relayer,
+                 #        store module (blocks, chain state, crash recovery)
 move/            # Settlement contract (Sui Move)
 solidity/        # EVM-side contracts
 e2e/             # Integration tests against a real Reth container
