@@ -14,8 +14,9 @@ use commonware_cryptography::Digestible as _;
 use podseq_core::{Block, BlockSigner, DataAvailability, Settlement};
 use podseq_engine::{payload_into_block, Engine, PARENT_BEACON_BLOCK_ROOT};
 use podseq_p2p::BlockBroadcaster;
-use podseq_store::{BlockStore, ChainState as StoredState, PendingStore, StateStore};
 use podseq_sui::Client as SuiClient;
+
+use crate::store::{BlockStore, ChainState as StoredState, PendingStore, StateStore};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
@@ -65,7 +66,7 @@ impl Runner {
         da_batch_size: usize,
         metrics: Arc<PodseqMetrics>,
     ) -> Result<Self> {
-        podseq_store::init(data_dir).context("initializing storage under data_dir")?;
+        crate::store::init(data_dir).context("initializing storage under data_dir")?;
         Ok(Self {
             engine,
             sui,

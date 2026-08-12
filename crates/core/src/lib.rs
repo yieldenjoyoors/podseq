@@ -5,7 +5,7 @@
 pub mod keys;
 pub mod runtime;
 
-pub use keys::parse_signer_key;
+pub use keys::{parse_signer_key, Ed25519BlockSigner};
 
 use std::fmt;
 use std::future::Future;

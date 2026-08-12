@@ -27,8 +27,6 @@ pub enum StoreError {
     Serde(#[from] serde_json::Error),
     #[error("block not found: height {0}")]
     BlockNotFound(u64),
-    #[error("state not found")]
-    StateNotFound,
 }
 
 /// Creates the storage directory layout under `data_dir`.

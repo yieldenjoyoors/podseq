@@ -1,6 +1,6 @@
-# Block signer (`podseq-sequencer`)
+# Block signing (`podseq-core`)
 
-This crate signs block headers so full nodes can attribute each block to the
+Block headers are signed so full nodes can attribute each block to the
 authorized sequencer. Reth owns transaction selection and ordering
 (`PayloadAttributes` has no `transactions` field, so Reth fills each block
 from its own mempool, gas-price greedy and gas-limit capped). Podseq's role is
@@ -9,8 +9,10 @@ broadcast.
 
 ## `Ed25519BlockSigner`
 
-Signs block headers with an ed25519 key loaded from a `suiprivkey` file. Full
-nodes verify signatures against the configured `signer.sequencer_pubkey`.
+The canonical `BlockSigner` implementation lives in `podseq-core`, next to the
+trait. It signs block headers with an ed25519 key loaded from a `suiprivkey`
+file. Full nodes verify signatures against the configured
+`signer.sequencer_pubkey`.
 
 ```rust
 let signer = Ed25519BlockSigner::from_suiprivkey_file(path)?;

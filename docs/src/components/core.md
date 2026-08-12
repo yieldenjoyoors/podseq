@@ -1,8 +1,9 @@
 # Core (`podseq-core`)
 
-`podseq-core` defines the shared types and the four traits that every implementation
-crate builds against. It has **no external dependencies** beyond `std`. Interfaces
-are stable; any implementation can be swapped without touching consumers.
+`podseq-core` defines the shared types and the traits that every implementation
+crate builds against. It also hosts the canonical `BlockSigner` implementation
+(`Ed25519BlockSigner`) and the Commonware runtime bridge. Interfaces are stable;
+any implementation can be swapped without touching consumers.
 
 ## Types
 
@@ -49,3 +50,10 @@ pub trait Settlement: Send + Sync {
 The sequencer runs methods on Tokio tasks that must be `Send`. Trait `async fn` does not
 impose `Send` on the returned future, so the core desugars each method to
 `fn ... -> impl Future<...> + Send`. Implementations may still use plain `async fn`.
+
+## `Ed25519BlockSigner`
+
+The reference `BlockSigner` implementation lives here, next to the trait. It
+loads an ed25519 key from a `suiprivkey` file (Bech32 or raw base64) and signs
+headers. See [Block signing](./sequencer.md) for the production / forced-inclusion
+context.
