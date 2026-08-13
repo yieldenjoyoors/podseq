@@ -30,7 +30,7 @@
                 >
                     From zero to a verified chain.
                 </h2>
-                <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                     In three steps only.
                 </p>
             </div>
@@ -99,7 +99,7 @@
         margin-bottom: 0.6rem;
     }
     .step-body {
-        font-size: 0.82rem;
+        font-size: 0.85rem;
         line-height: 1.6;
         color: var(--muted);
     }

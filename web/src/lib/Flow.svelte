@@ -33,7 +33,7 @@
             >
                 Built to be verified.
             </h2>
-            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+            <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                 Ordering, execution, availability, and settlement are kept apart.
                 Each in its own crate, communicating through the
                 zero-dependency traits in
@@ -59,7 +59,7 @@
         </div>
 
         <p
-            class="mt-6 text-xs max-w-2xl leading-relaxed text-[var(--muted)]"
+            class="mt-6 micro max-w-2xl leading-relaxed text-[var(--muted)]"
         >
             The sequencer broadcasts soft confirmations over P2P for sub-second
             latency. The finalizer posts each block to Walrus and anchors the
@@ -94,7 +94,7 @@
         color: #fff;
     }
     .node-tag {
-        font-size: 0.6rem;
+        font-size: 0.7rem;
         letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--faint);
@@ -110,7 +110,7 @@
         letter-spacing: -0.01em;
     }
     .node-sub {
-        font-size: 0.72rem;
+        font-size: 0.85rem;
         color: var(--muted);
     }
     .flow-node.hot .node-sub {

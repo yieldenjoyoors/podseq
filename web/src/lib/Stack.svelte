@@ -18,9 +18,7 @@
 <section class="border-b-2 border-[var(--border)] bg-[var(--surface)]">
     <div class="mx-auto max-w-5xl px-4 py-6">
         <div class="flex flex-col gap-4 md:flex-row md:items-center md:gap-8">
-            <p
-                class="text-[0.7rem] font-bold uppercase tracking-widest text-[var(--muted)] md:max-w-[12rem] shrink-0"
-            >
+            <p class="kicker text-[var(--muted)] md:max-w-[12rem] shrink-0">
                 // Assembled from proven primitives
             </p>
             <div
@@ -35,11 +33,10 @@
                     >
                         <span>
                             <span
-                                class="font-bold text-sm uppercase tracking-tight"
+                                class="font-bold text-[0.85rem] uppercase tracking-tight"
                                 >{item.name}</span
                             >
-                            <span
-                                class="block text-[0.65rem] uppercase tracking-wide text-[var(--muted)] group-hover:text-white/70 mt-0.5"
+                            <span class="micro uppercase tracking-wide text-[var(--muted)] group-hover:text-white/70 mt-0.5"
                                 >{item.role}</span
                             >
                         </span>

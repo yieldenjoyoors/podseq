@@ -58,20 +58,14 @@
                         >podseq</span
                     >
                 </div>
-                <p
-                    class="mt-4 text-xs leading-relaxed text-[var(--muted)] max-w-xs"
-                >
+                <p class="mt-4 micro leading-relaxed text-[var(--muted)] max-w-xs">
                     Deploy your own EVM L2 on Sui.
                 </p>
             </div>
 
             {#each cols as col (col.title)}
                 <div>
-                    <h4
-                        class="text-[0.65rem] font-extrabold uppercase tracking-widest text-[var(--muted)] mb-3"
-                    >
-                        {col.title}
-                    </h4>
+                    <h4 class="kicker text-[var(--muted)] mb-3">{col.title}</h4>
                     <ul class="space-y-1.5">
                         {#each col.links as link (link.href)}
                             <li>
@@ -81,7 +75,7 @@
                                         ? "_blank"
                                         : undefined}
                                     rel={link.external ? "noopener" : undefined}
-                                    class="text-xs font-bold uppercase tracking-wide text-[var(--fg)] hover:text-[var(--brand)] transition-colors"
+                                    class="micro font-bold uppercase tracking-wide text-[var(--fg)] hover:text-[var(--brand)] transition-colors"
                                 >
                                     {link.label}
                                 </a>
@@ -94,7 +88,7 @@
     </div>
     <div class="border-t-2 border-[var(--border)]">
         <div
-            class="mx-auto flex max-w-5xl items-center justify-center px-4 py-3 text-[0.65rem] uppercase tracking-wide text-[var(--muted)]"
+            class="mx-auto flex max-w-5xl items-center justify-center px-4 py-3 micro uppercase tracking-wide text-[var(--muted)]"
         >
             <span
                 >© {new Date().getFullYear()}

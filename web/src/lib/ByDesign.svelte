@@ -37,7 +37,7 @@
             >
                 Four layers. One coherent system.
             </h2>
-            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+            <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                 Podseq as sequencer, EVM execution on Reth, data availability on
                 Walrus, settlement on Sui. Because Walrus blobs are Sui objects,
                 there's no trust hop between DA and settlement.
@@ -56,12 +56,12 @@
                         >{s.big}</span
                     >
                     <div
-                        class="mt-3 font-bold text-sm uppercase tracking-wide {s.featured ? 'text-white' : 'text-[var(--fg)]'}"
+                        class="mt-3 font-bold text-[0.85rem] uppercase tracking-wide {s.featured ? 'text-white' : 'text-[var(--fg)]'}"
                     >
                         {s.label}
                     </div>
                     <p
-                        class="mt-1.5 text-xs leading-relaxed {s.featured ? 'text-white/80' : 'text-[var(--muted)]'}"
+                        class="mt-1.5 micro leading-relaxed {s.featured ? 'text-white/80' : 'text-[var(--muted)]'}"
                     >
                         {s.sub}
                     </p>

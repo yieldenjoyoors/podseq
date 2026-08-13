@@ -1,16 +1,12 @@
 <section class="border-b-2 border-[var(--border)] bg-[var(--brand)] text-white">
     <div class="mx-auto max-w-5xl px-4 py-16 lg:py-20">
-        <p
-            class="text-[0.7rem] font-extrabold uppercase tracking-widest opacity-70"
-        >
-            // Ready to deploy
-        </p>
+        <p class="kicker opacity-70">// Ready to deploy</p>
         <h2
             class="mt-2 text-3xl font-extrabold uppercase leading-[0.95] tracking-tight md:text-5xl lg:text-6xl max-w-2xl"
         >
             Your EVM chain,<br />on your terms.
         </h2>
-        <p class="mt-6 max-w-xl text-sm leading-relaxed opacity-80">
+        <p class="mt-6 max-w-xl body-sm leading-relaxed opacity-80">
             Walrus for data availability, Sui for settlement. Every block is
             independently verifiable. No shared infrastructure, no
             per-transaction fees to a third party, no surprises.
@@ -51,7 +47,7 @@
                 </svg>
             </a>
         </div>
-        <p class="mt-6 text-xs">
+        <p class="mt-6 micro">
             <a
                 href="mailto:hello@podseq.xyz"
                 class="font-bold uppercase tracking-wide underline underline-offset-4 hover:no-underline"

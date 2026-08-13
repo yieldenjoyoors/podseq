@@ -27,7 +27,7 @@
             >
                 Three signals it's time.
             </h2>
-            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+            <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                 Not every project needs dedicated infrastructure. These are the
                 cases where it pays for itself.
             </p>
@@ -70,7 +70,7 @@
         margin: 1rem 0 0.6rem;
     }
     .scenario-body {
-        font-size: 0.82rem;
+        font-size: 0.85rem;
         line-height: 1.6;
         color: var(--muted);
     }

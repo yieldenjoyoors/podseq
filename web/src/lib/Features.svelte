@@ -45,7 +45,7 @@
             >
                 Done with shared infrastructure.
             </h2>
-            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+            <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                 Six reasons the best teams run their own chain instead of
                 renting space on someone else's.
             </p>
@@ -119,7 +119,7 @@
         margin-bottom: 0.5rem;
     }
     .pillar-body {
-        font-size: 0.78rem;
+        font-size: 0.85rem;
         line-height: 1.6;
         color: var(--muted);
     }

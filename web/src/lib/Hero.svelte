@@ -18,7 +18,7 @@
             </h1>
 
             <p
-                class="reveal mt-6 max-w-md text-sm leading-relaxed text-[var(--muted)]"
+                class="reveal mt-6 max-w-md body-sm leading-relaxed text-[var(--muted)]"
                 style="animation-delay:140ms"
             >
                 Deploy EVM smart contracts on dedicated infrastructure with
@@ -52,7 +52,7 @@
             >
                 <a
                     href="mailto:hello@podseq.xyz"
-                    class="text-xs font-bold uppercase tracking-wide text-[var(--brand)] underline underline-offset-4 hover:no-underline"
+                    class="micro font-bold uppercase tracking-wide text-[var(--brand)] underline underline-offset-4 hover:no-underline"
                 >
                     Need a custom chain? Let's talk.
                 </a>
@@ -63,12 +63,10 @@
         <div class="reveal" style="animation-delay:180ms">
             <div class="seq-card">
                 <div class="seq-head">
-                    <span class="flex items-center gap-2 text-xs font-bold">
+                    <span class="flex items-center gap-2 micro font-bold">
                         <span class="dot"></span> sequencer
                     </span>
-                    <span class="text-[0.65rem] font-extrabold uppercase tracking-widest text-[var(--brand)]">
-                        Live
-                    </span>
+                    <span class="kicker text-[var(--brand)]" style="letter-spacing: 0.16em">Live</span>
                 </div>
 
                 <div class="seq-stages">
@@ -145,7 +143,7 @@
         margin-bottom: 0.5rem;
     }
     .seq-stages span {
-        font-size: 0.6rem;
+        font-size: 0.7rem;
         letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--faint);
@@ -164,7 +162,7 @@
         margin-bottom: 0.5rem;
     }
     .lane-title {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.02em;
@@ -174,7 +172,7 @@
         color: var(--muted);
     }
     .lane-note {
-        font-size: 0.6rem;
+        font-size: 0.7rem;
         color: var(--faint);
         font-weight: 600;
     }
@@ -273,7 +271,7 @@
         margin-top: 1.2rem;
         padding-top: 0.9rem;
         border-top: 1.5px solid var(--border);
-        font-size: 0.72rem;
+        font-size: 0.85rem;
         line-height: 1.5;
         color: var(--muted);
     }

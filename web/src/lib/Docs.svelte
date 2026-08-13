@@ -158,7 +158,7 @@
         <div class="side-foot">
             <a
                 href="#/"
-                class="text-[11px] text-[var(--muted)] hover:text-[var(--brand)] transition-colors"
+                class="micro text-[var(--muted)] hover:text-[var(--brand)] transition-colors"
             >
                 ← back to overview
             </a>
@@ -245,7 +245,7 @@
         display: inline-flex;
         align-items: center;
         gap: 0.5rem;
-        font-size: 0.72rem;
+        font-size: 0.7rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.04em;
@@ -300,7 +300,7 @@
         border: none;
         outline: none;
         color: var(--fg);
-        font-size: 0.78rem;
+        font-size: 0.85rem;
         width: 100%;
     }
     .side-search input::placeholder {
@@ -311,7 +311,7 @@
         margin-bottom: 1.4rem;
     }
     .side-heading {
-        font-size: 0.66rem;
+        font-size: 0.7rem;
         letter-spacing: 0.18em;
         text-transform: uppercase;
         color: var(--muted);
@@ -323,7 +323,7 @@
         display: block;
         padding: 0.4rem 0.6rem;
         border-left: 2px solid transparent;
-        font-size: 0.82rem;
+        font-size: 0.85rem;
         color: var(--muted);
         transition:
             color 0.15s ease,
@@ -354,7 +354,7 @@
     .docs-breadcrumb {
         margin-bottom: 1.5rem;
         color: var(--muted);
-        font-size: 0.72rem;
+        font-size: 0.7rem;
     }
     .docs-breadcrumb a:hover {
         color: var(--brand);
@@ -405,7 +405,7 @@
     }
 
     .docs-kicker {
-        font-size: 0.64rem;
+        font-size: 0.7rem;
         letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--muted);
@@ -417,7 +417,7 @@
     }
     .outline-link {
         display: block;
-        font-size: 0.78rem;
+        font-size: 0.85rem;
         color: var(--muted);
         padding: 0.22rem 0 0.22rem 0.75rem;
         border-left: 2px solid var(--border);

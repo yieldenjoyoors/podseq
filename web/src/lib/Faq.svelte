@@ -75,7 +75,7 @@
             {/each}
         </div>
 
-        <p class="mt-8 text-center text-xs text-[var(--muted)]">
+        <p class="mt-8 text-center micro text-[var(--muted)]">
             Still have questions?
             <a
                 href="#/docs"

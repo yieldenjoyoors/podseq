@@ -88,7 +88,7 @@ podseq start --config podseq.toml --mode full`,
                 >
                     A running node in four commands.
                 </h2>
-                <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                     Create your keys, write a minimal config, and start.
                     Everything else defaults to testnet.
                 </p>
@@ -171,7 +171,7 @@ podseq start --config podseq.toml --mode full`,
         background: #161616;
     }
     .term-tab {
-        font-size: 0.72rem;
+        font-size: 0.7rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.04em;
@@ -196,7 +196,7 @@ podseq start --config podseq.toml --mode full`,
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
-        font-size: 0.68rem;
+        font-size: 0.7rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.04em;
@@ -214,7 +214,7 @@ podseq start --config podseq.toml --mode full`,
         margin: 0;
         padding: 1.2rem 1.3rem;
         overflow-x: auto;
-        font-size: 0.8rem;
+        font-size: 0.85rem;
         line-height: 1.7;
         color: #d8d8d2;
         background: #0a0a0a;

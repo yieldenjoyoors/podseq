@@ -52,7 +52,7 @@
             >
                 Different by design.
             </h2>
-            <p class="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+            <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                 A direct comparison against the typical rollup stack, so you can
                 see where Podseq makes different trade-offs.
             </p>
@@ -92,7 +92,7 @@
     .compare-head {
         background: var(--surface);
         border-bottom: 2px solid var(--border);
-        font-size: 0.68rem;
+        font-size: 0.7rem;
         font-weight: 800;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -115,13 +115,13 @@
     .compare-label {
         font-weight: 700;
         color: var(--fg);
-        font-size: 0.8rem;
+        font-size: 0.85rem;
         text-transform: uppercase;
         letter-spacing: 0.02em;
     }
     .compare-typical {
         color: var(--muted);
-        font-size: 0.82rem;
+        font-size: 0.85rem;
     }
     .podseq-cell {
         color: var(--fg);

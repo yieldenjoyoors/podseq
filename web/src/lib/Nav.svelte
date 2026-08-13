@@ -43,7 +43,7 @@
             {#each links as link (link.href)}
                 <a
                     href={link.href}
-                    class="text-xs font-bold uppercase tracking-wide text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--surface)] px-3 py-1.5 transition-colors"
+                    class="micro font-bold uppercase tracking-wide text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--surface)] px-3 py-1.5 transition-colors"
                 >
                     {link.label}
                 </a>
@@ -119,7 +119,7 @@
                 <a
                     href={link.href}
                     onclick={close}
-                    class="text-xs font-bold uppercase tracking-wide text-[var(--muted)] hover:text-[var(--fg)] py-2.5 border-b-2 border-[var(--border)] last:border-b-0"
+                    class="micro font-bold uppercase tracking-wide text-[var(--muted)] hover:text-[var(--fg)] py-2.5 border-b-2 border-[var(--border)] last:border-b-0"
                 >
                     {link.label}
                 </a>
