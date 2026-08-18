@@ -28,7 +28,8 @@ services:
     volumes:
       # Override the image default with the mainnet config. Edit
       # publisher_auth_token in this file before bringing the stack up.
-      - ./docker/podseq.mainnet.toml:/etc/podseq/podseq.toml:ro
+      # Read-write: a first-start settlement deploy persists the deployed IDs into it.
+      - ./docker/podseq.mainnet.toml:/etc/podseq/podseq.toml
     depends_on:
       - publisher
 

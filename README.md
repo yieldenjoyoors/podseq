@@ -103,12 +103,15 @@ block explorer and an optional [eth-faucet](https://github.com/chainflag/eth-fau
 both preconfigured for local development.
 
 ```sh
-docker compose \
-  -f docker-compose.yml -f docker-compose.testnet.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d
 ```
 
 - **Explorer UI**: http://localhost:4000
-- **Faucet UI**: http://localhost:8080 (requires `FAUCET_PRIVATE_KEY` env var)
+- **Faucet UI**: http://localhost:8080 (defaults to the genesis-funded dev
+  account; override with the `FAUCET_PRIVATE_KEY` env var)
+
+The sequencer also needs a funded Sui signer key: run `make sui-key` and fund
+the printed address with testnet SUI (see [`docker/README.md`](./docker/README.md)).
 
 ### Useful CLI commands
 

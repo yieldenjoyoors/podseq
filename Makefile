@@ -1,5 +1,5 @@
 .PHONY: help install-tools build release fmt fmt-check clippy test \
-        e2e e2e-engine e2e-full move docker \
+        e2e e2e-engine e2e-full move docker sui-key \
         coverage crap crap-baseline crap-regression ci clean
 
 # Workspace excludes the e2e crate from unit-test / coverage runs:
@@ -47,6 +47,10 @@ move: ## Build the Sui Move settlement package
 
 docker: ## Build the podseq Docker image (local, tagged podseq:ci)
 	docker build -t podseq:ci .
+
+sui-key: ## Generate docker/secrets/sui.key; fund the printed address with SUI
+	docker compose -f docker-compose.yml -f docker-compose.testnet.yml run --rm --no-deps \
+	  -v ./docker/secrets:/out podseq keyring generate-key --out /out/sui.key
 
 coverage: $(LCOV) ## Generate LCOV coverage report
 

@@ -41,7 +41,6 @@ services:
       - --http.port=8545
       - --http.api=eth,net,web3,debug,txpool,trace
       - --datadir=/data
-      - --instance=2
       - --disable-discovery
       - --jit
     volumes:
@@ -54,15 +53,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: podseq:latest
+    image: ghcr.io/yieldenjoyoors/podseq:latest
     depends_on:
       reth:
         condition: service_started
     # Override /etc/podseq/podseq.toml (the image default) by bind-mounting a
-    # deployment-specific config. See docker/podseq.toml for the schema.
+    # deployment-specific config. See docker/podseq.toml for the schema. Mounted
+    # read-write: on a first-start settlement deploy, podseq persists the
+    # deployed object IDs back into this file.
     volumes:
       - jwt:/jwt:ro
-      - ./docker/podseq.toml:/etc/podseq/podseq.toml:ro
+      - ./docker/podseq.toml:/etc/podseq/podseq.toml
       # Place sui.key (suiprivkey) in docker/secrets/ for signing.
       - ./docker/secrets:/secrets:ro
     restart: unless-stopped
@@ -113,7 +114,6 @@ services:
       COIN_NAME: Ether
       DISABLE_MARKET: "true"
       ADMIN_PANEL_ENABLED: "false"
-      ECTO_SSL_MODE: disable
       POOL_SIZE: "20"
       POOL_SIZE_API: "5"
       API_V1_READ_METHODS_DISABLED: "false"
@@ -128,6 +128,11 @@ services:
       RE_CAPTCHA_DISABLED: "true"
       INDEXER_DISABLE_PENDING_TRANSACTIONS_FETCHER: "true"
       INDEXER_DISABLE_WITHDRAWALS_FETCHER: "true"
+      # postgres:15-alpine ships with TLS disabled. Older backend images read
+      # ECTO_USE_SSL (defaults to true); newer ones read ECTO_SSL_MODE
+      # (defaults to require). Disable both so the connection is plain TCP.
+      ECTO_USE_SSL: "false"
+      ECTO_SSL_MODE: disable
     volumes:
       - blockscout-logs:/app/logs
     restart: unless-stopped
@@ -138,11 +143,17 @@ services:
       blockscout-backend:
         condition: service_started
     environment:
+      NEXT_PUBLIC_APP_HOST: localhost
+      NEXT_PUBLIC_APP_PROTOCOL: http
+      NEXT_PUBLIC_APP_PORT: "4000"
+      NEXT_PUBLIC_NETWORK_NAME: Podseq Testnet
+      NEXT_PUBLIC_NETWORK_ID: "3735928814"
+      NEXT_PUBLIC_NETWORK_RPC_URL: http://localhost:8545
+      NEXT_PUBLIC_IS_TESTNET: "true"
       NEXT_PUBLIC_API_HOST: blockscout-backend
       NEXT_PUBLIC_API_PORT: "4000"
       NEXT_PUBLIC_API_PROTOCOL: http
-      NEXT_PUBLIC_STATS_API_HOST: blockscout-backend
-      NEXT_PUBLIC_STATS_API_PORT: "4000"
+      NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: ws
     ports:
       - "4000:3000"
     restart: unless-stopped

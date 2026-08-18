@@ -31,6 +31,14 @@ Drop keys into `docker/secrets/` (gitignored). They are mounted read-only at `/s
 
 ```sh
 # Signer key (suiprivkey, used for settlement txs + block signing, needs SUI for gas)
+make sui-key   # runs the podseq image to generate docker/secrets/sui.key
+```
+
+The command prints the derived Sui address: fund it with testnet SUI via the
+[Sui faucet](https://faucet.sui.io/) before starting the stack. An existing
+`suiprivkey` works too:
+
+```sh
 echo "suiprivkey..." > docker/secrets/sui.key
 chmod 600 docker/secrets/*
 ```
@@ -47,7 +55,8 @@ Edit the per-network config (`docker/podseq.testnet.toml` or
 
 - `[sui] settlement_package_id` / `settler_cap_id` / `registry_id` — supply the
   object IDs of an already-deployed Move contract, or leave all three unset for
-  first-start auto-deploy.
+  first-start auto-deploy. The deployed IDs are written back into the mounted
+  config file, which is why the compose files mount it read-write.
 - `[sequencer] block_time_ms`, `fee_recipient`, `genesis_hash` — production tuning.
 - `[walrus] publisher_auth_token` — mainnet only; must match the
   `WALRUS_PUBLISHER_AUTH_TOKEN` env var passed to the publisher service.
