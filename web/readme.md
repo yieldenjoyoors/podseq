@@ -6,7 +6,7 @@ directly from `../docs/src/**/*.md`, so the markdown stays the single source of 
 ## Stack
 
 - Svelte 5 (runes), client-side rendered
-- Vite 6 + Tailwind CSS v4
+- Vite 8 + Tailwind CSS v4
 - `marked` for markdown
 
 ## How docs are loaded
