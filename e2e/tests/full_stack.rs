@@ -275,9 +275,12 @@ async fn preflight_sui_balance() -> Result<()> {
     let key =
         podseq_sui::parse_signer_key(&key_str).map_err(|e| anyhow!("invalid sui key: {e}"))?;
     let sender = key.public_key().derive_address();
-    let balance = podseq_sui::settlement::sui_balance(SUI_RPC, &sender.to_string())
-        .await
-        .context("checking SUI balance")?;
+    let balance = sui_query_retrying(|| async {
+        podseq_sui::settlement::sui_balance(SUI_RPC, &sender.to_string())
+            .await
+            .context("checking SUI balance")
+    })
+    .await?;
     // Settlement deploy + bridge vault init + several commits need ~0.05 SUI.
     const MIN_BALANCE_MIST: u64 = 100_000_000; // 0.1 SUI
     if balance < MIN_BALANCE_MIST {
