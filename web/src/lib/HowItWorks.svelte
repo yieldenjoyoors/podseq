@@ -8,7 +8,7 @@
         {
             n: "2",
             title: "Run the sequencer",
-            body: "Run Podseq and Reth binaries and they'll communicate over the Engine API to build blocks and gossip soft confirmations over P2P.",
+            body: "Start the Podseq and Reth binaries. They communicate over the Engine API to build blocks and gossip soft confirmations over P2P.",
         },
         {
             n: "3",
@@ -31,7 +31,7 @@
                     From zero to a verified chain.
                 </h2>
                 <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
-                    In three steps only.
+                    Three steps.
                 </p>
             </div>
             <a href="#/docs/block-production" class="btn shrink-0">

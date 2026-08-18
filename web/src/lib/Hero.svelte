@@ -21,9 +21,9 @@
                 class="reveal mt-6 max-w-md body-sm leading-relaxed text-[var(--muted)]"
                 style="animation-delay:140ms"
             >
-                Deploy EVM smart contracts on dedicated infrastructure with
-                verifiable data availability and settlement anchored to Sui.
-                Predictable throughput, no surprises.
+                Deploy EVM smart contracts on a chain you own. Walrus
+                handles data availability, Sui handles settlement, and
+                throughput stays predictable.
             </p>
 
             <div
@@ -111,8 +111,8 @@
                 </div>
 
                 <p class="seq-foot">
-                    Production runs concurrently with finalization. Block time
-                    is never gated by data availability latency.
+                    Production runs concurrently with finalization. Block
+                    time is never gated by DA latency.
                 </p>
             </div>
         </div>

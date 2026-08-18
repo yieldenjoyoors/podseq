@@ -34,12 +34,12 @@
                 Built to be verified.
             </h2>
             <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
-                Ordering, execution, availability, and settlement are kept apart.
-                Each in its own crate, communicating through the
-                zero-dependency traits in
-                <span class="font-bold text-[var(--fg)]">podseq-core</span>. This
-                separation is what lets any full node re-derive and audit the
-                entire chain from public data alone.
+                Ordering, execution, availability, and settlement are
+                separate. Each lives in its own crate and talks to the others
+                through zero-dependency traits in
+                <span class="font-bold text-[var(--fg)]">podseq-core</span>.
+                Any full node can re-derive and audit the entire chain from
+                public data alone.
             </p>
         </div>
 

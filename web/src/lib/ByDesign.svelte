@@ -1,5 +1,5 @@
 <script lang="ts">
-    // The stack, at a glance. Every layer with a precise role.
+    // The stack, at a glance.
     const stats = [
         {
             big: "Podseq",
@@ -35,7 +35,7 @@
             <h2
                 class="mt-2 text-2xl font-extrabold uppercase tracking-tight md:text-3xl"
             >
-                Four layers. One coherent system.
+                Four layers. One chain.
             </h2>
             <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
                 Podseq as sequencer, EVM execution on Reth, data availability on

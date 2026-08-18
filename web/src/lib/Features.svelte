@@ -3,17 +3,17 @@
         {
             n: "01",
             title: "Dedicated throughput, zero contention",
-            body: "You run your own chain on your own infrastructure. No sharing blockspace, no noisy neighbors, no surprise rate limits.",
+            body: "Your chain runs on your infrastructure. No shared blockspace, no noisy neighbors.",
         },
         {
             n: "02",
             title: "Block time never waits on DA",
-            body: "Production and finalization run concurrently. Blocks flow at sub-second speeds while the finalizer posts to Walrus and settles on Sui in the background.",
+            body: "Production and finalization run concurrently. Block time stays sub-second while the finalizer posts to Walrus and settles on Sui in the background.",
         },
         {
             n: "03",
             title: "Verifiable by anyone",
-            body: "Full nodes reconstruct and audit the entire chain from DA and settlement alone. No trusted sequencer, no opaque infrastructure.",
+            body: "Full nodes reconstruct and audit the entire chain from DA and settlement alone. No trusted sequencer.",
         },
         {
             n: "04",
@@ -23,12 +23,12 @@
         {
             n: "05",
             title: "Enshrined Sui bridge",
-            body: "Native asset bridge between your chain and Sui. Move tokens from Sui DeFi without third-party bridges. Your apps live inside both ecosystems.",
+            body: "Native asset bridge between your chain and Sui. Move tokens in and out of Sui DeFi without third-party bridges.",
         },
         {
             n: "06",
             title: "Capture every fee",
-            body: "Own the economics end to end. Transaction fees stay in your chain instead of flowing to a shared sequencer or L1. Growth directly benefits your bottom line.",
+            body: "Own the economics end to end. Transaction fees stay on your chain instead of going to a shared sequencer or an L1.",
         },
     ];
 </script>
@@ -46,8 +46,8 @@
                 Done with shared infrastructure.
             </h2>
             <p class="mt-4 body-sm leading-relaxed text-[var(--muted)]">
-                Six reasons the best teams run their own chain instead of
-                renting space on someone else's.
+                Six reasons teams run their own chain instead of renting
+                space on someone else's.
             </p>
         </div>
 

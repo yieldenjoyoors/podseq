@@ -9,7 +9,7 @@
         <p class="mt-6 max-w-xl body-sm leading-relaxed opacity-80">
             Walrus for data availability, Sui for settlement. Every block is
             independently verifiable. No shared infrastructure, no
-            per-transaction fees to a third party, no surprises.
+            per-transaction fees to a third party.
         </p>
         <div class="mt-8 flex flex-wrap items-center gap-3">
             <a

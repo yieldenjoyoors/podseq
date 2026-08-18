@@ -19,7 +19,7 @@
     <div class="mx-auto max-w-5xl px-4 py-6">
         <div class="flex flex-col gap-4 md:flex-row md:items-center md:gap-8">
             <p class="kicker text-[var(--muted)] md:max-w-[12rem] shrink-0">
-                // Assembled from proven primitives
+                // Built from proven primitives
             </p>
             <div
                 class="grid grid-cols-2 border-2 border-[var(--border)] md:flex md:flex-1"

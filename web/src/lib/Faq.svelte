@@ -2,11 +2,11 @@
     const faqs = [
         {
             q: "Why a single sequencer?",
-            a: "One sequencer you operate means sub-second block times, predictable fees, and you control ordering. Because DA and settlement both live on Sui, every block is still independently verifiable. No trust required. For most teams, this is the right trade-off: simplicity and speed over decentralized sequencing.",
+            a: "A single sequencer you operate gives sub-second block times, predictable fees, and control over ordering. Since DA and settlement both live on Sui, every block is still independently verifiable. For most teams this is the right trade: simplicity and speed over decentralized sequencing.",
         },
         {
             q: "How is this different from OP Stack or Arbitrum Orbit?",
-            a: "Three things: it drives a standalone Reth node (not a forked client), it uses Walrus for erasure-coded DA (not a committee or Ethereum blobs), and it settles on Sui, where blob availability is verifiable as Sui objects. Plus, production and finalization are decoupled, so block time isn't gated by DA.",
+            a: "Three things: it drives a standalone Reth node (not a forked client), it uses Walrus for erasure-coded DA (not a committee or Ethereum blobs), and it settles on Sui, where blob availability is verifiable as Sui objects. Production and finalization are also decoupled, so block time isn't gated by DA.",
         },
         {
             q: "Is it EVM-compatible?",

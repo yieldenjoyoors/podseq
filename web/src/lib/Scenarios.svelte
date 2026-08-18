@@ -3,17 +3,17 @@
         {
             tag: "Extend",
             title: "Bring EVM to Sui",
-            body: "Run EVM smart contracts that settle on Sui with Walrus data availability. Your EVM apps, anchored to one of the fastest-growing L1 ecosystems.",
+            body: "Run EVM smart contracts that settle on Sui, with Walrus for data availability. Your existing contracts deploy unchanged.",
         },
         {
             tag: "Connect",
             title: "Tap into Sui DeFi",
-            body: "Your users get the EVM tooling they already know, with native access to Sui's liquidity and DeFi protocols.",
+            body: "Your users keep the EVM tooling they know, and get access to Sui liquidity and DeFi protocols.",
         },
         {
             tag: "Comply",
             title: "Auditable, policy-ready chains",
-            body: "Deterministic EVM execution with verifiable commitments on Sui. Built for finance, payments, and regulated workloads where auditability is non-negotiable.",
+            body: "Deterministic EVM execution with verifiable commitments on Sui. Built for payments and regulated workloads that need an audit trail.",
         },
     ];
 </script>
