@@ -1,6 +1,6 @@
 //! Key management commands.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{Context, Result};
@@ -47,15 +47,40 @@ pub fn generate_evm_key(out: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Prints the keys configured in the config file.
+/// Derives the Sui address (0x + 64 hex) from the signer key file.
+fn sui_address(path: &Path) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading signer key {}", path.display()))?;
+    let key = podseq_core::parse_signer_key(raw.trim())
+        .map_err(|e| anyhow::anyhow!("parsing signer key: {e}"))?;
+    Ok(key.public_key().derive_address().to_string())
+}
+
+/// Derives the L2 EVM address (0x + 40 hex) from the relayer key file.
+fn evm_address(path: &Path) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading EVM key {}", path.display()))?;
+    let bytes = hex::decode(raw.trim()).context("decoding EVM key hex")?;
+    let signer = PrivateKeySigner::from_slice(&bytes).context("invalid EVM key")?;
+    Ok(signer.address().to_string())
+}
+
+/// Prints the keys configured in the config file with their derived addresses.
+/// The p2p identity has no address; its ed25519 pubkey (peer id) is shown.
 pub fn list(config: &crate::config::Config) {
     println!("Configured keys:");
     match &config.signer.key_path {
-        Some(path) => println!("  signer (Sui, ed25519): {}", path.display()),
+        Some(path) => {
+            println!("  signer (Sui, ed25519): {}", path.display());
+            print_derived("address", sui_address(path));
+        }
         None => println!("  signer (Sui, ed25519): (not configured)"),
     }
     match &config.p2p.key_path {
-        Some(path) => println!("  p2p:                   {}", path),
+        Some(path) => {
+            println!("  p2p:                   {path}");
+            print_derived("pubkey", podseq_p2p::read_pubkey_hex(Path::new(path)));
+        }
         None => println!("  p2p:                   (not configured)"),
     }
     match &config.bridge.l2_relayer_key_path {
@@ -66,11 +91,21 @@ pub fn list(config: &crate::config::Config) {
                 " (bridge disabled)"
             };
             println!("  bridge relayer (EVM):  {}{}", path.display(), note);
+            print_derived("address", evm_address(path));
         }
         None if config.bridge.enabled => {
             println!("  bridge relayer (EVM):  MISSING (bridge.enabled but no key)");
         }
         None => {}
+    }
+}
+
+/// Prints a derived key attribute, or an error note when the key file cannot
+/// be read or parsed.
+fn print_derived(label: &str, derived: Result<String>) {
+    match derived {
+        Ok(value) => println!("    {label}: {value}"),
+        Err(e) => println!("    {label}: unavailable ({e:#})"),
     }
 }
 
@@ -97,6 +132,111 @@ mod tests {
         assert_eq!(bytes.len(), 32, "secp256k1 scalar must be 32 bytes");
         // Round-trips through PrivateKeySigner (validates the scalar).
         PrivateKeySigner::from_slice(&bytes).unwrap();
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "podseq-keyring-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn sui_address_derives_from_generated_key() {
+        let dir = temp_dir("sui");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sequencer.key");
+        generate_signer(&path).unwrap();
+
+        let addr = sui_address(&path).unwrap();
+
+        assert!(addr.starts_with("0x"));
+        assert_eq!(addr.len(), 66, "Sui addresses are 0x + 64 hex chars");
+        assert_eq!(
+            addr,
+            sui_address(&path).unwrap(),
+            "derivation is deterministic"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn evm_address_derives_from_generated_key() {
+        let dir = temp_dir("evm");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("relayer.key");
+        generate_evm_key(&path).unwrap();
+
+        let addr = evm_address(&path).unwrap();
+
+        assert!(addr.starts_with("0x"));
+        assert_eq!(addr.len(), 42, "EVM addresses are 0x + 40 hex chars");
+        assert_eq!(
+            addr,
+            evm_address(&path).unwrap(),
+            "derivation is deterministic"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn address_derivation_errors_on_missing_file() {
+        let missing = std::env::temp_dir().join("podseq-keyring-does-not-exist.key");
+        assert!(sui_address(&missing).is_err());
+        assert!(evm_address(&missing).is_err());
+    }
+
+    #[test]
+    fn list_handles_all_key_configurations() {
+        let dir = temp_dir("list");
+        std::fs::create_dir_all(&dir).unwrap();
+        let signer = dir.join("sequencer.key");
+        generate_signer(&signer).unwrap();
+        let relayer = dir.join("relayer.key");
+        generate_evm_key(&relayer).unwrap();
+        let p2p = dir.join("p2p.key");
+        std::fs::write(&p2p, "11".repeat(32)).unwrap();
+        let garbage = dir.join("garbage.key");
+        std::fs::write(&garbage, "not-a-key").unwrap();
+
+        // All keys present and valid, bridge enabled.
+        let mut config = crate::config::Config::testnet();
+        config.signer.key_path = Some(signer);
+        config.p2p.key_path = Some(p2p.to_string_lossy().into_owned());
+        config.bridge.l2_relayer_key_path = Some(relayer);
+        config.bridge.enabled = true;
+        list(&config);
+
+        // Nothing configured, bridge disabled.
+        let mut config = crate::config::Config::testnet();
+        config.signer.key_path = None;
+        config.p2p.key_path = None;
+        config.bridge.l2_relayer_key_path = None;
+        config.bridge.enabled = false;
+        list(&config);
+
+        // Bridge enabled but relayer key missing.
+        let mut config = crate::config::Config::testnet();
+        config.signer.key_path = None;
+        config.p2p.key_path = None;
+        config.bridge.l2_relayer_key_path = None;
+        config.bridge.enabled = true;
+        list(&config);
+
+        // Keys configured but unreadable.
+        let mut config = crate::config::Config::testnet();
+        config.signer.key_path = Some(garbage.clone());
+        config.p2p.key_path = Some(garbage.to_string_lossy().into_owned());
+        config.bridge.l2_relayer_key_path = Some(garbage);
+        config.bridge.enabled = false;
+        list(&config);
 
         std::fs::remove_dir_all(&dir).ok();
     }

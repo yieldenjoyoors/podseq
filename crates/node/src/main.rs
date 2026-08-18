@@ -70,7 +70,7 @@ enum KeyringCommands {
         #[arg(short, long, default_value = "relayer.key")]
         out: PathBuf,
     },
-    /// Show keys configured in the config file.
+    /// Show configured keys and their derived addresses.
     List,
 }
 

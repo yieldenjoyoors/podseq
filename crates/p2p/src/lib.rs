@@ -12,7 +12,7 @@ mod message;
 mod node;
 
 pub use config::P2pConfig;
-pub use key::load_or_generate_key;
+pub use key::{load_or_generate_key, read_pubkey_hex};
 pub use message::BlockMessage;
 pub use node::{BlockBroadcaster, BlockReceiver, P2pNode};
 
