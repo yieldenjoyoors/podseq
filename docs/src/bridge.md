@@ -82,15 +82,15 @@ See `solidity/README.md` for compile and predeploy instructions.
   (`BridgeClient::withdraw`, `initialize`).
 - `crates/node/src/bridge.rs` — the in-process relayer (`BridgeRelayer`):
   - Sui deposits → resolves the deposit's coin type to its canonical token,
-    creating it through the factory when none exists yet (name and symbol are
-    derived from the coin type), then signs and sends `mint`;
+    creating it through the factory when none exists yet, then signs and sends
+    `mint`;
   - L2 `WithdrawalInitiated` logs → `bridge::withdraw` on Sui, with the coin
-    type taken from the emitting token;
-  - the token registry is rebuilt at startup from the factory's `BridgeCreated`
-    history and updated incrementally each pass.
+    type taken from the emitting token.
 
-Cursors are persisted to `bridge_cursors.json` so a restart resumes without
-re-minting or re-releasing.
+Cursors and the token registry are persisted to `bridge_cursors.json` in one
+write, so a restart resumes without re-minting, re-releasing, or rescanning.
+The full factory history is indexed only on first start, in bounded chunks
+(`createBridge` is permissionless, so the token count is unbounded).
 
 ## Configuration
 

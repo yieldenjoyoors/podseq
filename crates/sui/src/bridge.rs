@@ -157,9 +157,8 @@ impl BridgeClient {
 
     /// Signs, submits, and confirms a transaction, requiring on-chain success.
     ///
-    /// Confirmation at the effects level matters: a transaction can execute and
-    /// still abort (e.g. a spent gas object race), and callers must not treat
-    /// that as done.
+    /// Signs, submits, and confirms a transaction, requiring on-chain success:
+    /// a tx can execute and still abort (e.g. a gas-object race).
     async fn submit(&self, tx: sui_sdk_types::Transaction, label: &str) -> Result<(), BridgeError> {
         let mut rpc = self.rpc.clone();
         let response = sign_and_execute(&mut rpc, &self.key, tx, label).await?;
@@ -219,9 +218,8 @@ impl BridgeClient {
     }
 }
 
-/// Builds a `bridge::<name>` move-call target on `package`.
-///
-/// `name` is always a hard-coded literal ("withdraw", "initialize"), so identifier validity is a compile-time property.
+/// Builds a `bridge::<name>` move-call target. `name` is always a hard-coded
+/// literal, so identifier validity is a compile-time property.
 fn bridge_function(package: Address, name: &str) -> Function {
     Function::new(
         package,

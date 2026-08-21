@@ -9,14 +9,14 @@
 //! - L2 burn → Sui release: reads `WithdrawalInitiated` logs from every
 //!   factory-registered token and calls `bridge::withdraw` on Sui.
 //!
-//! Cursors are persisted to disk so the relayer resumes after a restart without
-//! re-minting or re-releasing. Mint nonces on L2 and the Sui withdraw path are
-//! both strictly increasing, so a duplicate after a crash is a safe no-op.
+//! Cursors and the token registry are persisted together, so a restart resumes
+//! without re-minting, re-releasing, or rescanning token history. Mint nonces on
+//! L2 and the Sui withdraw path are both strictly increasing, so a duplicate
+//! after a crash is a safe no-op.
 //!
 //! Security invariant: `bridge::withdraw` is only ever called for burns logged
-//! by a token the `BridgeFactory` registered. A contract outside the factory
-//! emitting forged `WithdrawalInitiated` logs must never trigger a release, so
-//! the withdrawal log query is always address-filtered to the known token set.
+//! by a factory-registered token, so the withdrawal log query is always
+//! address-filtered to the known token set.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -42,16 +42,14 @@ use crate::config::{BridgeConfig, Config};
 /// Fixed genesis predeploy address of the L2 `BridgeFactory` contract.
 pub const BRIDGE_FACTORY_ADDRESS_HEX: &str = "0x4200000000000000000000000000000000000010";
 
-/// Fixed genesis predeploy address of the canonical SUI `Bridge` token. It is
-/// configured once via `Bridge.initialize` and adopted into the factory's
-/// registry; the relayer itself is registry-driven and does not special-case it.
+/// Genesis predeploy of the canonical SUI `Bridge` token; configured and
+/// adopted once. The relayer itself is registry-driven.
 pub const BRIDGE_TOKEN_PREDEPLOY_ADDRESS_HEX: &str = "0x4200000000000000000000000000000000000011";
 
 /// Gas limit for a mint transaction.
 const MINT_GAS_LIMIT: u64 = 120_000;
 
-/// Gas limit for a `createBridge` transaction (contract deployment plus a
-/// storage write).
+/// Gas limit for a `createBridge` transaction.
 const CREATE_BRIDGE_GAS_LIMIT: u64 = 3_000_000;
 
 // Minimal L2 interfaces for the functions the relayer calls.
@@ -69,20 +67,23 @@ alloy_sol_types::sol! {
 
 use alloy_sol_types::SolCall;
 
-/// Relayer cursors, persisted next to the chain state.
+/// Relayer state persisted to disk. The registry is written in the same
+/// operation as the cursors, so it always covers every `BridgeCreated` below
+/// `next_l2_block`; anything above is absorbed by the relay loop.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Cursors {
     /// Next Sui deposit nonce to mint on L2.
     next_deposit_nonce: u64,
     /// Next L2 block (exclusive) up to which logs have been read.
     next_l2_block: u64,
+    /// Coin-type bytes (hex) -> token address (hex).
+    #[serde(default)]
+    tokens: std::collections::BTreeMap<String, String>,
 }
 
-/// Canonical L2 tokens, keyed in both directions.
-///
-/// Populated only from `BridgeCreated` events emitted by the factory (or the
-/// relayer's own `createBridge` receipts, which emit the same event), which is
-/// what makes the address set trustworthy for withdrawal processing.
+/// Canonical L2 tokens, keyed in both directions. Only ever populated from
+/// factory `BridgeCreated` events, which is what makes the address set
+/// trustworthy for withdrawal processing.
 #[derive(Debug, Default)]
 struct TokenRegistry {
     /// Move `type_name` bytes -> token address.
@@ -92,10 +93,9 @@ struct TokenRegistry {
 }
 
 impl TokenRegistry {
-    /// Records a factory-created token. Returns `false` (without recording) if
-    /// another token already claims this coin type, which can happen when a
-    /// third party registers a variant spelling that normalizes to the same
-    /// key: one canonical token must stay authoritative.
+    /// Records a factory-created token. Returns `false` if another token already
+    /// claims this coin type (a variant-spelling twin): one canonical token
+    /// stays authoritative.
     fn insert(&mut self, coin_type: Vec<u8>, token: Address) -> bool {
         match self.by_coin_type.get(&coin_type) {
             Some(existing) if *existing != token => return false,
@@ -120,6 +120,29 @@ impl TokenRegistry {
 
     fn len(&self) -> usize {
         self.by_coin_type.len()
+    }
+
+    /// Persisted form for [`Cursors::tokens`].
+    fn snapshot(&self) -> std::collections::BTreeMap<String, String> {
+        self.by_coin_type
+            .iter()
+            .map(|(coin, token)| (hex::encode(coin), format!("{token:#x}")))
+            .collect()
+    }
+
+    /// Rebuilds a registry from its persisted form. Malformed entries are a
+    /// disk problem the operator must see, not something to silently drop.
+    fn from_snapshot(snapshot: &std::collections::BTreeMap<String, String>) -> Result<Self> {
+        let mut registry = Self::default();
+        for (coin_hex, token_hex) in snapshot {
+            let coin = hex::decode(coin_hex)
+                .with_context(|| format!("corrupt token registry entry {coin_hex}"))?;
+            let token: Address = token_hex
+                .parse()
+                .with_context(|| format!("corrupt token registry entry {token_hex}"))?;
+            registry.insert(coin, token);
+        }
+        Ok(registry)
     }
 }
 
@@ -152,9 +175,8 @@ impl std::fmt::Debug for BridgeRelayer {
 }
 
 impl BridgeRelayer {
-    /// Builds a relayer from config. Performs the one-time read of the deposits
-    /// table UID so each [`deposit_at`] lookup is a single `get_object`, and
-    /// rebuilds the token registry from the factory's creation history.
+    /// Builds a relayer from config: reads the deposits-table UID once, and
+    /// restores (or first indexes) the token registry.
     ///
     /// `sui_signer_key_path` is the Sui key owning `BridgeCap` (used for
     /// `bridge::withdraw`); the EVM relayer key comes from `cfg.l2_relayer_key_path`.
@@ -220,16 +242,10 @@ impl BridgeRelayer {
             .await
             .context("reading vault status")?;
 
-        // Rebuild the token registry from the full factory history so burns on
-        // long-existing tokens are honored right after a restart. Token
-        // creations are rare, so this is one cheap filtered log scan.
-        let head = eth_block_number(&http, l2_rpc).await?;
-        let mut tokens = TokenRegistry::default();
-        absorb_creations(&http, l2_rpc, factory, &mut tokens, 0, head).await?;
-        info!(tokens = tokens.len(), "bridge token registry rebuilt");
-
         let cursors_path = data_dir.join("bridge_cursors.json");
-        let cursors = Arc::new(Mutex::new(load_cursors(&cursors_path).await));
+        let mut cursors = load_cursors(&cursors_path).await;
+        let tokens =
+            restore_token_registry(&http, l2_rpc, factory, &mut cursors, &cursors_path).await?;
 
         Ok(Self {
             sui_rpc: sui_rpc.to_string(),
@@ -244,7 +260,7 @@ impl BridgeRelayer {
             poll_interval: Duration::from_millis(cfg.poll_interval_ms.max(100)),
             deposits_table_uid: status.deposits_table_uid,
             tokens: Mutex::new(tokens),
-            cursors,
+            cursors: Arc::new(Mutex::new(cursors)),
             cursors_path,
             metrics,
         })
@@ -255,15 +271,6 @@ impl BridgeRelayer {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?;
-
-        // Seed the L2 block cursor on first run so we don't replay history.
-        {
-            let mut c = self.cursors.lock().await;
-            if c.next_l2_block == 0 {
-                c.next_l2_block = eth_block_number(&http, &self.l2_rpc).await?;
-                persist_cursors(&self.cursors_path, &c).await;
-            }
-        }
 
         let next_deposit = self.cursors.lock().await.next_deposit_nonce;
         let next_l2_block = self.cursors.lock().await.next_l2_block;
@@ -293,13 +300,10 @@ impl BridgeRelayer {
         }
     }
 
-    /// Direction 1: Sui deposit → L2 mint.
-    ///
-    /// The L2 mint cursor is advanced only against confirmed on-chain state:
-    /// before sending, we check the token's `mintedAny`/`lastMintedDepositNonce`
-    /// so a crash-after-send (replayed nonce) is detected as already-done, and
-    /// after sending we wait for a successful receipt so an execution revert
-    /// never silently skips a deposit.
+    /// Direction 1: Sui deposit → L2 mint. The cursor advances only on
+    /// confirmed on-chain state: already-minted nonces are detected before
+    /// sending, and a receipt is required after, so a revert never skips a
+    /// deposit.
     async fn relay_deposits(&self, http: &reqwest::Client) -> Result<()> {
         let latest = match vault_status(&self.sui_rpc, &self.vault_id).await {
             Ok(status) => status.deposit_nonce,
@@ -339,6 +343,9 @@ impl BridgeRelayer {
                     }
                     let mut c = self.cursors.lock().await;
                     c.next_deposit_nonce = nonce + 1;
+                    // Same write as the cursor, keeping registry and cursor in
+                    // step (see `Cursors`).
+                    c.tokens = self.tokens.lock().await.snapshot();
                     persist_cursors(&self.cursors_path, &c).await;
                 }
                 Ok(None) => return Ok(()),
@@ -351,11 +358,8 @@ impl BridgeRelayer {
     }
 
     /// Returns the canonical L2 token for `coin_type`, creating it through the
-    /// factory when none exists yet.
-    ///
-    /// `createBridge` is permissionless; the relayer calls it itself so a
-    /// deposit never waits for a third party. The token address comes from the
-    /// `BridgeCreated` log in the confirmed receipt.
+    /// factory when none exists yet. The address comes from the `BridgeCreated`
+    /// log in the confirmed receipt.
     async fn ensure_token(&self, http: &reqwest::Client, coin_type: &[u8]) -> Result<Address> {
         if let Some(token) = self.tokens.lock().await.token_for(coin_type) {
             return Ok(token);
@@ -380,8 +384,7 @@ impl BridgeRelayer {
             .context("createBridge receipt has no BridgeCreated log")?;
         let inserted = self.tokens.lock().await.insert(coin_type.to_vec(), token);
         if !inserted {
-            // Another token already claims this coin type (variant spelling
-            // raced us); mint into the canonical one.
+            // Another token already claims this coin type; mint into that one.
             warn!(%token, "bridge: twin token ignored for coin type");
             return self
                 .tokens
@@ -395,9 +398,9 @@ impl BridgeRelayer {
         Ok(token)
     }
 
-    /// Sends a mint tx and waits for its receipt, returning Ok only if the tx
-    /// executed successfully. A network/RPC error or an on-chain revert is an
-    /// `Err`, so [`relay_deposits`] does not advance the cursor past this nonce.
+    /// Sends a mint tx and waits for its receipt. Only a successful execution
+    /// returns `Ok`, so [`relay_deposits`] never advances past an un-minted
+    /// deposit.
     async fn mint_on_l2(
         &self,
         http: &reqwest::Client,
@@ -421,9 +424,7 @@ impl BridgeRelayer {
         Ok(())
     }
 
-    /// Signs and submits an EIP-1559 tx to the L2. Confirmation is the caller's
-    /// concern: mint and createBridge have different success criteria but the
-    /// same submission path.
+    /// Signs and submits an EIP-1559 tx. Confirmation is the caller's concern.
     async fn send_l2_tx(
         &self,
         http: &reqwest::Client,
@@ -459,11 +460,9 @@ impl BridgeRelayer {
         eth_send_raw_transaction(http, &self.l2_rpc, &raw).await
     }
 
-    /// Direction 2: L2 burn → Sui release.
-    ///
-    /// New tokens created in the block range are absorbed before withdrawal
-    /// logs are read, so a burn in the same range as its token's creation is
-    /// still processed.
+    /// Direction 2: L2 burn → Sui release. Tokens created in the block range
+    /// are absorbed first, so a burn in the same range as its token's creation
+    /// is still processed.
     async fn relay_withdrawals(&self, http: &reqwest::Client) -> Result<()> {
         let from_block = self.cursors.lock().await.next_l2_block;
         let latest = eth_block_number(http, &self.l2_rpc).await?;
@@ -502,15 +501,15 @@ impl BridgeRelayer {
 
         let mut c = self.cursors.lock().await;
         c.next_l2_block = latest + 1;
+        // Same write as the cursor, keeping registry and cursor in step (see
+        // `Cursors`).
+        c.tokens = self.tokens.lock().await.snapshot();
         persist_cursors(&self.cursors_path, &c).await;
         Ok(())
     }
 
-    /// Releases one `WithdrawalInitiated` log on Sui.
-    ///
-    /// The emitting contract must be a registered token: an arbitrary contract
-    /// forging the event must never trigger a release. On Sui-side failure the
-    /// whole pass aborts so the cursor stays put and the burn is retried.
+    /// Releases one `WithdrawalInitiated` log on Sui. The emitter must be a
+    /// registered token; on failure the pass aborts so the burn is retried.
     async fn process_withdrawal_log(&self, log: &RpcLog) -> Result<()> {
         let emitter = parse_log_address(&log.address).context("log address not valid hex")?;
         let coin_bytes = self
@@ -657,9 +656,8 @@ fn decode_word_address(word: &[u8; 32]) -> Result<Address> {
     Ok(Address::from(addr))
 }
 
-/// Parses a coin type string into a `StructTag`, accepting every spelling in
-/// play: short (`0x2::sui::SUI`), `0x`-prefixed full, and Move's stored form
-/// (full 64 hex digits, no `0x`).
+/// Parses a coin type string into a `StructTag`, accepting the short form
+/// (`0x2::sui::SUI`) and Move's stored form (full hex, no `0x`).
 fn parse_struct_tag_flexible(coin_type: &str) -> Result<sui_sdk_types::StructTag> {
     use std::str::FromStr;
     let repaired = if coin_type.starts_with("0x") {
@@ -671,8 +669,8 @@ fn parse_struct_tag_flexible(coin_type: &str) -> Result<sui_sdk_types::StructTag
         .with_context(|| format!("parsing coin type {coin_type} as a Sui StructTag"))
 }
 
-/// Canonical key for a coin type: Move's `type_name` bytes (full 64-hex-digit
-/// address, no `0x`), which is exactly what Sui deposit records carry.
+/// Canonical coin-type key: Move `type_name` bytes, as Sui deposit records
+/// carry them.
 fn normalize_coin_type(coin_type: &str) -> Result<Vec<u8>> {
     Ok(parse_struct_tag_flexible(coin_type)?
         .to_string()
@@ -693,10 +691,8 @@ fn parse_log_address(s: &str) -> Result<Address> {
     Ok(Address::from_slice(&bytes))
 }
 
-/// Default ERC20 metadata for a relayer-created token, derived only from the
-/// coin type so creation is deterministic and needs no external metadata:
-/// the name is the fully-qualified type (unambiguous), the symbol is the struct
-/// name (last `::` segment).
+/// Name and symbol for a relayer-created token: the fully-qualified coin type
+/// and its struct name. Deterministic, needs no external metadata.
 fn derive_token_metadata(coin_type: &str) -> (String, String) {
     let symbol = coin_type
         .rsplit("::")
@@ -706,10 +702,9 @@ fn derive_token_metadata(coin_type: &str) -> (String, String) {
     (coin_type.to_string(), symbol)
 }
 
-/// Scans `BridgeCreated` logs from the factory over a block range and folds
-/// them into `tokens`. Twins (a second token for an already-claimed coin type,
-/// possible when a variant spelling was registered by a third party) are
-/// ignored with a warning so one canonical token stays authoritative.
+/// Folds the factory's `BridgeCreated` logs over a block range into `tokens`,
+/// ignoring twins (a second token for a claimed coin type). Returns the log
+/// count.
 async fn absorb_creations(
     http: &reqwest::Client,
     l2_rpc: &str,
@@ -717,7 +712,7 @@ async fn absorb_creations(
     tokens: &mut TokenRegistry,
     from_block: u64,
     to_block: u64,
-) -> Result<()> {
+) -> Result<usize> {
     let logs = eth_get_logs(
         http,
         l2_rpc,
@@ -727,6 +722,7 @@ async fn absorb_creations(
         to_block,
     )
     .await?;
+    let count = logs.len();
     for log in logs {
         match parse_bridge_created_log(&log) {
             Ok((coin_str, token)) => match normalize_coin_type(&coin_str) {
@@ -742,7 +738,67 @@ async fn absorb_creations(
             Err(e) => warn!(error = %e, "bridge: skipping undecodable BridgeCreated log"),
         }
     }
-    Ok(())
+    Ok(count)
+}
+
+/// History indexer chunk size, in blocks.
+const CREATION_SCAN_CHUNK: u64 = 2_500;
+const MIN_CREATION_SCAN_CHUNK: u64 = 64;
+/// Halve the chunk at this many logs per response: creation is permissionless,
+/// so the count per range is unbounded.
+const CREATION_SCAN_HALVE_AFTER: usize = 500;
+
+/// Restores the token registry from the persisted snapshot, or indexes the
+/// factory's full history in bounded chunks (first start, or a file from
+/// before the registry was persisted). The result is stored with the block
+/// cursor, so later restarts never rescan.
+async fn restore_token_registry(
+    http: &reqwest::Client,
+    l2_rpc: &str,
+    factory: Address,
+    cursors: &mut Cursors,
+    cursors_path: &Path,
+) -> Result<TokenRegistry> {
+    if !cursors.tokens.is_empty() && cursors.next_l2_block > 0 {
+        let registry = TokenRegistry::from_snapshot(&cursors.tokens)?;
+        info!(
+            tokens = registry.len(),
+            next_l2_block = cursors.next_l2_block,
+            "bridge token registry restored"
+        );
+        return Ok(registry);
+    }
+
+    let head = eth_block_number(http, l2_rpc).await?;
+    let mut registry = TokenRegistry::default();
+    let mut chunk = CREATION_SCAN_CHUNK;
+    let mut from = 0u64;
+    while from <= head {
+        let to = from.saturating_add(chunk - 1).min(head);
+        match absorb_creations(http, l2_rpc, factory, &mut registry, from, to).await {
+            Ok(found) => {
+                if found >= CREATION_SCAN_HALVE_AFTER && chunk > MIN_CREATION_SCAN_CHUNK {
+                    chunk /= 2;
+                }
+                from = to + 1;
+            }
+            Err(e) if chunk > MIN_CREATION_SCAN_CHUNK => {
+                chunk /= 2;
+                warn!(error = %e, chunk, "bridge: creation scan narrowed; retrying chunk");
+            }
+            Err(e) => return Err(e).context("indexing BridgeCreated history"),
+        }
+    }
+
+    cursors.next_l2_block = head + 1;
+    cursors.tokens = registry.snapshot();
+    persist_cursors(cursors_path, cursors).await;
+    info!(
+        tokens = registry.len(),
+        next_l2_block = cursors.next_l2_block,
+        "bridge token registry indexed from factory history"
+    );
+    Ok(registry)
 }
 
 // ---------- L2 JSON-RPC ----------
@@ -758,9 +814,8 @@ struct RpcLog {
     data: String,
 }
 
-/// Fetches logs with a topic-0 filter, restricted to `addresses`. The address
-/// filter is security-relevant for withdrawals: only factory-registered tokens
-/// may ever trigger a Sui release.
+/// Fetches logs by topic-0, restricted to `addresses`. For withdrawals the
+/// filter is what keeps forged events from unregistered contracts out.
 async fn eth_get_logs(
     http: &reqwest::Client,
     l2_rpc: &str,
@@ -1513,6 +1568,56 @@ mod tests {
         // Re-recording the same pair is idempotent.
         assert!(reg.insert(coin.clone(), a));
         assert_eq!(reg.len(), 1);
+    }
+
+    #[test]
+    fn token_registry_snapshot_roundtrips() {
+        let mut reg = TokenRegistry::default();
+        let sui =
+            b"0000000000000000000000000000000000000000000000000000000000000002::sui::SUI".to_vec();
+        let tst =
+            b"0000000000000000000000000000000000000000000000000000000000000005::test::TST".to_vec();
+        let sui_token: Address = Address::from([0x11u8; 20]);
+        let tst_token: Address = Address::from([0x22u8; 20]);
+        reg.insert(sui.clone(), sui_token);
+        reg.insert(tst.clone(), tst_token);
+
+        let snapshot = reg.snapshot();
+        let restored = TokenRegistry::from_snapshot(&snapshot).unwrap();
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored.token_for(&sui), Some(sui_token));
+        assert_eq!(restored.token_for(&tst), Some(tst_token));
+        assert_eq!(restored.coin_for(&sui_token), Some(sui.clone()));
+        assert_eq!(restored.coin_for(&tst_token), Some(tst.clone()));
+    }
+
+    #[test]
+    fn token_registry_snapshot_is_deterministic() {
+        let mut reg = TokenRegistry::default();
+        reg.insert(b"0x5::b::B".to_vec(), Address::from([0x11u8; 20]));
+        reg.insert(b"0x5::a::A".to_vec(), Address::from([0x22u8; 20]));
+        // BTreeMap keeps entries sorted by coin type, so file diffs stay small.
+        let keys: Vec<_> = reg.snapshot().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            vec![hex::encode(b"0x5::a::A"), hex::encode(b"0x5::b::B")]
+        );
+    }
+
+    #[test]
+    fn token_registry_from_snapshot_rejects_corruption() {
+        let mut snapshot = std::collections::BTreeMap::new();
+        snapshot.insert(hex::encode(b"0x2::sui::SUI"), "0x4200".to_string()); // bad address
+        assert!(TokenRegistry::from_snapshot(&snapshot).is_err());
+
+        let mut snapshot = std::collections::BTreeMap::new();
+        snapshot.insert(
+            "zz-not-hex".to_string(),
+            Address::from([0x11u8; 20]).to_checksum(None).to_string(),
+        );
+        assert!(TokenRegistry::from_snapshot(&snapshot).is_err());
+
+        assert!(TokenRegistry::from_snapshot(&std::collections::BTreeMap::new()).is_ok());
     }
 
     #[test]
