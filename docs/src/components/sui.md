@@ -73,7 +73,10 @@ verify against `signer.sequencer_pubkey`.
 ## Enshrined bridge
 
 The crate also hosts the Sui half of the [bridge](../bridge.md): `bridge.rs`
-reads deposits by nonce and submits `bridge::withdraw`. The `bridge` module is
+reads vault state (`vault_status`) and single deposits (`deposit_at`), and
+submits `bridge::withdraw` / `bridge::initialize`. The `bridge` module is
 published as part of the settlement package, and `bridge::initialize` (which
-creates the shared `Vault` + `BridgeCap`) is auto-called on first start when the
-bridge is enabled, mirroring settlement's auto-deploy.
+creates the shared `Vault` + `BridgeCap`) is called on first start when the
+bridge is enabled, mirroring settlement's auto-deploy. The vault accepts any
+coin type; canonical L2 tokens are created on demand by the factory (see the
+bridge page).

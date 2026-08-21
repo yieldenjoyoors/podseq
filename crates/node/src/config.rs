@@ -229,8 +229,8 @@ pub struct BridgeConfig {
     #[serde(default)]
     pub vault_id: Option<String>,
     /// Path to the relayer EVM private key (raw 32-byte secp256k1 hex). Its
-    /// address must hold the L2 `relayer` role (set via `Bridge.initialize`)
-    /// and be funded for gas.
+    /// address must be the factory's `relayer` (set via
+    /// `BridgeFactory.initialize`) and be funded for gas.
     #[serde(default = "default_relayer_key_path")]
     pub l2_relayer_key_path: Option<PathBuf>,
     /// Relayer poll interval, in milliseconds.

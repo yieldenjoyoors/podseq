@@ -10,11 +10,9 @@ use std::path::Path;
 
 use podseq_core::Error as CoreError;
 use sui_crypto::ed25519::Ed25519PrivateKey;
-use sui_crypto::SuiSigner;
 use sui_rpc::field::FieldMask;
 use sui_rpc::field::FieldMaskUtil;
 use sui_rpc::proto::sui::rpc::v2::owner;
-use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest;
 use sui_rpc::proto::sui::rpc::v2::GetObjectRequest;
 use sui_sdk_types::Address;
 use sui_sdk_types::Identifier;
@@ -125,12 +123,7 @@ impl BridgeClient {
         amount: u64,
         l2_nonce: u64,
     ) -> Result<(), BridgeError> {
-        let function = Function::new(
-            self.package,
-            Identifier::new("bridge").map_err(|e| BridgeError::Parse(e.to_string()))?,
-            Identifier::new("withdraw").map_err(|e| BridgeError::Parse(e.to_string()))?,
-        )
-        .with_type_args(vec![coin_type]);
+        let function = bridge_function(self.package, "withdraw").with_type_args(vec![coin_type]);
 
         let mut builder = TransactionBuilder::new();
         let cap = builder.object(ObjectInput::new(self.cap));
@@ -144,33 +137,39 @@ impl BridgeClient {
         );
         builder.set_sender(self.sender);
 
+        let tx = self.build_tx(builder).await?;
+        self.submit(tx, "bridge withdraw").await?;
+        info!(%recipient, amount, l2_nonce, "bridge withdrawal released on Sui");
+        Ok(())
+    }
+
+    /// Builds a transaction against this client's Sui connection.
+    async fn build_tx(
+        &self,
+        builder: TransactionBuilder,
+    ) -> Result<sui_sdk_types::Transaction, BridgeError> {
         let mut rpc = self.rpc.clone();
-        let tx = builder
+        builder
             .build(&mut rpc)
             .await
-            .map_err(|e| BridgeError::Build(e.to_string()))?;
-        let signature = self
-            .key
-            .sign_transaction(&tx)
-            .map_err(|e| BridgeError::Key(e.to_string()))?;
-        let response = self
-            .rpc
-            .execute_transaction_and_wait_for_checkpoint(
-                ExecuteTransactionRequest::new(tx.into()).with_signatures(vec![signature.into()]),
-                std::time::Duration::from_secs(30),
-            )
-            .await
-            .map_err(|e| BridgeError::Execution(e.to_string()))?;
+            .map_err(|e| BridgeError::Build(e.to_string()))
+    }
 
-        let inner = response.into_inner();
-        let status = inner.transaction().effects().status();
+    /// Signs, submits, and confirms a transaction, requiring on-chain success.
+    ///
+    /// Confirmation at the effects level matters: a transaction can execute and
+    /// still abort (e.g. a spent gas object race), and callers must not treat
+    /// that as done.
+    async fn submit(&self, tx: sui_sdk_types::Transaction, label: &str) -> Result<(), BridgeError> {
+        let mut rpc = self.rpc.clone();
+        let response = sign_and_execute(&mut rpc, &self.key, tx, label).await?;
+        let status = response.transaction().effects().status();
         if !status.success() {
             return Err(BridgeError::Execution(format!(
-                "withdraw failed: {}",
+                "{label} failed: {}",
                 status.error().description.clone().unwrap_or_default()
             )));
         }
-        info!(%recipient, amount, l2_nonce, "bridge withdrawal released on Sui");
         Ok(())
     }
 
@@ -194,14 +193,7 @@ impl BridgeClient {
         let package = parse_address(package_id, "package id")?;
 
         let mut builder = TransactionBuilder::new();
-        builder.move_call(
-            Function::new(
-                package,
-                Identifier::new("bridge").map_err(|e| BridgeError::Parse(e.to_string()))?,
-                Identifier::new("initialize").map_err(|e| BridgeError::Parse(e.to_string()))?,
-            ),
-            vec![],
-        );
+        builder.move_call(bridge_function(package, "initialize"), vec![]);
         builder.set_sender(sender);
         let tx = builder
             .build(&mut rpc)
@@ -227,6 +219,17 @@ impl BridgeClient {
     }
 }
 
+/// Builds a `bridge::<name>` move-call target on `package`.
+///
+/// `name` is always a hard-coded literal ("withdraw", "initialize"), so identifier validity is a compile-time property.
+fn bridge_function(package: Address, name: &str) -> Function {
+    Function::new(
+        package,
+        Identifier::new("bridge").expect("static identifier"),
+        Identifier::new(name).expect("hard-coded identifier"),
+    )
+}
+
 /// Object IDs created by `bridge::initialize`.
 #[derive(Debug, Clone)]
 pub struct DeployedBridge {
@@ -234,28 +237,26 @@ pub struct DeployedBridge {
     pub cap_id: String,
 }
 
-/// Reads the next deposit nonce from the vault object.
-pub async fn deposit_nonce(rpc_url: &str, vault_id: &str) -> Result<u64, BridgeError> {
-    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
-    let vault = parse_address(vault_id, "vault id")?;
-    let response = rpc
-        .ledger_client()
-        .get_object(GetObjectRequest::new(&vault).with_read_mask(FieldMask::from_str("contents")))
-        .await
-        .map_err(|e| BridgeError::Rpc(format!("get_object: {e}")))?;
-    let bytes = response
-        .into_inner()
-        .object
-        .and_then(|o| o.contents)
-        .and_then(|c| c.value)
-        .ok_or_else(|| BridgeError::Execution("vault has no contents".into()))?;
-    parse_vault_deposit_nonce(&bytes)
+/// Vault state the relayer and tests read, decoded from the shared object's BCS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultStatus {
+    /// Next deposit nonce to be assigned on Sui.
+    pub deposit_nonce: u64,
+    /// Next withdraw nonce to be assigned on Sui.
+    pub withdraw_nonce: u64,
+    /// UID of the `deposits` table; fixed at `initialize`, reused for
+    /// [`deposit_at`] lookups.
+    pub deposits_table_uid: Address,
 }
 
-/// Extracts the deposits-table UID from raw vault BCS contents.
-///
-/// The table UID is fixed at `initialize`; fetch once and reuse for [`deposit_at`].
-pub async fn deposits_table_uid(rpc_url: &str, vault_id: &str) -> Result<Address, BridgeError> {
+/// Reads the relayer-relevant vault state in one `get_object`.
+pub async fn vault_status(rpc_url: &str, vault_id: &str) -> Result<VaultStatus, BridgeError> {
+    let bytes = vault_contents(rpc_url, vault_id).await?;
+    parse_vault_status(&bytes)
+}
+
+/// Fetches the raw BCS contents of the vault object.
+async fn vault_contents(rpc_url: &str, vault_id: &str) -> Result<Vec<u8>, BridgeError> {
     let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
     let vault = parse_address(vault_id, "vault id")?;
     let response = rpc
@@ -269,13 +270,50 @@ pub async fn deposits_table_uid(rpc_url: &str, vault_id: &str) -> Result<Address
         .and_then(|o| o.contents)
         .and_then(|c| c.value)
         .ok_or_else(|| BridgeError::Execution("vault has no contents".into()))?;
-    parse_deposits_table_uid(&bytes)
+    Ok(bytes.to_vec())
+}
+
+/// Mirrors the Move `Vault` layout (`move/sources/bridge.move`).
+#[derive(serde::Deserialize)]
+#[allow(dead_code)]
+struct VaultBcs {
+    id: Address,
+    deposit_nonce: u64,
+    withdraw_nonce: u64,
+    reserves: BagBcs,
+    deposits: TableBcs,
+    processed_withdrawals: TableBcs,
+}
+
+#[derive(serde::Deserialize)]
+#[allow(dead_code)]
+struct BagBcs {
+    id: Address,
+    size: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[allow(dead_code)]
+struct TableBcs {
+    id: Address,
+    size: u64,
+}
+
+/// Decodes [`VaultStatus`] from raw vault BCS.
+pub fn parse_vault_status(contents: &[u8]) -> Result<VaultStatus, BridgeError> {
+    let vault: VaultBcs =
+        bcs::from_bytes(contents).map_err(|e| BridgeError::Parse(format!("vault BCS: {e}")))?;
+    Ok(VaultStatus {
+        deposit_nonce: vault.deposit_nonce,
+        withdraw_nonce: vault.withdraw_nonce,
+        deposits_table_uid: vault.deposits.id,
+    })
 }
 
 /// Reads a single deposit by nonce via its dynamic-field object id.
 ///
-/// `table_uid` is from [`deposits_table_uid`]. Returns `None` if the nonce has
-/// not been deposited yet.
+/// `table_uid` is [`VaultStatus::deposits_table_uid`]. Returns `None` if the
+/// nonce has not been deposited yet.
 pub async fn deposit_at(
     rpc_url: &str,
     table_uid: &Address,
@@ -298,52 +336,6 @@ pub async fn deposit_at(
         .and_then(|c| c.value)
         .ok_or_else(|| BridgeError::Execution("field contents missing raw BCS".into()))?;
     Ok(Some(parse_field_deposit(&bytes)?))
-}
-
-/// Decodes `deposit_nonce` from raw vault BCS.
-///
-/// Layout: `Vault { id: UID, deposit_nonce: u64, withdraw_nonce: u64, ... }`. UID
-/// is 32 bytes under BCS, so `deposit_nonce` lives at bytes 32..40.
-pub fn parse_vault_deposit_nonce(contents: &[u8]) -> Result<u64, BridgeError> {
-    if contents.len() < 40 {
-        return Err(BridgeError::Execution(format!(
-            "vault BCS too short: {} bytes",
-            contents.len()
-        )));
-    }
-    Ok(u64::from_le_bytes(contents[32..40].try_into().map_err(
-        |_| BridgeError::Execution("invalid deposit_nonce".into()),
-    )?))
-}
-
-/// Extracts the deposits `Table` UID from raw vault BCS.
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-struct VaultBcs {
-    id: Address,
-    deposit_nonce: u64,
-    withdraw_nonce: u64,
-    reserves: BagBcs,
-    deposits: TableBcs,
-    processed_withdrawals: TableBcs,
-}
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-struct BagBcs {
-    id: Address,
-    size: u64,
-}
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-struct TableBcs {
-    id: Address,
-    size: u64,
-}
-
-fn parse_deposits_table_uid(bytes: &[u8]) -> Result<Address, BridgeError> {
-    let vault: VaultBcs =
-        bcs::from_bytes(bytes).map_err(|e| BridgeError::Parse(format!("vault BCS: {e}")))?;
-    Ok(vault.deposits.id)
 }
 
 /// Extracts the deposit record from a raw `Field<u64, DepositRecord>` BCS buffer.
@@ -394,18 +386,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn parse_vault_deposit_nonce_reads_little_endian_field() {
-        let mut buf = vec![0u8; 40];
-        buf[32..40].copy_from_slice(&123u64.to_le_bytes());
-        assert_eq!(parse_vault_deposit_nonce(&buf).unwrap(), 123);
-    }
-
-    #[test]
-    fn parse_vault_deposit_nonce_rejects_short_buffer() {
-        assert!(parse_vault_deposit_nonce(&[0u8; 39]).is_err());
-    }
-
     #[derive(serde::Serialize)]
     #[allow(dead_code)]
     struct VaultMirror {
@@ -429,11 +409,11 @@ mod tests {
         size: u64,
     }
 
-    fn vault_contents_with_deposits_table(deposit_nonce: u64, table_uid: [u8; 32]) -> Vec<u8> {
+    fn vault_contents(deposit_nonce: u64, withdraw_nonce: u64, table_uid: [u8; 32]) -> Vec<u8> {
         let vault = VaultMirror {
             id: Address::new([0; 32]),
             deposit_nonce,
-            withdraw_nonce: 0,
+            withdraw_nonce,
             reserves: ReservesMirror {
                 id: Address::new([0xff; 32]),
                 size: 0,
@@ -451,18 +431,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_deposits_table_uid_reads_deposits_id() {
+    fn parse_vault_status_reads_all_fields() {
         let mut uid = [0u8; 32];
         uid[0] = 0xab;
         uid[31] = 0xcd;
-        let bytes = vault_contents_with_deposits_table(7, uid);
-        assert_eq!(parse_deposits_table_uid(&bytes).unwrap(), Address::new(uid));
+        let bytes = vault_contents(7, 3, uid);
+
+        let status = parse_vault_status(&bytes).unwrap();
+        assert_eq!(status.deposit_nonce, 7);
+        assert_eq!(status.withdraw_nonce, 3);
+        assert_eq!(status.deposits_table_uid, Address::new(uid));
     }
 
     #[test]
-    fn parse_deposits_table_uid_preserves_deposit_nonce() {
-        let bytes = vault_contents_with_deposits_table(42, [0; 32]);
-        assert_eq!(parse_vault_deposit_nonce(&bytes).unwrap(), 42);
+    fn parse_vault_status_rejects_truncated_bcs() {
+        let full = vault_contents(0, 0, [0; 32]);
+        // Drop trailing bytes so the table mirror cannot decode.
+        assert!(parse_vault_status(&full[..full.len() - 1]).is_err());
+        assert!(parse_vault_status(&[0u8; 16]).is_err());
     }
 
     #[derive(serde::Serialize)]

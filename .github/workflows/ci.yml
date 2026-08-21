@@ -106,7 +106,7 @@ jobs:
         run: docker run --rm --entrypoint podseq podseq:ci --help
 
   e2e:
-    name: e2e (engine only)
+    name: e2e (hermetic)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -120,7 +120,7 @@ jobs:
 
       # The tests bring up their own Reth container via docker compose.
       - name: Run e2e tests
-        run: cargo test -p podseq-e2e --no-fail-fast --test engine_integration -- --test-threads=1 --nocapture
+        run: cargo test -p podseq-e2e --no-fail-fast --test engine_integration --test bridge_bootstrap -- --test-threads=1 --nocapture
 
   # Runs on every PR/push (non-blocking) and on the daily schedule + manual dispatch (blocking).
   e2e-full:

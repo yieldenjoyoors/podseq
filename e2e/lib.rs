@@ -98,8 +98,10 @@ impl Stack {
       - "{rpc_port}:8545"
       - "{engine_port}:8551"
     volumes:
-      - ./jwt.hex:/jwt/jwt.hex:ro
-      - ./reth-genesis.json:/genesis/reth-genesis.json:ro
+      # `:z` relabels the bind mounts for container access on SELinux hosts
+      # (Fedora/RHEL); it is a no-op elsewhere.
+      - ./jwt.hex:/jwt/jwt.hex:ro,z
+      - ./reth-genesis.json:/genesis/reth-genesis.json:ro,z
     restart: "no"
 "#,
             image = RETH_IMAGE,
@@ -277,7 +279,7 @@ impl FullStack {
 
         // Bridge relayer EVM key: a fresh 32-byte secp256k1 scalar. podseq loads
         // it from `bridge.l2_relayer_key_path`; the test funds its address from
-        // the genesis account and calls `Bridge.initialize` with it.
+        // the genesis account and bootstraps the L2 bridge contracts with it.
         let relayer_signer = alloy_signer_local::PrivateKeySigner::random();
         let relayer_key_path = secrets_dir.join("relayer.key");
         std::fs::write(&relayer_key_path, hex::encode(relayer_signer.to_bytes().0))?;
@@ -336,9 +338,11 @@ mode = "sequencer"
       - "{rpc_port}:8545"
       - "{engine_port}:8551"
     volumes:
-      - ./jwt.hex:/jwt/jwt.hex:ro
+      # `:z` relabels the bind mounts for container access on SELinux hosts
+      # (Fedora/RHEL); it is a no-op elsewhere.
+      - ./jwt.hex:/jwt/jwt.hex:ro,z
       - reth-data:/data
-      - ./reth-genesis.json:/genesis/reth-genesis.json:ro
+      - ./reth-genesis.json:/genesis/reth-genesis.json:ro,z
     restart: "no"
 
   podseq:
@@ -352,9 +356,9 @@ mode = "sequencer"
     environment:
       RUST_LOG: "info,podseq=debug"
     volumes:
-      - ./jwt.hex:/jwt/jwt.hex:ro
-      - ./secrets:/secrets:ro
-      - ./podseq.toml:/etc/podseq/podseq.toml
+      - ./jwt.hex:/jwt/jwt.hex:ro,z
+      - ./secrets:/secrets:ro,z
+      - ./podseq.toml:/etc/podseq/podseq.toml,z
     restart: "no"
 
 volumes:

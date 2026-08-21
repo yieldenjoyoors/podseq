@@ -28,8 +28,6 @@ use podseq_sui::{
 use serde::Deserialize;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
-use sui_rpc::field::FieldMask;
-use sui_rpc::field::FieldMaskUtil;
 use sui_sdk_types::Identifier;
 use sui_sdk_types::StructTag;
 use sui_sdk_types::TypeTag;
@@ -44,9 +42,11 @@ const GENESIS_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 
 const SUI_RPC: &str = "https://fullnode.testnet.sui.io:443";
 
-/// Bridge predeploy address (genesis-planted bytecode, see `solidity/`).
-const BRIDGE_PREDEPLOY: &str = "0x4200000000000000000000000000000000000010";
-/// SUI coin type bridged by the test's `Bridge` instance.
+/// BridgeFactory predeploy address (genesis-planted bytecode, see `solidity/`).
+const BRIDGE_FACTORY: &str = "0x4200000000000000000000000000000000000010";
+/// Predeployed canonical SUI Bridge token (genesis-planted bytecode).
+const BRIDGE_TOKEN_PREDEPLOY: &str = "0x4200000000000000000000000000000000000011";
+/// SUI coin type bridged by the test.
 const COIN_TYPE: &str = "0x2::sui::SUI";
 /// Amount deposited and then withdrawn back, in MIST (0.01 SUI).
 const BRIDGE_AMOUNT: u64 = 10_000_000;
@@ -182,9 +182,9 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     // Fund the relayer from the genesis account, then initialize the L2 Bridge.
     fund_relayer(&http, &rpc_url, relayer_addr, chain_id).await?;
     println!("e2e: relayer funded");
-    initialize_l2_bridge(&http, &rpc_url, &relayer_signer, chain_id).await?;
-    println!("e2e: L2 bridge initialized");
-    wait_for_relayer_ready(&http, &rpc_url, BRIDGE_PREDEPLOY).await?;
+    bootstrap_l2_bridge(&http, &rpc_url, &relayer_signer, chain_id).await?;
+    println!("e2e: factory initialized, predeployed SUI token adopted");
+    wait_for_relayer_ready(&http, &rpc_url, BRIDGE_FACTORY, relayer_addr).await?;
     println!("e2e: relayer is relaying");
 
     // Load the Sui signer to submit the deposit.
@@ -193,7 +193,8 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     let l2_recipient: [u8; 20] = GENESIS_ADDRESS.parse::<Address>()?.into();
 
     // Direction 1: Sui deposit → L2 mint.
-    let balance_before = eth_balance_of(&http, &rpc_url, BRIDGE_PREDEPLOY, GENESIS_ADDRESS).await?;
+    let balance_before =
+        eth_balance_of(&http, &rpc_url, BRIDGE_TOKEN_PREDEPLOY, GENESIS_ADDRESS).await?;
     sui_deposit(
         &sui_key,
         sender,
@@ -207,7 +208,7 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     if wait_for_l2_balance(
         &http,
         &rpc_url,
-        BRIDGE_PREDEPLOY,
+        BRIDGE_TOKEN_PREDEPLOY,
         GENESIS_ADDRESS,
         balance_before + BRIDGE_AMOUNT,
         Duration::from_secs(180),
@@ -228,6 +229,7 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
         &http,
         &rpc_url,
         &signer,
+        BRIDGE_TOKEN_PREDEPLOY,
         chain_id,
         sui_recipient_bytes,
         BRIDGE_AMOUNT,
@@ -632,8 +634,22 @@ fn decode_abi_string_at(bytes: &[u8], len_offset: usize) -> Result<String> {
     Ok(String::from_utf8_lossy(&bytes[data_pos..end]).to_string())
 }
 
+/// ABI-encodes `initialize(address)`.
+fn encode_factory_initialize(relayer: Address) -> Vec<u8> {
+    let mut out = selector(b"initialize(address)").to_vec();
+    let mut addr_word = [0u8; 32];
+    addr_word[12..].copy_from_slice(relayer.as_ref());
+    out.extend_from_slice(&addr_word);
+    out
+}
+
 /// ABI-encodes `initialize(string,string,string,address)`.
-fn encode_initialize(name: &str, symbol: &str, coin_type: &str, relayer: Address) -> Vec<u8> {
+fn encode_bridge_initialize(
+    name: &str,
+    symbol: &str,
+    coin_type: &str,
+    relayer: Address,
+) -> Vec<u8> {
     let selector = selector(b"initialize(string,string,string,address)");
     let mut out = selector.to_vec();
     // Header: 3 string offsets + 1 static address = 4 words.
@@ -655,18 +671,58 @@ fn encode_initialize(name: &str, symbol: &str, coin_type: &str, relayer: Address
     out
 }
 
-/// Calls `Bridge.initialize(string,string,string,address)` on the L2 predeploy.
-async fn initialize_l2_bridge(
+/// ABI-encodes `adoptBridge(string,address)`.
+fn encode_adopt_bridge(coin_type: &str, token: Address) -> Vec<u8> {
+    let mut out = selector(b"adoptBridge(string,address)").to_vec();
+    // Head: string offset + the static address word.
+    out.extend_from_slice(&U256::from(32 + 32).to_be_bytes::<32>());
+    let mut addr_word = [0u8; 32];
+    addr_word[12..].copy_from_slice(token.as_ref());
+    out.extend_from_slice(&addr_word);
+    // Tail: the string.
+    let bytes = coin_type.as_bytes();
+    let padded_len = bytes.len().div_ceil(32) * 32;
+    out.extend_from_slice(&U256::from(bytes.len()).to_be_bytes::<32>());
+    out.extend_from_slice(bytes);
+    out.resize(out.len() + (padded_len - bytes.len()), 0);
+    out
+}
+
+/// ABI-encodes `createBridge(string,string,string)`.
+fn encode_create_bridge(name: &str, symbol: &str, coin_type: &str) -> Vec<u8> {
+    let mut out = selector(b"createBridge(string,string,string)").to_vec();
+    let mut dynamic = Vec::new();
+    let mut offset = 3 * 32;
+    for s in [name, symbol, coin_type] {
+        out.extend_from_slice(&U256::from(offset).to_be_bytes::<32>());
+        let bytes = s.as_bytes();
+        let padded_len = bytes.len().div_ceil(32) * 32;
+        dynamic.extend_from_slice(&U256::from(bytes.len()).to_be_bytes::<32>());
+        dynamic.extend_from_slice(bytes);
+        dynamic.resize(dynamic.len() + (padded_len - bytes.len()), 0);
+        offset += 32 + padded_len;
+    }
+    out.extend_from_slice(&dynamic);
+    out
+}
+
+/// Sends a signed tx from the relayer account to an L2 contract and waits for
+/// a successful receipt, returning it.
+#[allow(clippy::too_many_arguments)]
+async fn send_contract_tx(
     http: &reqwest::Client,
     rpc_url: &str,
     relayer: &PrivateKeySigner,
     chain_id: u64,
-) -> Result<()> {
+    to: &str,
+    calldata: Vec<u8>,
+    gas_limit: u64,
+    label: &str,
+) -> Result<serde_json::Value> {
     let from = relayer.address();
     let nonce = eth_get_transaction_count(http, rpc_url, from).await?;
     let price_hex: String = rpc_call(http, rpc_url, "eth_gasPrice", vec![]).await?;
     let price = u128::from_str_radix(price_hex.trim_start_matches("0x"), 16)?;
-    let calldata = encode_initialize("Bridged SUI", "SUI", COIN_TYPE, from);
 
     // Dry-run via eth_call to surface the revert reason before spending gas.
     let call_resp: serde_json::Value = http
@@ -677,7 +733,7 @@ async fn initialize_l2_bridge(
             "method": "eth_call",
             "params": [{
                 "from": format!("{from:?}"),
-                "to": BRIDGE_PREDEPLOY,
+                "to": to,
                 "data": format!("0x{}", hex::encode(&calldata)),
             }, "latest"],
         }))
@@ -687,17 +743,17 @@ async fn initialize_l2_bridge(
         .await?;
     if let Some(result) = call_resp.get("result").and_then(|v| v.as_str()) {
         if result.starts_with("0x08c379a0") {
-            bail!("initialize would revert: {}", decode_revert_string(result));
+            bail!("{label} would revert: {}", decode_revert_string(result));
         }
     }
 
     let mut tx = TxEip1559 {
         chain_id,
         nonce,
-        gas_limit: 500_000,
+        gas_limit,
         max_fee_per_gas: price,
         max_priority_fee_per_gas: price.min(2_000_000_000),
-        to: TxKind::Call(Address::from_str(BRIDGE_PREDEPLOY)?),
+        to: TxKind::Call(Address::from_str(to)?),
         value: U256::ZERO,
         access_list: Default::default(),
         input: calldata.into(),
@@ -716,7 +772,7 @@ async fn initialize_l2_bridge(
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if Instant::now() >= deadline {
-            bail!("initialize tx {tx_hash} never confirmed");
+            bail!("{label} tx {tx_hash} never confirmed");
         }
         if let Some(receipt) = eth_get_transaction_receipt(http, rpc_url, &tx_hash).await? {
             let status = receipt
@@ -724,14 +780,77 @@ async fn initialize_l2_bridge(
                 .and_then(|s| s.as_str())
                 .unwrap_or("0x0");
             if status.eq_ignore_ascii_case("0x1") {
-                return Ok(());
+                return Ok(receipt);
             }
             if status.eq_ignore_ascii_case("0x0") {
-                bail!("initialize tx reverted; receipt: {receipt}");
+                bail!("{label} tx reverted; receipt: {receipt}");
             }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Brings up the L2 side of the bridge: initializes the factory, configures the
+/// predeployed canonical SUI token, adopts it into the factory registry, and
+/// exercises the factory's permissionless creation path with an unrelated coin
+/// type. All calls are one-time on a fresh chain.
+async fn bootstrap_l2_bridge(
+    http: &reqwest::Client,
+    rpc_url: &str,
+    relayer: &PrivateKeySigner,
+    chain_id: u64,
+) -> Result<()> {
+    let from = relayer.address();
+    send_contract_tx(
+        http,
+        rpc_url,
+        relayer,
+        chain_id,
+        BRIDGE_FACTORY,
+        encode_factory_initialize(from),
+        100_000,
+        "factory initialize",
+    )
+    .await?;
+
+    send_contract_tx(
+        http,
+        rpc_url,
+        relayer,
+        chain_id,
+        BRIDGE_TOKEN_PREDEPLOY,
+        encode_bridge_initialize("Bridged SUI", "SUI", COIN_TYPE, from),
+        200_000,
+        "bridge initialize",
+    )
+    .await?;
+
+    send_contract_tx(
+        http,
+        rpc_url,
+        relayer,
+        chain_id,
+        BRIDGE_FACTORY,
+        encode_adopt_bridge(COIN_TYPE, Address::from_str(BRIDGE_TOKEN_PREDEPLOY)?),
+        200_000,
+        "adoptBridge",
+    )
+    .await?;
+
+    // The factory's permissionless creation path: anyone (here the same
+    // account) can create the canonical token for a new coin type.
+    send_contract_tx(
+        http,
+        rpc_url,
+        relayer,
+        chain_id,
+        BRIDGE_FACTORY,
+        encode_create_bridge("Test Coin", "TST", "0x5::test::TST"),
+        3_000_000,
+        "createBridge",
+    )
+    .await?;
+    Ok(())
 }
 
 /// Decodes a Solidity revert string from an `eth_call` result.
@@ -743,18 +862,29 @@ fn decode_revert_string(hex_result: &str) -> String {
     decode_abi_string_at(&bytes, 36).unwrap_or_else(|_| hex_result.to_string())
 }
 
-/// Polls `coinType()` on the predeploy; non-empty means the relayer accepts it.
-async fn wait_for_relayer_ready(http: &reqwest::Client, rpc_url: &str, bridge: &str) -> Result<()> {
+/// Polls until the factory is initialized and its relayer matches: that is the
+/// relayer's own readiness condition. Tokens are created on demand.
+async fn wait_for_relayer_ready(
+    http: &reqwest::Client,
+    rpc_url: &str,
+    factory: &str,
+    expected_relayer: Address,
+) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(120);
-    let selector = selector(b"coinType()");
+    let init_sel = selector(b"initialized()");
+    let relayer_sel = selector(b"relayer()");
     loop {
-        if let Ok(s) = eth_call_string(http, rpc_url, bridge, &selector).await {
-            if !s.is_empty() {
-                return Ok(());
-            }
+        if eth_call_bool(http, rpc_url, factory, &init_sel)
+            .await
+            .unwrap_or(false)
+            && eth_call_address(http, rpc_url, factory, &relayer_sel)
+                .await
+                .is_ok_and(|r| r == expected_relayer)
+        {
+            return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!("relayer never marked the L2 bridge ready");
+            bail!("bridge factory never became ready (initialized + relayer set)");
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -850,6 +980,7 @@ async fn initiate_withdrawal(
     http: &reqwest::Client,
     rpc_url: &str,
     signer: &PrivateKeySigner,
+    token: &str,
     chain_id: u64,
     sui_recipient: [u8; 32],
     amount: u64,
@@ -872,7 +1003,7 @@ async fn initiate_withdrawal(
         gas_limit: 100_000,
         max_fee_per_gas: price,
         max_priority_fee_per_gas: price.min(2_000_000_000),
-        to: TxKind::Call(Address::from_str(BRIDGE_PREDEPLOY)?),
+        to: TxKind::Call(Address::from_str(token)?),
         value: U256::ZERO,
         access_list: Default::default(),
         input: calldata.into(),
@@ -948,38 +1079,12 @@ async fn wait_for_sui_release(vault_id: &str, before: u64, timeout: Duration) ->
     }
 }
 
-/// Reads the vault's deposit_nonce from raw BCS contents.
-/// Reads a little-endian u64 at `offset` from the vault's raw BCS contents.
-async fn sui_vault_u64(vault_id: &str, offset: usize, label: &str) -> Result<u64> {
-    use sui_rpc::proto::sui::rpc::v2::GetObjectRequest;
-
-    let mut rpc = sui_rpc::Client::new(SUI_RPC).map_err(|e| anyhow!("sui rpc: {e}"))?;
-    let response = rpc
-        .ledger_client()
-        .get_object(
-            GetObjectRequest::new(
-                &vault_id
-                    .parse()
-                    .map_err(|e: sui_sdk_types::AddressParseError| anyhow!("{e}"))?,
-            )
-            .with_read_mask(FieldMask::from_str("contents")),
-        )
-        .await
-        .map_err(|e| anyhow!("get vault: {e}"))?;
-    let bytes = response
-        .into_inner()
-        .object
-        .and_then(|o| o.contents)
-        .and_then(|c| c.value)
-        .context("vault has no contents")?;
-    let end = offset.checked_add(8).context("offset overflow")?;
-    anyhow::ensure!(bytes.len() >= end, "vault BCS too short for {label}");
-    Ok(u64::from_le_bytes(bytes[offset..end].try_into().unwrap()))
-}
-
-/// The vault's `withdraw_nonce` (BCS offset 40: after UID + deposit_nonce).
+/// The vault's `withdraw_nonce`, read via the podseq Sui client.
 async fn sui_vault_withdraw_nonce(vault_id: &str) -> Result<u64> {
-    sui_vault_u64(vault_id, 40, "withdraw_nonce").await
+    podseq_sui::bridge::vault_status(SUI_RPC, vault_id)
+        .await
+        .map(|status| status.withdraw_nonce)
+        .map_err(|e| anyhow!("vault status: {e}"))
 }
 
 /// `balanceOf(address)` via eth_call.
@@ -1022,13 +1127,37 @@ async fn eth_balance_of(
     Ok(u64::from_str_radix(result.trim_start_matches("0x"), 16)?)
 }
 
-/// eth_call returning a Solidity string (for coinType()).
-async fn eth_call_string(
+/// eth_call returning a bool (for initialized()).
+async fn eth_call_bool(
     http: &reqwest::Client,
     rpc_url: &str,
     to: &str,
     selector: &[u8],
-) -> Result<String> {
+) -> Result<bool> {
+    let bytes = eth_call_raw(http, rpc_url, to, selector).await?;
+    Ok(bytes.last().is_some_and(|b| *b != 0))
+}
+
+/// eth_call returning an address (for relayer()).
+async fn eth_call_address(
+    http: &reqwest::Client,
+    rpc_url: &str,
+    to: &str,
+    selector: &[u8],
+) -> Result<Address> {
+    let bytes = eth_call_raw(http, rpc_url, to, selector).await?;
+    anyhow::ensure!(bytes.len() >= 32, "eth_call address return too short");
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&bytes[12..32]);
+    Ok(Address::from(addr))
+}
+
+async fn eth_call_raw(
+    http: &reqwest::Client,
+    rpc_url: &str,
+    to: &str,
+    selector: &[u8],
+) -> Result<Vec<u8>> {
     let to_addr: Address = to.parse()?;
     let resp: serde_json::Value = http
         .post(rpc_url)
@@ -1049,8 +1178,7 @@ async fn eth_call_string(
         bail!("eth_call error: {error}");
     }
     let hex = resp.get("result").and_then(|v| v.as_str()).unwrap_or("0x");
-    let bytes = hex::decode(hex.trim_start_matches("0x"))?;
-    Ok(decode_abi_string_at(&bytes, 32).unwrap_or_default())
+    Ok(hex::decode(hex.trim_start_matches("0x"))?)
 }
 
 #[cfg(test)]

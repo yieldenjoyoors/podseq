@@ -1,23 +1,24 @@
 # Enshrined Bridge
 
 Podseq ships a trust-minimized bridge between Sui and the L2. Users lock Sui
-coins (USDSui, SUI, etc.) in a vault and receive a matching ERC20 on L2; burning
-on L2 releases the original coins on Sui. There is **no external relayer**: the
-sequencer process itself relays both directions, holding the Sui `BridgeCap` and
-the L2 `relayer` role.
+coins (USDSui, SUI, or any coin type) in a vault and receive a matching ERC20 on
+L2; burning on L2 releases the original coins on Sui. There is **no external
+relayer**: the sequencer process itself relays both directions, holding the Sui
+`BridgeCap` and the L2 `relayer` role.
 
 ```text
             Sui                                   L2 (EVM)
 ┌──────────────────────────┐         ┌──────────────────────────┐
-│ bridge::Vault (shared)   │         │ Bridge.sol (predeploy)   │
-│  + BridgeCap (sequencer) │         │  + relayer (sequencer)   │
-└────────────┬─────────────┘         └────────────┬─────────────┘
-             │                                    │
-   deposit<T>(coin, l2_recipient)        initiateWithdrawal(sui_recipient, amt)
-             │ deposit_nonce (Table)              │ WithdrawalInitiated (logs)
-             ▼                                    ▼
+│ bridge::Vault (shared)   │         │ BridgeFactory (predeploy)│
+│  + BridgeCap (sequencer) │         │  ├─ Bridge@0x…11 (SUI)   │
+└────────────┬─────────────┘         │  └─ Bridge per coin…     │
+             │                       │     + relayer (sequencer)│
+   deposit<T>(coin, l2_recipient)                 │
+             │ deposit_nonce (Table)    initiateWithdrawal(sui_recipient, amt)
+             ▼                                    │ WithdrawalInitiated (logs)
         ┌─────────────  sequencer relayer (in-process)  ─────────────┐
-        │  reads deposits by nonce ──► mints on L2 (mint)            │
+        │  reads deposits by nonce ──► mints the coin's token (mint) │
+        │  factory: createBridge ──► one canonical ERC20 per type    │
         │  reads L2 burn logs ──► bridge::withdraw<T> on Sui         │
         └────────────────────────────────────────────────────────────┘
 ```
@@ -34,20 +35,40 @@ sequencer owns `BridgeCap`.
 | `deposit<T>`  | anyone      | locks `Coin<T>`, records `DepositRecord`, emits `Deposit`         |
 | `withdraw<T>` | `BridgeCap` | splits and sends `Coin<T>` to a Sui recipient, emits `Withdrawal` |
 
-Deposits are generic over `T`, so a single vault serves every bridged asset. Each
-coin type is tracked independently, so multiple `Bridge.sol` instances (one per
-coin) can share the same vault — each relayer only mints deposits whose
-`coin_type` matches its own token.
+Deposits are generic over `T` and every coin type is accepted: the L2 side can
+always produce a matching token on demand (see the factory below), so a deposit
+never locks value that cannot be represented and later burned for release. Each
+coin type is tracked independently in the vault's `Bag` and in the global nonce
+stream, so one vault serves every bridged asset.
 
 The Sui gRPC read API exposes no event query, so deposits are also written to the
 `deposits` table and read by nonce (one `get_object` per nonce), exactly like the
 settlement registry. See [Settlement Contract](./contract.md).
 
-## L2 side: `Bridge.sol`
+## L2 side: `BridgeFactory` + `Bridge.sol`
 
-One predeploy per bridged coin, behaving as an ERC20 (9 decimals, matching Sui).
-The `relayer` (sequencer EVM key) is the only minter; mint nonces must strictly
-increase, so a retried relay is a safe no-op. Users call
+`BridgeFactory` is the genesis predeploy at
+`0x4200000000000000000000000000000000000010`, and the canonical SUI `Bridge`
+token is predeployed right next to it at
+`0x4200000000000000000000000000000000000011`, so the flagship asset has a
+stable, integration-friendly address. The factory deploys every other token
+and keeps the on-chain registry `tokenFor(coinType)`:
+
+- **Permissionless**: anyone can call `createBridge(name, symbol, coinType)` for
+  a coin type that has no token yet. This is what makes "any coin" safe: no
+  operator gate stands between a deposit and its L2 representation.
+- **One canonical token per coin type**: a duplicate `coinType` reverts, so
+  bridged liquidity is never split across two representations of the same asset.
+- **Adoption for predeploys**: `adoptBridge(coinType, token)` (factory relayer
+  only) registers the genesis-planted `Bridge` as canonical for its coin type
+  after `Bridge.initialize` configures it, verifying on-chain that the token's
+  `coinType()` and `relayer()` match.
+- The factory's `relayer` (the sequencer's EVM key) is set as the minter on
+  every token it deploys.
+
+Each `Bridge` mints only against strictly increasing Sui deposit nonces, so a
+retried relay is a safe no-op (gaps are legal: each token mints the subsequence
+of the global nonce stream that belongs to its coin). Users call
 `initiateWithdrawal(bytes32 suiRecipient, uint256 amount)` to burn; the relayer
 watches `WithdrawalInitiated` logs and calls `bridge::withdraw` on Sui.
 
@@ -55,18 +76,26 @@ See `solidity/README.md` for compile and predeploy instructions.
 
 ## Rust: `podseq_sui::bridge` and the relayer
 
-- `crates/sui/src/bridge.rs` — Sui vault client: reads deposits by nonce
-  (`deposit_at`), reads the next nonce (`deposit_nonce`), and submits releases
-  (`BridgeClient::withdraw`). Mirrors the settlement reader/writer.
-- `crates/node/src/bridge.rs` — the in-process relayer (`BridgeRelayer`): polls
-  Sui deposits → signs and sends `mint` to the L2, polls L2 `WithdrawalInitiated`
-  logs → calls `bridge::withdraw` on Sui. Cursors are persisted to
-  `bridge_cursors.json` so a restart resumes without re-minting or re-releasing.
+- `crates/sui/src/bridge.rs` — Sui vault client: reads the whole vault state
+  in one fetch (`vault_status`: nonces, deposits-table UID), reads single
+  deposits by nonce (`deposit_at`), and submits transactions
+  (`BridgeClient::withdraw`, `initialize`).
+- `crates/node/src/bridge.rs` — the in-process relayer (`BridgeRelayer`):
+  - Sui deposits → resolves the deposit's coin type to its canonical token,
+    creating it through the factory when none exists yet (name and symbol are
+    derived from the coin type), then signs and sends `mint`;
+  - L2 `WithdrawalInitiated` logs → `bridge::withdraw` on Sui, with the coin
+    type taken from the emitting token;
+  - the token registry is rebuilt at startup from the factory's `BridgeCreated`
+    history and updated incrementally each pass.
+
+Cursors are persisted to `bridge_cursors.json` so a restart resumes without
+re-minting or re-releasing.
 
 ## Configuration
 
 Generate the relayer's EVM key with the keyring (it writes a 32-byte
-secp256k1 scalar; the printed address must hold the L2 `relayer` role):
+secp256k1 scalar; the printed address must be the factory's `relayer`):
 
 ```sh
 podseq keyring generate-evm-key --out relayer.key
@@ -89,32 +118,33 @@ Both sides are auto-configured on first start — the same UX as settlement:
   sequencer calls `bridge::initialize` and persists the created object IDs back
   to the config. No `package_id` to set (it reuses settlement's).
 - **L2**: Reth is the source of truth —
-  - the `Bridge` is a genesis predeploy at the fixed address
-    `0x4200000000000000000000000000000000000010` (see `solidity/`),
-  - its `coinType()` is read at startup (which coin this instance bridges),
+  - the `BridgeFactory` is a genesis predeploy at the fixed address
+    `0x4200000000000000000000000000000000000010`, and the canonical SUI
+    `Bridge` is predeployed at
+    `0x4200000000000000000000000000000000000011` (see `solidity/`),
   - the chain id is read from Reth via `eth_chainId`,
-  - mint gas is a fixed constant (`MINT_GAS_LIMIT`).
+  - mint and `createBridge` gas are fixed constants,
+  - tokens are created on demand; no per-coin configuration exists.
 
 Two keys, two roles (both required when `enabled`):
 
 - `signer.key_path` (the Sui suiprivkey, `sequencer.key`) — owns `BridgeCap`,
   signs `bridge::initialize` and `bridge::withdraw`.
-- `bridge.l2_relayer_key_path` (a secp256k1 EVM key, `relayer.key`) — holds the
-  L2 `relayer` role (set once via `Bridge.initialize` after chain start) and
-  signs `mint`. Fund it with L2 gas.
+- `bridge.l2_relayer_key_path` (a secp256k1 EVM key, `relayer.key`) — is the
+  factory's `relayer` (set once via `BridgeFactory.initialize` after chain
+  start) and signs `mint` and `createBridge`. Fund it with L2 gas.
 
 The bridge is disabled by default; it only runs in sequencer mode.
 
-## Bootstrap: initialize the L2 contract once
+## Bootstrap: initialize the L2 contracts once
 
-The `Bridge` is a genesis predeploy: its bytecode is planted at
-`0x4200…0010`, but **genesis runs no constructor**, so it boots unconfigured
-(`initialized == false`, empty `coinType`, `relayer == address(0)`). One manual
-step after the chain is producing blocks.
+Both predeploys are planted by genesis with **no constructor execution**, so
+they boot unconfigured (`initialized == false`, `relayer == address(0)`). Three
+one-time calls after the chain is producing blocks.
 
-First, **fund the relayer's EVM address with L2 gas** — it pays for `initialize`
-and every later `mint`. The dev genesis only funds the hardhat account
-(`0xf39F…`), so send it some native token:
+First, **fund the relayer's EVM address with L2 gas** — it pays for every call
+below plus every later `mint` and `createBridge`. The dev genesis only funds
+the hardhat account (`0xf39F…`), so send it some native token:
 
 ```sh
 # RELAYER is the address printed by `podseq keyring generate-evm-key`
@@ -123,37 +153,56 @@ cast send <RELAYER_EVM_ADDRESS> --value 1ether \
   --private-key <GENESIS_ACCOUNT_PRIVATE_KEY>
 ```
 
-Then initialize the contract:
+Then bring up the factory and adopt the predeployed SUI token:
 
 ```sh
+# 1. Initialize the factory (sets the minter for all tokens).
 cast send 0x4200000000000000000000000000000000000010 \
+  "initialize(address)" <RELAYER_EVM_ADDRESS> \
+  --private-key $(cat relayer.key)
+
+# 2. Configure the predeployed SUI token.
+cast send 0x4200000000000000000000000000000000000011 \
   "initialize(string,string,string,address)" \
-  "Bridged USDSui" "USDS" "0x2::sui::SUI" <RELAYER_EVM_ADDRESS> \
+  "Bridged SUI" "SUI" "0x2::sui::SUI" <RELAYER_EVM_ADDRESS> \
+  --private-key $(cat relayer.key)
+
+# 3. Adopt it as the canonical SUI token in the factory registry.
+cast send 0x4200000000000000000000000000000000000010 \
+  "adoptBridge(string,address)" \
+  "0x2::sui::SUI" 0x4200000000000000000000000000000000000011 \
   --private-key $(cat relayer.key)
 ```
 
 (If `cast send` errors `gas required exceeds allowance (0)`, the relayer address
 isn't funded — run the funding step above.)
 
-`initialize` is callable by anyone but exactly once — the first caller sets the
-initial `relayer`.
+The `initialize` calls are callable by anyone but exactly once — the first
+caller configures each contract — so on a fresh chain the operator does them
+before anyone else can. `adoptBridge` is relayer-gated. Other coin types need no
+bootstrap: the relayer creates their tokens when their first deposits arrive,
+and anyone may front-run it with `createBridge(name, symbol, coinType)` for a
+friendlier display name. Skipping step 3 does not break bridging (the relayer
+would create a fresh SUI token through the factory on the first deposit), but
+the predeployed fixed address would go unused — do the adopt while the chain is
+young.
 
 ### The sequencer does NOT halt while waiting
 
 The relayer is **non-fatal**: the sequencer keeps producing blocks even while
-the L2 contract isn't ready (otherwise the `initialize` tx above could never
+the factory isn't ready (otherwise the `initialize` tx above could never
 confirm). The relayer retries setup every few seconds, logging the actionable
 cause each time — e.g.:
 
 ```
-WARN bridge not ready yet; will retry in 5s. ... Bridge predeploy at
-     0x4200…0010 is not initialized. Call initialize(...) once after chain start.
+WARN bridge not ready yet; will retry in 5s. ... BridgeFactory predeploy at
+     0x4200…0010 is not initialized. Call initialize(relayer) once after chain start.
 ```
 
 Once `initialize` lands, the next retry succeeds and relaying begins. No restart
 needed. The same retry covers other misconfigurations (missing predeploy → run
-`solidity/scripts/gen-genesis.sh`; wrong relayer → `setRelayer`), all without
-stopping block production.
+`solidity/scripts/gen-genesis.sh` and restart Reth; wrong relayer →
+`setRelayer`), all without stopping block production.
 
 ## Trust model
 
@@ -168,6 +217,15 @@ replay-safe:
 - **Withdrawals are idempotent** on `(coin_type, l2_nonce)` in `bridge::withdraw`
   via a `processed_withdrawals` table, so a relayer crash between the Sui release
   and its cursor persist can never release the same burn twice.
+- **Deposits cannot strand**: the vault accepts any coin type, and the factory
+  guarantees every coin type can gain exactly one canonical L2 token
+  (permissionless `createBridge`, duplicates revert), which the relayer mints
+  against. Value can therefore always be represented and later burned for
+  release.
+- **Only factory-registered tokens can trigger releases**: the relayer's
+  withdrawal log query is address-filtered to the factory's tokens, so a
+  contract outside the factory emitting forged `WithdrawalInitiated` events can
+  never drain the vault.
 - **Mints are confirmed by receipt** before the relayer advances its deposit
   cursor, and the cursor is synced against on-chain `lastMintedDepositNonce` /
   `mintedAny` on startup, so an execution revert (e.g. a lost `relayer` role) is
@@ -178,3 +236,9 @@ both `BridgeCap` and the `relayer` key, _can_ mint unbacked L2 tokens or release
 locked coins without a burn. That is the same trust assumption as the rest of
 the chain (the sequencer can reorder/censor). Sequencer censorship or stall will
 be tackled in the future.
+
+One cosmetic caveat: the first caller of `createBridge` picks the token's name
+and symbol, and `tokenFor` keys on the exact coin-type string. The relayer
+always uses the canonical Move spelling (full 64-hex-digit address, no `0x`)
+and ignores twins registered under variant spellings, so there is exactly one
+token it will ever mint or honor burns for.

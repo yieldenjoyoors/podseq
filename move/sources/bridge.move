@@ -6,8 +6,10 @@
 /// can release coins, so the bridge needs no external relayer.
 ///
 /// Deposits are generic over the coin type: `deposit<SUI>` locks SUI, `deposit<USDS>`
-/// locks USDSui, etc. Each coin type is tracked independently in a `Bag` keyed by
-/// its `TypeName`, so a single vault serves every bridged asset.
+/// locks USDSui, etc. Any coin type is accepted: on the L2 side a `BridgeFactory`
+/// lets anyone create the canonical ERC20 for a coin type that lacks one, and the
+/// relayer creates it on demand when a deposit arrives, so a deposit can always
+/// be represented and later burned for release.
 ///
 /// The Sui gRPC read API has no event query, so each deposit is also stored in a
 /// `Table<u64, DepositRecord>` keyed by its nonce. The relayer reads deposits the
@@ -104,8 +106,8 @@ module podseq::bridge {
     /// Locks `coin` into the vault, crediting `recipient_l2` on L2.
     ///
     /// `recipient_l2` is the 20-byte EVM address that will receive the minted
-    /// bridged token. Anyone may call this; the locked coins can only leave via
-    /// [`withdraw`], which is gated by `BridgeCap`.
+    /// bridged token. Anyone may call this with any coin type; the locked coins
+    /// can only leave via [`withdraw`], which is gated by `BridgeCap`.
     public fun deposit<T>(
         vault: &mut Vault,
         coin: Coin<T>,
@@ -220,5 +222,97 @@ module podseq::bridge {
         // BCS of a u64 is exactly its 8 little-endian bytes.
         vector::append(&mut key, bcs::to_bytes(&l2_nonce));
         key
+    }
+
+    // ---------- tests ----------
+
+    #[test_only]
+    use sui::balance;
+
+    /// Phantom coin type standing in for a real bridged asset.
+    #[test_only]
+    public struct TestCoin has drop {}
+
+    #[test_only]
+    fun test_vault(ctx: &mut TxContext): Vault {
+        Vault {
+            id: object::new(ctx),
+            deposit_nonce: 0,
+            withdraw_nonce: 0,
+            reserves: bag::new(ctx),
+            deposits: table::new(ctx),
+            processed_withdrawals: table::new(ctx),
+        }
+    }
+
+    #[test_only]
+    fun destroy_vault_empty(vault: Vault) {
+        let Vault {
+            id,
+            deposit_nonce: _,
+            withdraw_nonce: _,
+            reserves,
+            deposits,
+            processed_withdrawals,
+        } = vault;
+        bag::destroy_empty(reserves);
+        table::destroy_empty(deposits);
+        table::destroy_empty(processed_withdrawals);
+        object::delete(id);
+    }
+
+    #[test_only]
+    const TEST_RECIPIENT: vector<u8> = x"0000000000000000000000000000000000000000";
+
+    #[test]
+    fun deposit_locks_coins_and_records_nonce() {
+        let ctx = &mut tx_context::dummy();
+        let mut vault = test_vault(ctx);
+
+        let coin = coin::mint_for_testing<TestCoin>(250, ctx);
+        deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, ctx);
+        assert!(reserve<TestCoin>(&vault) == 250, 0);
+        assert!(deposit_nonce(&vault) == 1, 0);
+
+        drain_test_reserve<TestCoin>(&mut vault);
+        let rec = table::remove(&mut vault.deposits, 0);
+        let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } = rec;
+        destroy_vault_empty(vault);
+    }
+
+    /// Phantom second coin type.
+    #[test_only]
+    public struct OtherCoin has drop {}
+
+    #[test]
+    fun deposit_accepts_any_coin_independently() {
+        // Two unrelated coin types share one vault; reserves and records stay
+        // independent, and both draw from the same global nonce stream.
+        let ctx = &mut tx_context::dummy();
+        let mut vault = test_vault(ctx);
+
+        let coin = coin::mint_for_testing<TestCoin>(100, ctx);
+        deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, ctx);
+        let other = coin::mint_for_testing<OtherCoin>(50, ctx);
+        deposit<OtherCoin>(&mut vault, other, TEST_RECIPIENT, ctx);
+
+        assert!(reserve<TestCoin>(&vault) == 100, 0);
+        assert!(reserve<OtherCoin>(&vault) == 50, 0);
+        assert!(deposit_nonce(&vault) == 2, 0);
+
+        drain_test_reserve<TestCoin>(&mut vault);
+        drain_test_reserve<OtherCoin>(&mut vault);
+        let rec0 = table::remove(&mut vault.deposits, 0);
+        let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } = rec0;
+        let rec1 = table::remove(&mut vault.deposits, 1);
+        let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } = rec1;
+        destroy_vault_empty(vault);
+    }
+
+    /// Empties the vault's `T` reserve so tests can destroy the vault.
+    #[test_only]
+    fun drain_test_reserve<T: drop>(vault: &mut Vault) {
+        let held = bag::remove<vector<u8>, Coin<T>>(&mut vault.reserves, type_key<T>());
+        balance::destroy_for_testing(coin::into_balance(held));
     }
 }
