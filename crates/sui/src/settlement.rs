@@ -19,6 +19,12 @@ use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 use thiserror::Error;
 use tracing::info;
 
+/// Checkpoint wait for one-shot deploy/bridge transactions. Public testnet
+/// latency can spike well past the 30s used for commits (which retry); a deploy
+/// that reports failure on a deadline may have executed, so false failures are
+/// costly.
+pub(crate) const DEPLOY_TX_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Errors from Sui settlement deploy/commit transactions.
 #[derive(Debug, Error)]
 pub enum SettlementError {
@@ -205,7 +211,7 @@ impl Settlement {
             .build(&mut rpc)
             .await
             .map_err(|e| SettlementError::Build(format!("publish: {e}")))?;
-        let effects = sign_and_execute(&mut rpc, &key, publish_tx, "publish")
+        let effects = sign_and_execute(&mut rpc, &key, publish_tx, "publish", DEPLOY_TX_WAIT)
             .await?
             .transaction()
             .effects()
@@ -242,7 +248,7 @@ impl Settlement {
             .build(&mut rpc)
             .await
             .map_err(|e| SettlementError::Build(format!("initialize: {e}")))?;
-        let changes = sign_and_execute(&mut rpc, &key, init_tx, "initialize")
+        let changes = sign_and_execute(&mut rpc, &key, init_tx, "initialize", DEPLOY_TX_WAIT)
             .await?
             .transaction()
             .effects()
@@ -275,13 +281,16 @@ impl Settlement {
     }
 }
 
-/// Signs `tx` with `key` and submits it, waiting for checkpoint inclusion.
-/// `label` is prefixed to error messages and must match the failing phase.
+/// Signs `tx` with `key` and submits it, waiting up to `wait` for checkpoint
+/// inclusion. `label` is prefixed to error messages and must match the failing
+/// phase. A deadline expiry is client-side: the tx may still have executed,
+/// which callers that do not retry must tolerate (e.g. by re-deploying).
 pub(crate) async fn sign_and_execute(
     rpc: &mut sui_rpc::Client,
     key: &Ed25519PrivateKey,
     tx: sui_sdk_types::Transaction,
     label: &str,
+    wait: std::time::Duration,
 ) -> Result<sui_rpc::proto::sui::rpc::v2::ExecuteTransactionResponse, SettlementError> {
     let signature = key
         .sign_transaction(&tx)
@@ -289,7 +298,7 @@ pub(crate) async fn sign_and_execute(
     let response = rpc
         .execute_transaction_and_wait_for_checkpoint(
             ExecuteTransactionRequest::new(tx.into()).with_signatures(vec![signature.into()]),
-            std::time::Duration::from_secs(30),
+            wait,
         )
         .await
         .map_err(|e| SettlementError::Execution(format!("{label}: {e}")))?;

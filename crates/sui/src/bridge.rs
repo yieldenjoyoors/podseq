@@ -21,7 +21,7 @@ use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 use thiserror::Error;
 use tracing::info;
 
-use crate::settlement::{find_created_object, sign_and_execute};
+use crate::settlement::{find_created_object, sign_and_execute, DEPLOY_TX_WAIT};
 
 /// Errors from Sui bridge read/release transactions.
 #[derive(Debug, Error)]
@@ -161,7 +161,7 @@ impl BridgeClient {
     /// a tx can execute and still abort (e.g. a gas-object race).
     async fn submit(&self, tx: sui_sdk_types::Transaction, label: &str) -> Result<(), BridgeError> {
         let mut rpc = self.rpc.clone();
-        let response = sign_and_execute(&mut rpc, &self.key, tx, label).await?;
+        let response = sign_and_execute(&mut rpc, &self.key, tx, label, DEPLOY_TX_WAIT).await?;
         let status = response.transaction().effects().status();
         if !status.success() {
             return Err(BridgeError::Execution(format!(
@@ -198,7 +198,7 @@ impl BridgeClient {
             .build(&mut rpc)
             .await
             .map_err(|e| BridgeError::Build(e.to_string()))?;
-        let changes = sign_and_execute(&mut rpc, &key, tx, "bridge initialize")
+        let changes = sign_and_execute(&mut rpc, &key, tx, "bridge initialize", DEPLOY_TX_WAIT)
             .await?
             .transaction()
             .effects()
