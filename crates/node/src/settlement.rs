@@ -8,9 +8,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::Config;
+
+/// Backoff between settlement deploy attempts.
+const DEPLOY_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Startup preflight: fail fast with a clear message if settlement cannot be
 /// configured, instead of a cryptic error deep in deploy/commit later.
@@ -127,10 +130,7 @@ pub async fn setup_signer(
                     modules.push(std::fs::read(&path)?);
                 }
             }
-            let deployed =
-                podseq_sui::SettlementSigner::deploy(signer_key_path, &config.sui.rpc_url, modules)
-                    .await
-                    .context("deploying settlement contract")?;
+            let deployed = deploy_with_retry(signer_key_path, &config.sui.rpc_url, modules).await?;
 
             config.sui.settlement_package_id = Some(deployed.package_id.clone());
             config.sui.settler_cap_id = Some(deployed.settler_cap_id.clone());
@@ -151,6 +151,36 @@ pub async fn setup_signer(
         }
         _ => {
             anyhow::bail!("settlement IDs are partially configured; either set all three (settlement_package_id, settler_cap_id, registry_id) or none")
+        }
+    }
+}
+
+/// Deploys the settlement package, retrying until it succeeds.
+///
+/// A failed attempt may leave orphaned on-chain objects (a deadline expiry is
+/// client-side and the tx may have executed), which is safe: each attempt
+/// publishes its own package and the persisted IDs always come from the attempt
+/// that completes fully. Without the retry, a transient Sui testnet spike kills
+/// the node at first start.
+async fn deploy_with_retry(
+    signer_key_path: &Path,
+    rpc_url: &str,
+    modules: Vec<Vec<u8>>,
+) -> Result<podseq_sui::DeployedContract> {
+    loop {
+        match podseq_sui::SettlementSigner::deploy(signer_key_path, rpc_url, modules.clone()).await
+        {
+            Ok(deployed) => {
+                info!(registry_id = %deployed.registry_id, "settlement deploy complete");
+                return Ok(deployed);
+            }
+            Err(e) => {
+                warn!(
+                    error = %format!("{e:#}"),
+                    "settlement deploy failed; retrying in {DEPLOY_RETRY_BACKOFF:?}"
+                );
+                tokio::time::sleep(DEPLOY_RETRY_BACKOFF).await;
+            }
         }
     }
 }

@@ -46,7 +46,9 @@ services:
     volumes:
       - jwt:/jwt:ro
       - reth-data:/data
-      - ./examples/reth-genesis.json:/chain/reth-genesis.json:ro
+      # `:z` relabels bind mounts for container access on SELinux hosts
+      # (Fedora/RHEL); no-op elsewhere.
+      - ./examples/reth-genesis.json:/chain/reth-genesis.json:ro,z
     restart: unless-stopped
 
   podseq:
@@ -63,9 +65,9 @@ services:
     # deployed object IDs back into this file.
     volumes:
       - jwt:/jwt:ro
-      - ./docker/podseq.toml:/etc/podseq/podseq.toml
+      - ./docker/podseq.toml:/etc/podseq/podseq.toml:z
       # Place sui.key (suiprivkey) in docker/secrets/ for signing.
-      - ./docker/secrets:/secrets:ro
+      - ./docker/secrets:/secrets:ro,z
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------

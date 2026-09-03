@@ -1,13 +1,14 @@
 # E2E tests
 
-Two test suites, with different scope and infrastructure requirements.
+Three test suites, with different scope and infrastructure requirements.
 
 ## What is covered
 
-| Test                 | What it verifies                                                                                                                                                                                   | Stack                                    |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `engine_integration` | `Engine::build` / `accept` / `finalize` advance the head on a real Reth node. Fast, deterministic.                                                                                                 | Reth only                                |
-| `full_stack`         | The real `podseq` binary produces blocks, user txs land on Reth, settlement advances on Sui, Walrus blobs decode, and the bridge relays both directions (deposit→mint, burn→withdraw). End-to-end. | Reth + podseq, public Sui/Walrus testnet |
+| Test                 | What it verifies                                                                                                                                                                                                                                                                                                          | Stack                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `engine_integration` | `Engine::build` / `accept` / `finalize` advance the head on a real Reth node. Fast, deterministic.                                                                                                                                                                                                                        | Reth only                                |
+| `bridge_bootstrap`   | The genesis predeploys (`BridgeFactory` at `0x…0010`, canonical SUI `Bridge` at `0x…0011`), the one-time bootstrap (initialize ×2 + `adoptBridge`), permissionless `createBridge` with duplicate rejection, mint nonce replay protection, burns, and the `BridgeCreated`/`WithdrawalInitiated` logs the relayer consumes. | Reth only                                |
+| `full_stack`         | The real `podseq` binary produces blocks, user txs land on Reth, settlement advances on Sui, Walrus blobs decode, and the bridge relays both directions (deposit→mint, burn→withdraw). End-to-end.                                                                                                                        | Reth + podseq, public Sui/Walrus testnet |
 
 ## Scope and limitations
 
@@ -15,6 +16,12 @@ Two test suites, with different scope and infrastructure requirements.
 
 Brings up Reth in a container and drives the Engine API directly via
 `podseq-engine`. No funded key needed; hermetic and deterministic.
+
+### `bridge_bootstrap`
+
+Same hermetic setup as `engine_integration`, plus a background Engine driver
+that produces blocks so transactions confirm. Exercises the full L2 side of
+the bridge against the real genesis predeploys — no Sui, no funded key.
 
 ### `full_stack`
 
@@ -33,8 +40,9 @@ publication + bridge relay cycles).
 
 The bridge section runs after settlement is confirmed, reusing the same
 deployed settlement package (so SUI gas is spent once, not twice). It generates
-a fresh relayer EVM key, funds it from the genesis account, calls
-`Bridge.initialize` on the L2 predeploy, then verifies both directions:
+a fresh relayer EVM key, funds it from the genesis account, bootstraps the L2
+bridge (factory `initialize`, predeployed token `initialize`, `adoptBridge`),
+then verifies both directions:
 
 - Sui `deposit<SUI>` → relayer mints the bridged ERC20 on L2.
 - L2 `initiateWithdrawal` → relayer releases the locked SUI on Sui.
@@ -47,6 +55,7 @@ e2e/
 ├── lib.rs                       # Stack (Reth only) + FullStack (Reth + podseq) harnesses
 └── tests/
     ├── engine_integration.rs
+    ├── bridge_bootstrap.rs
     └── full_stack.rs
 ```
 
@@ -57,13 +66,14 @@ Requirements: Docker with the Compose v2 plugin.
 ```sh
 # Fast, deterministic — no funded key required.
 cargo test -p podseq-e2e --test engine_integration -- --test-threads=1 --nocapture
+cargo test -p podseq-e2e --test bridge_bootstrap -- --test-threads=1 --nocapture
 
 # Full stack: requires docker/secrets/sui.key (or SUI_SIGNER_KEY in env).
 cargo test -p podseq-e2e --test full_stack -- --test-threads=1 --nocapture
 ```
 
-Each test binds fixed host ports (`18745`/`18751` and `18545`/`18551`), so they
-must run serially (`--test-threads=1`).
+Each test binds fixed host ports (`18745`/`18751`, `18845`/`18851`, and
+`18545`/`18551`), so they must run serially (`--test-threads=1`).
 
 ## CI
 

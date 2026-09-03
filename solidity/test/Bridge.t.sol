@@ -21,7 +21,7 @@ contract BridgeTest is Test {
 
     function setUp() public {
         vm.prank(relayer);
-        bridge = new Bridge("Bridged USDSui", "USDS", "0x2::sui::SUI");
+        bridge = new Bridge("Bridged USDSui", "USDS", "0x2::sui::SUI", relayer);
         // Fund alice with bridged tokens by minting from a known deposit.
         vm.startPrank(relayer);
         bridge.mint(alice, 1_000e9, 0); // first deposit nonce is 0
@@ -34,7 +34,7 @@ contract BridgeTest is Test {
         // The first deposit ever must mint at nonce 0. Deploy fresh so the
         // setUp() mint doesn't mask this.
         vm.prank(relayer);
-        Bridge fresh = new Bridge("x", "x", "0x2::sui::SUI");
+        Bridge fresh = new Bridge("x", "x", "0x2::sui::SUI", relayer);
         vm.prank(relayer);
         fresh.mint(alice, 5e9, 0);
         assertEq(fresh.lastMintedDepositNonce(), 0);
@@ -98,20 +98,6 @@ contract BridgeTest is Test {
         bridge.mint(alice, 1e9, 1);
     }
 
-    function test_RevertIf_MarkWithdrawalProcessedNotRelayer() public {
-        vm.prank(alice);
-        vm.expectRevert("Bridge: not relayer");
-        bridge.markWithdrawalProcessed(1);
-    }
-
-    function test_RevertIf_MarkWithdrawalProcessedStale() public {
-        vm.startPrank(relayer);
-        bridge.markWithdrawalProcessed(1);
-        vm.expectRevert("Bridge: stale nonce");
-        bridge.markWithdrawalProcessed(1);
-        vm.stopPrank();
-    }
-
     /* ---------- role rotation ---------- */
 
     function test_SetRelayer() public {
@@ -143,6 +129,11 @@ contract BridgeTest is Test {
         bridge.setRelayer(address(1));
     }
 
+    function test_RevertIf_ConstructorZeroRelayer() public {
+        vm.expectRevert("Bridge: zero relayer");
+        new Bridge("x", "x", "0x2::sui::SUI", address(0));
+    }
+
     /* ---------- initialize (genesis predeploy path) ---------- */
 
     function test_InitializeSetsState() public {
@@ -153,11 +144,11 @@ contract BridgeTest is Test {
         assertEq(genesis.relayer(), address(0));
 
         vm.prank(relayer);
-        genesis.initialize("Bridged USDSui", "USDS", "0x2::sui::SUI", relayer);
+        genesis.initialize("Bridged SUI", "SUI", "0x2::sui::SUI", relayer);
 
         assertTrue(genesis.initialized());
-        assertEq(genesis.name(), "Bridged USDSui");
-        assertEq(genesis.symbol(), "USDS");
+        assertEq(genesis.name(), "Bridged SUI");
+        assertEq(genesis.symbol(), "SUI");
         assertEq(genesis.coinType(), "0x2::sui::SUI");
         assertEq(genesis.relayer(), relayer);
         // Mint works now that the relayer is set.

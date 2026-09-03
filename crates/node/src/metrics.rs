@@ -45,6 +45,8 @@ pub struct PodseqMetrics {
     pub bridge_deposits_total: Counter,
     /// Bridge withdrawals released on Sui.
     pub bridge_withdrawals_total: Counter,
+    /// Canonical L2 tokens created through the factory by this relayer.
+    pub bridge_tokens_created_total: Counter,
 }
 
 impl PodseqMetrics {
@@ -115,6 +117,13 @@ impl PodseqMetrics {
             bridge_withdrawals_total.clone(),
         );
 
+        let bridge_tokens_created_total = Counter::default();
+        registry.register(
+            "podseq_bridge_tokens_created_total",
+            "Canonical L2 bridge tokens created through the factory",
+            bridge_tokens_created_total.clone(),
+        );
+
         Self {
             registry,
             block_height,
@@ -126,6 +135,7 @@ impl PodseqMetrics {
             sui_gas_balance,
             bridge_deposits_total,
             bridge_withdrawals_total,
+            bridge_tokens_created_total,
         }
     }
 }
@@ -232,6 +242,7 @@ mod tests {
         m.sui_gas_balance.set(1_000_000_000);
         m.bridge_deposits_total.inc();
         m.bridge_withdrawals_total.inc();
+        m.bridge_tokens_created_total.inc();
     }
 
     #[test]

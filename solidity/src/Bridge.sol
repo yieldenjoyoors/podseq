@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
-/// Enshrined L2 side of the podseq bridge.
+/// One bridged Sui coin type on L2, deployed per coin type by `BridgeFactory`.
 ///
-/// Each Sui coin type has its own deployed `Bridge` instance acting as an ERC20.
-/// The sequencer relayer mints here when it sees a `bridge::Deposit` on Sui, and
-/// users call `initiateWithdrawal` to burn, which the relayer forwards to Sui via
-/// `bridge::withdraw`. There is no external relayer: the sequencer holds both
-/// `BridgeCap` (Sui) and the `relayer` role (L2).
+/// The sequencer relayer mints here when it sees a matching `bridge::Deposit`
+/// on Sui, and users call `initiateWithdrawal` to burn, which the relayer
+/// forwards to Sui via `bridge::withdraw`. There is no external relayer: the
+/// sequencer holds both `BridgeCap` (Sui) and the `relayer` role (L2).
 contract Bridge {
     /* ---------- ERC20 metadata & balances ---------- */
 
@@ -31,13 +30,11 @@ contract Bridge {
     uint64 public lastMintedDepositNonce;
     /// True once the first mint has happened. Disambiguates the nonce-0 case.
     bool public mintedAny;
-    /// Highest L2 withdrawal nonce already released on Sui.
-    uint64 public lastProcessedWithdrawalNonce;
     /// Counter for L2 withdrawal nonces.
     uint64 public lastWithdrawalNonce;
     /// True once the contract has been configured (by constructor or
-    /// `initialize`). Genesis predeploys run no constructor, so they start
-    /// `initialized == false` and must be configured via `initialize` once.
+    /// `initialize`). The genesis predeploy runs no constructor, so it boots
+    /// `initialized == false` and is configured via `initialize` once.
     bool public initialized;
 
     /* ---------- Events ---------- */
@@ -71,20 +68,22 @@ contract Bridge {
         _;
     }
 
-    /// `coinType_` is the Sui `TypeName` (e.g. "0x2::sui::SUI"). It is stored and
-    /// echoed on mints so the relayer can sanity-check routing.
+    /// `coinType_` is the Sui `TypeName` (e.g. "0x2::sui::SUI"); it is stored and
+    /// echoed on mints so the relayer can sanity-check routing. `relayer_` is
+    /// normally the factory's stored relayer (the sequencer's EVM key).
     constructor(
         string memory name_,
         string memory symbol_,
-        string memory coinType_
+        string memory coinType_,
+        address relayer_
     ) {
-        _setup(name_, symbol_, coinType_, msg.sender);
+        _setup(name_, symbol_, coinType_, relayer_);
     }
 
     /// One-time configuration for the genesis predeploy, where the constructor
     /// never ran. Callable by anyone, but exactly once: the first caller sets the
     /// metadata and the initial `relayer`. On a fresh single-sequencer chain the
-    /// operator calls this before opening the bridge to users.
+    /// operator calls this before adopting the token into the factory.
     function initialize(
         string memory name_,
         string memory symbol_,
@@ -92,7 +91,6 @@ contract Bridge {
         address relayer_
     ) external {
         require(!initialized, "Bridge: already initialized");
-        require(relayer_ != address(0), "Bridge: zero relayer");
         _setup(name_, symbol_, coinType_, relayer_);
     }
 
@@ -102,6 +100,7 @@ contract Bridge {
         string memory coinType_,
         address relayer_
     ) internal {
+        require(relayer_ != address(0), "Bridge: zero relayer");
         initialized = true;
         name = name_;
         symbol = symbol_;
@@ -132,13 +131,6 @@ contract Bridge {
         balanceOf[recipient] += amount;
         emit DepositMinted(nonce, recipient, amount, coinType);
         emit Transfer(address(0), recipient, amount);
-    }
-
-    /// Marks an L2 withdrawal as released on Sui so the relayer cursor advances.
-    /// Called by the relayer after `bridge::withdraw` succeeds.
-    function markWithdrawalProcessed(uint64 nonce) external onlyRelayer {
-        require(nonce > lastProcessedWithdrawalNonce, "Bridge: stale nonce");
-        lastProcessedWithdrawalNonce = nonce;
     }
 
     function setRelayer(address next) external onlyRelayer {
