@@ -65,7 +65,7 @@ services:
     # deployed object IDs back into this file.
     volumes:
       - jwt:/jwt:ro
-      - ./docker/podseq.toml:/etc/podseq/podseq.toml,z
+      - ./docker/podseq.toml:/etc/podseq/podseq.toml:z
       # Place sui.key (suiprivkey) in docker/secrets/ for signing.
       - ./docker/secrets:/secrets:ro,z
     restart: unless-stopped

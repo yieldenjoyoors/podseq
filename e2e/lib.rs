@@ -358,7 +358,7 @@ mode = "sequencer"
     volumes:
       - ./jwt.hex:/jwt/jwt.hex:ro,z
       - ./secrets:/secrets:ro,z
-      - ./podseq.toml:/etc/podseq/podseq.toml,z
+      - ./podseq.toml:/etc/podseq/podseq.toml:z
     restart: "no"
 
 volumes:
