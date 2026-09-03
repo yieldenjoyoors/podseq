@@ -135,9 +135,7 @@ pub async fn setup_signer(
             config.sui.settlement_package_id = Some(deployed.package_id.clone());
             config.sui.settler_cap_id = Some(deployed.settler_cap_id.clone());
             config.sui.registry_id = Some(deployed.registry_id.clone());
-            let updated = toml::to_string_pretty(&config).context("serializing updated config")?;
-            std::fs::write(config_path, &updated)
-                .with_context(|| format!("writing updated config to {}", config_path.display()))?;
+            config.save(config_path)?;
             info!(config = %config_path.display(), "config updated with settlement IDs");
 
             podseq_sui::SettlementSigner::new(

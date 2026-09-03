@@ -148,6 +148,7 @@ impl TokenRegistry {
 
 /// Relays bridged coins between Sui and the L2, one canonical token per type.
 pub struct BridgeRelayer {
+    http: reqwest::Client,
     sui_rpc: String,
     sui_bridge: Arc<Mutex<podseq_sui::bridge::BridgeClient>>,
     vault_id: String,
@@ -248,6 +249,7 @@ impl BridgeRelayer {
             restore_token_registry(&http, l2_rpc, factory, &mut cursors, &cursors_path).await?;
 
         Ok(Self {
+            http,
             sui_rpc: sui_rpc.to_string(),
             sui_bridge: Arc::new(Mutex::new(sui_bridge)),
             vault_id: vault_id.to_string(),
@@ -268,10 +270,6 @@ impl BridgeRelayer {
 
     /// Runs both relay loops until `shutdown` is set.
     pub async fn run(self, shutdown: Arc<AtomicBool>) -> Result<()> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()?;
-
         let next_deposit = self.cursors.lock().await.next_deposit_nonce;
         let next_l2_block = self.cursors.lock().await.next_l2_block;
         let tokens = self.tokens.lock().await.len();
@@ -289,10 +287,10 @@ impl BridgeRelayer {
                 return Ok(());
             }
 
-            if let Err(e) = self.relay_deposits(&http).await {
+            if let Err(e) = self.relay_deposits(&self.http).await {
                 warn!(error = %e, "bridge: deposit relay pass failed");
             }
-            if let Err(e) = self.relay_withdrawals(&http).await {
+            if let Err(e) = self.relay_withdrawals(&self.http).await {
                 warn!(error = %e, "bridge: withdrawal relay pass failed");
             }
 
@@ -983,16 +981,30 @@ fn selector(sig: &str) -> Vec<u8> {
     keccak256(sig.as_bytes())[..4].to_vec()
 }
 
+/// eth_call returning the raw decoded return bytes.
+async fn eth_call(
+    http: &reqwest::Client,
+    l2_rpc: &str,
+    token: Address,
+    selector: &[u8],
+) -> Result<Vec<u8>> {
+    let data = format!("0x{}", hex::encode(selector));
+    let req = eth_call_request(token, data);
+    let hex_str: String = rpc_call::<String>(http, l2_rpc, req).await?;
+    hex::decode(hex_str.trim_start_matches("0x")).context("eth_call not hex")
+}
+
 async fn eth_call_u64(
     http: &reqwest::Client,
     l2_rpc: &str,
     token: Address,
     selector: &[u8],
 ) -> Result<u64> {
-    let data = format!("0x{}", hex::encode(selector));
-    let req = eth_call_request(token, data);
-    let hex_str: String = rpc_call_raw(http, l2_rpc, req).await?;
-    parse_hex_qty(&hex_str)
+    let bytes = eth_call(http, l2_rpc, token, selector).await?;
+    anyhow::ensure!(bytes.len() >= 32, "eth_call u64 return too short");
+    let mut arr = [0u8; 8];
+    arr.copy_from_slice(&bytes[24..32]);
+    Ok(u64::from_be_bytes(arr))
 }
 
 async fn eth_call_bool(
@@ -1001,10 +1013,7 @@ async fn eth_call_bool(
     token: Address,
     selector: &[u8],
 ) -> Result<bool> {
-    let data = format!("0x{}", hex::encode(selector));
-    let req = eth_call_request(token, data);
-    let hex_str: String = rpc_call_raw(http, l2_rpc, req).await?;
-    let bytes = hex::decode(hex_str.trim_start_matches("0x")).unwrap_or_default();
+    let bytes = eth_call(http, l2_rpc, token, selector).await?;
     Ok(bytes.last().is_some_and(|b| *b != 0))
 }
 
@@ -1022,7 +1031,7 @@ async fn eth_get_code(http: &reqwest::Client, l2_rpc: &str, address: Address) ->
         "jsonrpc": "2.0", "id": 1, "method": "eth_getCode",
         "params": [address.to_checksum(None), "latest"]
     });
-    let hex_str: String = rpc_call_raw(http, l2_rpc, req).await?;
+    let hex_str: String = rpc_call::<String>(http, l2_rpc, req).await?;
     Ok(hex::decode(hex_str.trim_start_matches("0x")).unwrap_or_default())
 }
 
@@ -1033,10 +1042,7 @@ async fn eth_call_address(
     token: Address,
     selector: &[u8],
 ) -> Result<Address> {
-    let data = format!("0x{}", hex::encode(selector));
-    let req = eth_call_request(token, data);
-    let hex_str: String = rpc_call_raw(http, l2_rpc, req).await?;
-    let bytes = hex::decode(hex_str.trim_start_matches("0x")).context("eth_call not hex")?;
+    let bytes = eth_call(http, l2_rpc, token, selector).await?;
     decode_abi_address(&bytes)
 }
 
@@ -1098,16 +1104,6 @@ pub async fn verify_l2_bridge_factory(
         );
     }
     Ok(())
-}
-
-/// `rpc_call` for calls that return a bare hex string (not a JSON object),
-/// i.e. `eth_call` whose result is itself a hex string inside the envelope.
-async fn rpc_call_raw(
-    http: &reqwest::Client,
-    l2_rpc: &str,
-    req: serde_json::Value,
-) -> Result<String> {
-    rpc_call::<String>(http, l2_rpc, req).await
 }
 
 #[derive(Deserialize)]
@@ -1261,9 +1257,7 @@ async fn setup_relayer(
 
             config.bridge.cap_id = Some(deployed.cap_id.clone());
             config.bridge.vault_id = Some(deployed.vault_id.clone());
-            let updated = toml::to_string_pretty(&*config).context("serializing updated config")?;
-            std::fs::write(config_path, &updated)
-                .with_context(|| format!("writing updated config to {}", config_path.display()))?;
+            config.save(config_path)?;
             info!(config = %config_path.display(), "config updated with bridge object IDs");
             (deployed.cap_id, deployed.vault_id)
         }

@@ -591,7 +591,7 @@ impl Drop for FullStack {
 /// Returns the funded Sui signer key, preferring `SUI_SIGNER_KEY` (CI secret) and
 /// falling back to `docker/secrets/sui.key` for local dev. `Ok(None)` means no
 /// key is available.
-fn sui_signer_key() -> Result<Option<String>> {
+pub fn sui_signer_key() -> Result<Option<String>> {
     if let Ok(k) = std::env::var("SUI_SIGNER_KEY") {
         let trimmed = k.trim();
         if !trimmed.is_empty() {
@@ -628,4 +628,453 @@ fn read_toml_field(path: &Path, section: &str, key: &str) -> Result<Option<Strin
         None => return Ok(None),
     };
     Ok(Some(s.to_string()))
+}
+
+/// Skips the test when docker is unavailable (e.g. `cargo test` on a host
+/// without it). Exits the process because there is no per-test skip mechanism.
+pub fn require_docker() {
+    let available = std::process::Command::new("docker")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok();
+    if !available {
+        eprintln!("skipping: docker is not available");
+        std::process::exit(0);
+    }
+}
+
+/// Hardhat dev account funded by `examples/reth-genesis.json`.
+pub const GENESIS_PKEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+pub const GENESIS_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+
+/// BridgeFactory predeploy (genesis-planted bytecode, see `solidity/`).
+pub const BRIDGE_FACTORY: &str = "0x4200000000000000000000000000000000000010";
+/// Predeployed canonical SUI Bridge token (genesis-planted bytecode).
+pub const BRIDGE_TOKEN_PREDEPLOY: &str = "0x4200000000000000000000000000000000000011";
+
+/// Hand-rolled ABI encoding for the predeployed bridge contracts. Deliberately
+/// independent of the production `sol!` types so test calldata is a second
+/// implementation, not a shared one.
+pub mod abi {
+    use alloy_primitives::{keccak256, Address, U256};
+    use anyhow::Result;
+
+    /// Function selector: the first 4 bytes of keccak256 of the signature.
+    pub fn selector(signature: &[u8]) -> Vec<u8> {
+        keccak256(signature).0[..4].to_vec()
+    }
+
+    /// A 32-byte big-endian argument word.
+    pub fn abi_word(v: U256) -> [u8; 32] {
+        v.to_be_bytes()
+    }
+
+    /// Appends an ABI-encoded `string` to `out` (length word + padded bytes).
+    pub fn push_string(out: &mut Vec<u8>, s: &str) {
+        let bytes = s.as_bytes();
+        let padded_len = bytes.len().div_ceil(32) * 32;
+        out.extend_from_slice(&abi_word(U256::from(bytes.len())));
+        out.extend_from_slice(bytes);
+        out.resize(out.len() + (padded_len - bytes.len()), 0);
+    }
+
+    /// Appends a right-aligned `address` word to `out`.
+    pub fn push_address(out: &mut Vec<u8>, addr: Address) {
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(addr.as_ref());
+        out.extend_from_slice(&word);
+    }
+
+    /// ABI-encodes `initialize(address)` (BridgeFactory).
+    pub fn encode_factory_initialize(relayer: Address) -> Vec<u8> {
+        let mut out = selector(b"initialize(address)");
+        push_address(&mut out, relayer);
+        out
+    }
+
+    /// ABI-encodes `initialize(string,string,string,address)` (Bridge token).
+    pub fn encode_bridge_initialize(
+        name: &str,
+        symbol: &str,
+        coin_type: &str,
+        relayer: Address,
+    ) -> Vec<u8> {
+        let mut out = selector(b"initialize(string,string,string,address)");
+        // Head: 3 string offsets + 1 static address = 4 words.
+        let mut dynamic = Vec::new();
+        let mut offset = 4 * 32;
+        for s in [name, symbol, coin_type] {
+            out.extend_from_slice(&abi_word(U256::from(offset)));
+            let bytes = s.as_bytes();
+            let padded_len = bytes.len().div_ceil(32) * 32;
+            dynamic.extend_from_slice(&abi_word(U256::from(bytes.len())));
+            dynamic.extend_from_slice(bytes);
+            dynamic.resize(dynamic.len() + (padded_len - bytes.len()), 0);
+            offset += 32 + padded_len;
+        }
+        push_address(&mut out, relayer);
+        out.extend_from_slice(&dynamic);
+        out
+    }
+
+    /// ABI-encodes `adoptBridge(string,address)`.
+    pub fn encode_adopt_bridge(coin_type: &str, token: Address) -> Vec<u8> {
+        let mut out = selector(b"adoptBridge(string,address)");
+        // Head: string offset + the static address word.
+        out.extend_from_slice(&abi_word(U256::from(32 + 32)));
+        push_address(&mut out, token);
+        push_string(&mut out, coin_type);
+        out
+    }
+
+    /// ABI-encodes `createBridge(string,string,string)`.
+    pub fn encode_create_bridge(name: &str, symbol: &str, coin_type: &str) -> Vec<u8> {
+        let mut out = selector(b"createBridge(string,string,string)");
+        let mut dynamic = Vec::new();
+        let mut offset = 3 * 32;
+        for s in [name, symbol, coin_type] {
+            out.extend_from_slice(&abi_word(U256::from(offset)));
+            let bytes = s.as_bytes();
+            let padded_len = bytes.len().div_ceil(32) * 32;
+            dynamic.extend_from_slice(&abi_word(U256::from(bytes.len())));
+            dynamic.extend_from_slice(bytes);
+            dynamic.resize(dynamic.len() + (padded_len - bytes.len()), 0);
+            offset += 32 + padded_len;
+        }
+        out.extend_from_slice(&dynamic);
+        out
+    }
+
+    /// ABI-encodes `mint(address,uint256,uint64)`.
+    pub fn encode_mint(recipient: Address, amount: u64, nonce: u64) -> Vec<u8> {
+        let mut out = selector(b"mint(address,uint256,uint64)");
+        push_address(&mut out, recipient);
+        out.extend_from_slice(&abi_word(U256::from(amount)));
+        out.extend_from_slice(&abi_word(U256::from(nonce)));
+        out
+    }
+
+    /// ABI-encodes `initiateWithdrawal(bytes32,uint256)`.
+    pub fn encode_initiate_withdrawal(sui_recipient: [u8; 32], amount: u64) -> Vec<u8> {
+        let mut out = selector(b"initiateWithdrawal(bytes32,uint256)");
+        out.extend_from_slice(&sui_recipient);
+        out.extend_from_slice(&abi_word(U256::from(amount)));
+        out
+    }
+
+    /// Calldata for a one-string-argument call with signature `sig`
+    /// (e.g. `tokenFor(string)`).
+    pub fn one_string(arg: &str, sig: &[u8]) -> Vec<u8> {
+        let mut out = selector(sig);
+        out.extend_from_slice(&abi_word(U256::from(32)));
+        push_string(&mut out, arg);
+        out
+    }
+
+    /// Reads the low-order 8 bytes of a 32-byte big-endian word.
+    pub fn word_len(word: &[u8; 32]) -> usize {
+        let mut arr = [0u8; 8];
+        arr.copy_from_slice(&word[24..]);
+        u64::from_be_bytes(arr) as usize
+    }
+
+    /// Decodes an ABI `string` located at `len_offset` (the length word's
+    /// position: 32 for a plain `string` return, 36 for `Error(string)`).
+    pub fn decode_abi_string_at(bytes: &[u8], len_offset: usize) -> Result<String> {
+        use anyhow::Context;
+        anyhow::ensure!(
+            bytes.len() >= len_offset + 32,
+            "abi string return too short"
+        );
+        let len_word: [u8; 32] = bytes[len_offset..len_offset + 32]
+            .try_into()
+            .expect("checked length above");
+        let len = word_len(&len_word);
+        let data_pos = len_offset + 32;
+        let end = data_pos
+            .checked_add(len)
+            .context("abi string length overruns usize")?;
+        anyhow::ensure!(end <= bytes.len(), "abi string length overruns buffer");
+        Ok(String::from_utf8_lossy(&bytes[data_pos..end]).to_string())
+    }
+
+    /// Decodes a Solidity `Error(string)` revert payload from an `eth_call`
+    /// result; returns the raw hex when it is not one.
+    pub fn decode_revert_string(hex_result: &str) -> String {
+        let bytes = match hex::decode(hex_result.trim_start_matches("0x")) {
+            Ok(b) => b,
+            Err(_) => return hex_result.to_string(),
+        };
+        decode_abi_string_at(&bytes, 36).unwrap_or_else(|_| hex_result.to_string())
+    }
+}
+
+/// Minimal JSON-RPC client for the L2 (Reth) HTTP endpoint.
+pub mod eth {
+    use alloy_primitives::{Address, U256};
+    use anyhow::{bail, Context, Result};
+
+    /// Posts a JSON-RPC request and returns the `result` field.
+    pub async fn rpc_call<T: serde::de::DeserializeOwned>(
+        http: &reqwest::Client,
+        rpc_url: &str,
+        method: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Result<T> {
+        let resp: serde_json::Value = http
+            .post(rpc_url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": method, "params": params
+            }))
+            .send()
+            .await?
+            .json()
+            .await?;
+        if let Some(error) = resp.get("error") {
+            bail!("rpc {method} error: {error}");
+        }
+        Ok(serde_json::from_value(resp["result"].clone())?)
+    }
+
+    pub async fn eth_chain_id(http: &reqwest::Client, rpc_url: &str) -> Result<u64> {
+        let s: String = rpc_call(http, rpc_url, "eth_chainId", vec![]).await?;
+        Ok(u64::from_str_radix(s.trim_start_matches("0x"), 16)?)
+    }
+
+    pub async fn eth_block_number(http: &reqwest::Client, rpc_url: &str) -> Result<u64> {
+        let s: String = rpc_call(http, rpc_url, "eth_blockNumber", vec![]).await?;
+        Ok(u64::from_str_radix(s.trim_start_matches("0x"), 16)?)
+    }
+
+    pub async fn eth_get_transaction_count(
+        http: &reqwest::Client,
+        rpc_url: &str,
+        address: Address,
+    ) -> Result<u64> {
+        let s: String = rpc_call(
+            http,
+            rpc_url,
+            "eth_getTransactionCount",
+            vec![address.to_checksum(None).into(), "pending".into()],
+        )
+        .await?;
+        Ok(u64::from_str_radix(s.trim_start_matches("0x"), 16)?)
+    }
+
+    pub async fn eth_gas_price(http: &reqwest::Client, rpc_url: &str) -> Result<u128> {
+        let s: String = rpc_call(http, rpc_url, "eth_gasPrice", vec![]).await?;
+        Ok(u128::from_str_radix(s.trim_start_matches("0x"), 16)?)
+    }
+
+    /// eth_call with full calldata, returning the raw decoded return bytes.
+    pub async fn eth_call_raw(
+        http: &reqwest::Client,
+        rpc_url: &str,
+        to: &str,
+        calldata: &[u8],
+    ) -> Result<Vec<u8>> {
+        let to_addr: Address = to.parse().context("eth_call to is not an address")?;
+        let resp: serde_json::Value = http
+            .post(rpc_url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+                "params": [{ "to": format!("{to_addr:?}"),
+                             "data": format!("0x{}", hex::encode(calldata)) }, "latest"],
+            }))
+            .send()
+            .await?
+            .json()
+            .await?;
+        if let Some(error) = resp.get("error") {
+            bail!("eth_call error: {error}");
+        }
+        let hex = resp.get("result").and_then(|v| v.as_str()).unwrap_or("0x");
+        Ok(hex::decode(hex.trim_start_matches("0x"))?)
+    }
+
+    /// eth_call returning a bool (e.g. `initialized()`).
+    pub async fn eth_call_bool(
+        http: &reqwest::Client,
+        rpc_url: &str,
+        to: &str,
+        calldata: &[u8],
+    ) -> Result<bool> {
+        let bytes = eth_call_raw(http, rpc_url, to, calldata).await?;
+        Ok(bytes.last().is_some_and(|b| *b != 0))
+    }
+
+    /// eth_call returning an address (e.g. `relayer()`).
+    pub async fn eth_call_address(
+        http: &reqwest::Client,
+        rpc_url: &str,
+        to: &str,
+        calldata: &[u8],
+    ) -> Result<Address> {
+        let bytes = eth_call_raw(http, rpc_url, to, calldata).await?;
+        anyhow::ensure!(bytes.len() >= 32, "eth_call address return too short");
+        let mut addr = [0u8; 20];
+        addr.copy_from_slice(&bytes[12..32]);
+        Ok(Address::from(addr))
+    }
+
+    /// Runtime bytecode at `to` (empty when no contract is deployed).
+    pub async fn eth_get_code(http: &reqwest::Client, rpc_url: &str, to: &str) -> Result<Vec<u8>> {
+        let to_addr: Address = to.parse().context("eth_getCode to is not an address")?;
+        let resp: serde_json::Value = http
+            .post(rpc_url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "eth_getCode",
+                "params": [format!("{to_addr:?}"), "latest"],
+            }))
+            .send()
+            .await?
+            .json()
+            .await?;
+        if let Some(error) = resp.get("error") {
+            bail!("eth_getCode error: {error}");
+        }
+        let hex = resp.get("result").and_then(|v| v.as_str()).unwrap_or("0x");
+        Ok(hex::decode(hex.trim_start_matches("0x"))?)
+    }
+
+    /// `balanceOf(address)` via eth_call, checked to fit a u64.
+    pub async fn eth_balance_of(
+        http: &reqwest::Client,
+        rpc_url: &str,
+        token: &str,
+        holder: &str,
+    ) -> Result<u64> {
+        let mut calldata = super::abi::selector(b"balanceOf(address)");
+        let holder_addr: Address = holder
+            .parse()
+            .context("balanceOf holder is not an address")?;
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(holder_addr.as_ref());
+        calldata.extend_from_slice(&word);
+        let bytes = eth_call_raw(http, rpc_url, token, &calldata).await?;
+        anyhow::ensure!(bytes.len() >= 32, "balanceOf return too short");
+        let amount = U256::from_be_slice(&bytes[..32]);
+        anyhow::ensure!(amount <= U256::from(u64::MAX), "balance overflows u64");
+        Ok(amount.to::<u64>())
+    }
+
+    /// Number of logs with `topic0` emitted by `address` chain-wide.
+    pub async fn eth_get_logs(
+        http: &reqwest::Client,
+        rpc_url: &str,
+        address: &str,
+        topic0: &str,
+    ) -> Result<usize> {
+        let to: Address = address
+            .parse()
+            .context("eth_getLogs address is not an address")?;
+        let resp: serde_json::Value = http
+            .post(rpc_url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "eth_getLogs",
+                "params": [{
+                    "address": format!("{to:?}"),
+                    "fromBlock": "0x0",
+                    "toBlock": "latest",
+                    "topics": [topic0],
+                }],
+            }))
+            .send()
+            .await?
+            .json()
+            .await?;
+        if let Some(error) = resp.get("error") {
+            bail!("eth_getLogs error: {error}");
+        }
+        Ok(resp["result"].as_array().map(|a| a.len()).unwrap_or(0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::abi;
+
+    /// Builds the ABI encoding of a Solidity `string` with optional 4-byte
+    /// selector prefix (for revert payloads) and a 32-byte offset word (for
+    /// direct `string` returns).
+    fn encode_string(payload: &str, with_selector: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        if with_selector {
+            out.extend_from_slice(&[0x08, 0xc3, 0x79, 0xa0]); // Error(string) selector
+        }
+        // offset word = 0x20 (32)
+        out.extend_from_slice(&[0u8; 31]);
+        out.push(0x20);
+        // length word (32 bytes, big-endian, value in low bytes)
+        out.extend_from_slice(&[0u8; 24]);
+        out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+        out.extend_from_slice(payload.as_bytes());
+        let pad = (32 - (payload.len() % 32)) % 32;
+        out.extend(std::iter::repeat_n(0u8, pad));
+        out
+    }
+
+    #[test]
+    fn word_len_reads_right_aligned_value() {
+        let mut w = [0u8; 32];
+        w[24..].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(abi::word_len(&w), 0x0102030405060708);
+        assert_eq!(abi::word_len(&[0u8; 32]), 0);
+    }
+
+    #[test]
+    fn decode_abi_string_reads_coin_type_return() {
+        let bytes = encode_string("0x2::sui::SUI", false);
+        assert_eq!(
+            abi::decode_abi_string_at(&bytes, 32).unwrap(),
+            "0x2::sui::SUI"
+        );
+    }
+
+    #[test]
+    fn decode_abi_string_reads_revert_payload() {
+        let bytes = encode_string("bad coin type", true);
+        assert_eq!(
+            abi::decode_abi_string_at(&bytes, 36).unwrap(),
+            "bad coin type"
+        );
+    }
+
+    #[test]
+    fn decode_abi_string_does_not_panic_on_full_length_word() {
+        // Regression: a fully-populated 32-byte length word must error, not panic.
+        let mut bytes = vec![0u8; 32];
+        bytes.extend_from_slice(&[0xff; 32]);
+        bytes.extend_from_slice(&[0u8; 32]);
+        assert!(abi::decode_abi_string_at(&bytes, 32).is_err());
+    }
+
+    #[test]
+    fn decode_abi_string_rejects_short_buffer() {
+        assert!(abi::decode_abi_string_at(&[0u8; 10], 32).is_err());
+        assert!(abi::decode_abi_string_at(&[0u8; 10], 36).is_err());
+    }
+
+    #[test]
+    fn decode_revert_string_roundtrips_known_payload() {
+        let bytes = encode_string("invalid opcode", true);
+        let hex = format!("0x{}", hex::encode(&bytes));
+        assert_eq!(abi::decode_revert_string(&hex), "invalid opcode");
+    }
+
+    #[test]
+    fn encode_mint_matches_contract_signature() {
+        use alloy_primitives::{Address, U256};
+        let calldata = abi::encode_mint(Address::with_last_byte(0x42), 0xab, 0x05);
+        assert_eq!(calldata.len(), 4 + 96);
+        let mut expected = abi::selector(b"mint(address,uint256,uint64)");
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(Address::with_last_byte(0x42).as_ref());
+        expected.extend_from_slice(&word);
+        expected.extend_from_slice(&abi::abi_word(U256::from(0xab)));
+        expected.extend_from_slice(&abi::abi_word(U256::from(0x05)));
+        assert_eq!(calldata, expected);
+    }
 }

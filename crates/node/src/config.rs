@@ -351,6 +351,22 @@ impl Config {
         toml::from_str(text).context("parsing config TOML")
     }
 
+    /// Serializes the config to TOML.
+    pub fn to_toml(&self) -> Result<String> {
+        toml::to_string_pretty(self).context("serializing config")
+    }
+
+    /// Writes the config atomically (tmp + rename) so a crash mid-write cannot
+    /// destroy deployed settlement or bridge object IDs.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, self.to_toml()?)
+            .with_context(|| format!("writing config to {}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("renaming config into place at {}", path.display()))?;
+        Ok(())
+    }
+
     /// Returns a default testnet config.
     pub fn testnet() -> Self {
         Self {

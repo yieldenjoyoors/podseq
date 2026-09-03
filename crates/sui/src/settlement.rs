@@ -25,6 +25,78 @@ use tracing::info;
 /// costly.
 pub(crate) const DEPLOY_TX_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Checkpoint wait for recurring commits. The runner retries commits, so a
+/// shorter wait fails fast into the retry loop instead of stalling a block.
+const COMMIT_TX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Loads a signer key from a suiprivkey file and derives its Sui address.
+pub(crate) fn load_signer(
+    key_path: &Path,
+) -> Result<(Ed25519PrivateKey, Address), SettlementError> {
+    let key_str = std::fs::read_to_string(key_path)
+        .map_err(SettlementError::Io)?
+        .trim()
+        .to_string();
+    let key = crate::parse_signer_key(&key_str).map_err(SettlementError::Key)?;
+    let sender = key.public_key().derive_address();
+    Ok((key, sender))
+}
+
+/// Parses a hex object id, naming `label` in the error.
+pub(crate) fn parse_address(s: &str, label: &str) -> Result<Address, SettlementError> {
+    s.parse()
+        .map_err(|e| SettlementError::Parse(format!("{label} {s}: {e}")))
+}
+
+/// Fetches the raw BCS contents of an object in one `get_object`.
+pub(crate) async fn object_contents(
+    rpc_url: &str,
+    id: &Address,
+    label: &str,
+) -> Result<Vec<u8>, SettlementError> {
+    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+    let response = rpc
+        .ledger_client()
+        .get_object(GetObjectRequest::new(id).with_read_mask(FieldMask::from_str("contents")))
+        .await
+        .map_err(|e| SettlementError::Rpc(format!("get_object: {e}")))?;
+    let obj = response
+        .into_inner()
+        .object
+        .ok_or_else(|| SettlementError::Execution(format!("{label} object not found")))?;
+    let bytes = obj
+        .contents
+        .and_then(|c| c.value)
+        .ok_or_else(|| SettlementError::Execution(format!("{label} has no contents")))?;
+    Ok(bytes.to_vec())
+}
+
+/// Fetches the raw BCS contents of a `Table<u64, V>` entry by key. Returns
+/// `None` when the key has no entry yet.
+pub(crate) async fn field_contents(
+    rpc_url: &str,
+    table: &Address,
+    key: u64,
+) -> Result<Option<Vec<u8>>, SettlementError> {
+    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+    let field_id = table.derive_dynamic_child_id(&TypeTag::U64, &key.to_le_bytes());
+    let response = rpc
+        .ledger_client()
+        .get_object(
+            GetObjectRequest::new(&field_id).with_read_mask(FieldMask::from_str("contents")),
+        )
+        .await
+        .map_err(|e| SettlementError::Rpc(format!("get_object (field): {e}")))?;
+    let Some(obj) = response.into_inner().object else {
+        return Ok(None);
+    };
+    let bytes = obj
+        .contents
+        .and_then(|c| c.value)
+        .ok_or_else(|| SettlementError::Execution("field contents missing raw BCS".into()))?;
+    Ok(Some(bytes.to_vec()))
+}
+
 /// Errors from Sui settlement deploy/commit transactions.
 #[derive(Debug, Error)]
 pub enum SettlementError {
@@ -78,25 +150,14 @@ impl Settlement {
         registry_id: &str,
         rpc_url: &str,
     ) -> Result<Self, SettlementError> {
-        let key_str = std::fs::read_to_string(key_path)
-            .map_err(SettlementError::Io)?
-            .trim()
-            .to_string();
-        let key = crate::parse_signer_key(&key_str).map_err(SettlementError::Key)?;
-        let sender = key.public_key().derive_address();
+        let (key, sender) = load_signer(key_path)?;
         let rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
         Ok(Self {
             key,
             sender,
-            package: package_id
-                .parse()
-                .map_err(|e| SettlementError::Parse(format!("package id: {e}")))?,
-            cap: cap_id
-                .parse()
-                .map_err(|e| SettlementError::Parse(format!("cap id: {e}")))?,
-            registry: registry_id
-                .parse()
-                .map_err(|e| SettlementError::Parse(format!("registry id: {e}")))?,
+            package: parse_address(package_id, "package id")?,
+            cap: parse_address(cap_id, "cap id")?,
+            registry: parse_address(registry_id, "registry id")?,
             rpc,
         })
     }
@@ -128,28 +189,7 @@ impl Settlement {
             .await
             .map_err(|e| SettlementError::Build(e.to_string()))?;
 
-        let signature = self
-            .key
-            .sign_transaction(&tx)
-            .map_err(|e| SettlementError::Key(e.to_string()))?;
-
-        let response = self
-            .rpc
-            .execute_transaction_and_wait_for_checkpoint(
-                ExecuteTransactionRequest::new(tx.into()).with_signatures(vec![signature.into()]),
-                std::time::Duration::from_secs(30),
-            )
-            .await
-            .map_err(|e| SettlementError::Execution(e.to_string()))?;
-
-        let inner = response.into_inner();
-        let status = inner.transaction().effects().status();
-        if !status.success() {
-            return Err(SettlementError::Execution(format!(
-                "transaction failed: {}",
-                status.error().description.clone().unwrap_or_default()
-            )));
-        }
+        let inner = sign_and_execute(&mut rpc, &self.key, tx, "settle", COMMIT_TX_WAIT).await?;
 
         info!(
             height = header.height,
@@ -166,12 +206,7 @@ impl Settlement {
         rpc_url: &str,
         modules: Vec<Vec<u8>>,
     ) -> Result<DeployedContract, SettlementError> {
-        let key_str = std::fs::read_to_string(key_path)
-            .map_err(SettlementError::Io)?
-            .trim()
-            .to_string();
-        let key = crate::parse_signer_key(&key_str).map_err(SettlementError::Key)?;
-        let sender = key.public_key().derive_address();
+        let (key, sender) = load_signer(key_path)?;
         let mut rpc =
             sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
@@ -231,9 +266,7 @@ impl Settlement {
         info!(package_id = %package_id, "settlement package published");
 
         // 2. Initialize the package (creates the shared Registry + SettlerCap).
-        let package_addr: Address = package_id
-            .parse()
-            .map_err(|e| SettlementError::Parse(format!("package id: {e}")))?;
+        let package_addr = parse_address(&package_id, "package id")?;
         let mut builder = TransactionBuilder::new();
         builder.move_call(
             Function::new(
@@ -283,7 +316,10 @@ impl Settlement {
 
 /// Signs `tx` with `key` and submits it, waiting up to `wait` for checkpoint
 /// inclusion. `label` is prefixed to error messages and must match the failing
-/// phase. A deadline expiry is client-side: the tx may still have executed,
+/// phase. Requires on-chain success via [`require_success`]: a tx can execute
+/// and still abort (e.g. a gas-object race), and the abort reason is more
+/// actionable than the "object not found" errors callers would otherwise
+/// report. A deadline expiry is client-side: the tx may still have executed,
 /// which callers that do not retry must tolerate (e.g. by re-deploying).
 pub(crate) async fn sign_and_execute(
     rpc: &mut sui_rpc::Client,
@@ -302,7 +338,23 @@ pub(crate) async fn sign_and_execute(
         )
         .await
         .map_err(|e| SettlementError::Execution(format!("{label}: {e}")))?;
-    Ok(response.into_inner())
+    into_checked(response.into_inner(), label)
+}
+
+/// Returns the response, requiring the transaction to have executed
+/// successfully on-chain; names the Move abort reason otherwise.
+fn into_checked(
+    inner: sui_rpc::proto::sui::rpc::v2::ExecuteTransactionResponse,
+    label: &str,
+) -> Result<sui_rpc::proto::sui::rpc::v2::ExecuteTransactionResponse, SettlementError> {
+    let status = inner.transaction().effects().status();
+    if status.success() {
+        return Ok(inner);
+    }
+    Err(SettlementError::Execution(format!(
+        "{label} failed: {}",
+        status.error().description.clone().unwrap_or_default()
+    )))
 }
 
 /// Returns the first object id created (`IdOperation::Created`) owned by `kind`.
@@ -319,27 +371,8 @@ pub(crate) fn find_created_object(
 
 /// Reads the latest committed height from the registry object.
 pub async fn latest_height(rpc_url: &str, registry_id: &str) -> Result<u64, SettlementError> {
-    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
-    let registry: Address = parse_address(registry_id)?;
-
-    let response = rpc
-        .ledger_client()
-        .get_object(
-            GetObjectRequest::new(&registry).with_read_mask(FieldMask::from_str("contents")),
-        )
-        .await
-        .map_err(|e| SettlementError::Rpc(format!("get_object: {e}")))?;
-
-    let obj = response
-        .into_inner()
-        .object
-        .ok_or_else(|| SettlementError::Execution("registry object not found".into()))?;
-
-    let contents = obj
-        .contents
-        .and_then(|bcs| bcs.value)
-        .ok_or_else(|| SettlementError::Execution("registry has no contents".into()))?;
-
+    let registry = parse_address(registry_id, "registry id")?;
+    let contents = object_contents(rpc_url, &registry, "registry").await?;
     parse_latest_height(&contents)
 }
 
@@ -445,21 +478,8 @@ fn parse_field_blob_id(bytes: &[u8]) -> Result<BlobId, SettlementError> {
 /// fetch it once and reuse it for every [`commitment_at`] lookup instead of
 /// re-reading the registry per height.
 pub async fn table_uid(rpc_url: &str, registry_id: &str) -> Result<Address, SettlementError> {
-    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
-    let registry = parse_address(registry_id)?;
-    let response = rpc
-        .ledger_client()
-        .get_object(
-            GetObjectRequest::new(&registry).with_read_mask(FieldMask::from_str("contents")),
-        )
-        .await
-        .map_err(|e| SettlementError::Rpc(format!("get_object: {e}")))?;
-    let bytes = response
-        .into_inner()
-        .object
-        .and_then(|o| o.contents)
-        .and_then(|c| c.value)
-        .ok_or_else(|| SettlementError::Execution("registry has no contents".into()))?;
+    let registry = parse_address(registry_id, "registry id")?;
+    let bytes = object_contents(rpc_url, &registry, "registry").await?;
     parse_table_uid(&bytes)
 }
 
@@ -475,28 +495,10 @@ pub async fn commitment_at(
     table_uid: &Address,
     height: u64,
 ) -> Result<Option<BlobId>, SettlementError> {
-    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
-
-    // Dynamic field object id for Table<u64, vector<u8>>[height].
-    let field_id = table_uid.derive_dynamic_child_id(&TypeTag::U64, &height.to_le_bytes());
-
-    let response = rpc
-        .ledger_client()
-        .get_object(
-            GetObjectRequest::new(&field_id).with_read_mask(FieldMask::from_str("contents")),
-        )
-        .await
-        .map_err(|e| SettlementError::Rpc(format!("get_object (field): {e}")))?;
-
-    let Some(obj) = response.into_inner().object else {
-        return Ok(None);
-    };
-    let bytes = obj
-        .contents
-        .and_then(|c| c.value)
-        .ok_or_else(|| SettlementError::Execution("field contents missing raw BCS".into()))?;
-
-    Ok(Some(parse_field_blob_id(&bytes)?))
+    match field_contents(rpc_url, table_uid, height).await? {
+        None => Ok(None),
+        Some(bytes) => Ok(Some(parse_field_blob_id(&bytes)?)),
+    }
 }
 
 /// Converts a raw byte vector into a fixed-size `BlobId`.
@@ -510,11 +512,6 @@ fn parse_blob_id(bytes: &[u8]) -> Result<BlobId, SettlementError> {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(bytes);
     Ok(BlobId(arr))
-}
-
-fn parse_address(s: &str) -> Result<Address, SettlementError> {
-    s.parse()
-        .map_err(|e| SettlementError::Parse(format!("address {s}: {e}")))
 }
 
 #[cfg(test)]

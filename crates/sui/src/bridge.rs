@@ -10,10 +10,7 @@ use std::path::Path;
 
 use podseq_core::Error as CoreError;
 use sui_crypto::ed25519::Ed25519PrivateKey;
-use sui_rpc::field::FieldMask;
-use sui_rpc::field::FieldMaskUtil;
 use sui_rpc::proto::sui::rpc::v2::owner;
-use sui_rpc::proto::sui::rpc::v2::GetObjectRequest;
 use sui_sdk_types::Address;
 use sui_sdk_types::Identifier;
 use sui_sdk_types::TypeTag;
@@ -21,7 +18,10 @@ use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 use thiserror::Error;
 use tracing::info;
 
-use crate::settlement::{find_created_object, sign_and_execute, DEPLOY_TX_WAIT};
+use crate::settlement::{
+    field_contents, find_created_object, load_signer, object_contents, parse_address,
+    sign_and_execute, DEPLOY_TX_WAIT,
+};
 
 /// Errors from Sui bridge read/release transactions.
 #[derive(Debug, Error)]
@@ -94,12 +94,7 @@ impl BridgeClient {
         vault_id: &str,
         rpc_url: &str,
     ) -> Result<Self, BridgeError> {
-        let key_str = std::fs::read_to_string(key_path)
-            .map_err(BridgeError::Io)?
-            .trim()
-            .to_string();
-        let key = crate::parse_signer_key(&key_str).map_err(BridgeError::Key)?;
-        let sender = key.public_key().derive_address();
+        let (key, sender) = load_signer(key_path).map_err(BridgeError::from)?;
         let rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
         Ok(Self {
             key,
@@ -155,20 +150,12 @@ impl BridgeClient {
             .map_err(|e| BridgeError::Build(e.to_string()))
     }
 
-    /// Signs, submits, and confirms a transaction, requiring on-chain success.
-    ///
-    /// Signs, submits, and confirms a transaction, requiring on-chain success:
-    /// a tx can execute and still abort (e.g. a gas-object race).
+    /// Signs, submits, and confirms a transaction. [`sign_and_execute`]
+    /// requires on-chain success: a tx can execute and still abort
+    /// (e.g. a gas-object race).
     async fn submit(&self, tx: sui_sdk_types::Transaction, label: &str) -> Result<(), BridgeError> {
         let mut rpc = self.rpc.clone();
-        let response = sign_and_execute(&mut rpc, &self.key, tx, label, DEPLOY_TX_WAIT).await?;
-        let status = response.transaction().effects().status();
-        if !status.success() {
-            return Err(BridgeError::Execution(format!(
-                "{label} failed: {}",
-                status.error().description.clone().unwrap_or_default()
-            )));
-        }
+        sign_and_execute(&mut rpc, &self.key, tx, label, DEPLOY_TX_WAIT).await?;
         Ok(())
     }
 
@@ -182,12 +169,7 @@ impl BridgeClient {
         rpc_url: &str,
         package_id: &str,
     ) -> Result<DeployedBridge, BridgeError> {
-        let key_str = std::fs::read_to_string(key_path)
-            .map_err(BridgeError::Io)?
-            .trim()
-            .to_string();
-        let key = crate::parse_signer_key(&key_str).map_err(BridgeError::Key)?;
-        let sender = key.public_key().derive_address();
+        let (key, sender) = load_signer(key_path).map_err(BridgeError::from)?;
         let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
         let package = parse_address(package_id, "package id")?;
 
@@ -255,20 +237,10 @@ pub async fn vault_status(rpc_url: &str, vault_id: &str) -> Result<VaultStatus, 
 
 /// Fetches the raw BCS contents of the vault object.
 async fn vault_contents(rpc_url: &str, vault_id: &str) -> Result<Vec<u8>, BridgeError> {
-    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
     let vault = parse_address(vault_id, "vault id")?;
-    let response = rpc
-        .ledger_client()
-        .get_object(GetObjectRequest::new(&vault).with_read_mask(FieldMask::from_str("contents")))
+    object_contents(rpc_url, &vault, "vault")
         .await
-        .map_err(|e| BridgeError::Rpc(format!("get_object: {e}")))?;
-    let bytes = response
-        .into_inner()
-        .object
-        .and_then(|o| o.contents)
-        .and_then(|c| c.value)
-        .ok_or_else(|| BridgeError::Execution("vault has no contents".into()))?;
-    Ok(bytes.to_vec())
+        .map_err(BridgeError::from)
 }
 
 /// Mirrors the Move `Vault` layout (`move/sources/bridge.move`).
@@ -317,23 +289,10 @@ pub async fn deposit_at(
     table_uid: &Address,
     nonce: u64,
 ) -> Result<Option<DepositRecord>, BridgeError> {
-    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
-    let field_id = table_uid.derive_dynamic_child_id(&TypeTag::U64, &nonce.to_le_bytes());
-    let response = rpc
-        .ledger_client()
-        .get_object(
-            GetObjectRequest::new(&field_id).with_read_mask(FieldMask::from_str("contents")),
-        )
-        .await
-        .map_err(|e| BridgeError::Rpc(format!("get_object (field): {e}")))?;
-    let Some(obj) = response.into_inner().object else {
-        return Ok(None);
-    };
-    let bytes = obj
-        .contents
-        .and_then(|c| c.value)
-        .ok_or_else(|| BridgeError::Execution("field contents missing raw BCS".into()))?;
-    Ok(Some(parse_field_deposit(&bytes)?))
+    match field_contents(rpc_url, table_uid, nonce).await? {
+        None => Ok(None),
+        Some(bytes) => Ok(Some(parse_field_deposit(&bytes)?)),
+    }
 }
 
 /// Extracts the deposit record from a raw `Field<u64, DepositRecord>` BCS buffer.
@@ -355,11 +314,6 @@ fn parse_field_deposit(bytes: &[u8]) -> Result<DepositRecord, BridgeError> {
         )));
     }
     Ok(field.value)
-}
-
-fn parse_address(s: &str, label: &str) -> Result<Address, BridgeError> {
-    s.parse()
-        .map_err(|e| BridgeError::Parse(format!("{label} {s}: {e}")))
 }
 
 impl From<BridgeError> for CoreError {

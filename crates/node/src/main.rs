@@ -88,14 +88,12 @@ fn main() -> Result<()> {
         Commands::Init { action } => match action {
             InitCommands::Config { out } => {
                 let config = Config::testnet();
-                let toml = toml::to_string_pretty(&config).context("serializing config")?;
                 match out {
                     Some(path) => {
-                        std::fs::write(&path, &toml)
-                            .with_context(|| format!("writing {}", path.display()))?;
+                        config.save(&path)?;
                         info!(path = %path.display(), "wrote config");
                     }
-                    None => println!("{toml}"),
+                    None => println!("{}", config.to_toml()?),
                 }
             }
         },

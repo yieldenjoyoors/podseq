@@ -16,16 +16,26 @@ use std::time::{Duration, Instant};
 use alloy_consensus::{TxEip1559, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::TxSigner;
-use alloy_primitives::{keccak256, Address, TxKind, U256};
+use alloy_primitives::{Address, TxKind, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{anyhow, bail, Context, Result};
 use podseq_core::Block;
-use podseq_e2e::FullStack;
+use podseq_e2e::abi::{
+    encode_adopt_bridge, encode_bridge_initialize, encode_create_bridge, encode_factory_initialize,
+    selector,
+};
+use podseq_e2e::eth::{
+    eth_balance_of, eth_call_address, eth_call_bool, eth_chain_id, eth_gas_price,
+    eth_get_transaction_count, rpc_call,
+};
+use podseq_e2e::{
+    require_docker, sui_signer_key as sui_signer_key_str, FullStack, BRIDGE_FACTORY,
+    BRIDGE_TOKEN_PREDEPLOY, GENESIS_ADDRESS, GENESIS_PKEY,
+};
 use podseq_sui::{
     settlement::{commitment_at, latest_height, table_uid},
     Client as SuiClient, Config as SuiConfig,
 };
-use serde::Deserialize;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_sdk_types::Identifier;
@@ -36,16 +46,8 @@ use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 const RPC_PORT: u16 = 18745;
 const ENGINE_PORT: u16 = 18751;
 
-/// Hardhat dev account funded by `examples/reth-genesis.json`.
-const GENESIS_PKEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-const GENESIS_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
-
 const SUI_RPC: &str = "https://fullnode.testnet.sui.io:443";
 
-/// BridgeFactory predeploy address (genesis-planted bytecode, see `solidity/`).
-const BRIDGE_FACTORY: &str = "0x4200000000000000000000000000000000000010";
-/// Predeployed canonical SUI Bridge token (genesis-planted bytecode).
-const BRIDGE_TOKEN_PREDEPLOY: &str = "0x4200000000000000000000000000000000000011";
 /// SUI coin type bridged by the test.
 const COIN_TYPE: &str = "0x2::sui::SUI";
 /// Amount deposited and then withdrawn back, in MIST (0.01 SUI).
@@ -248,32 +250,11 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     Ok(())
 }
 
-fn require_docker() {
-    let available = std::process::Command::new("docker")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok();
-    if !available {
-        eprintln!("skipping: docker is not available");
-        std::process::exit(0);
-    }
-}
-
 /// Checks the funded Sui key has enough balance for settlement auto-deploy
 /// (~0.03 SUI). Each test run deploys fresh because the workdir is ephemeral,
 /// so the key drains over time and must be refilled from the testnet faucet.
 async fn preflight_sui_balance() -> Result<()> {
-    let key_str = if let Ok(k) = std::env::var("SUI_SIGNER_KEY") {
-        k.trim().to_string()
-    } else {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("docker/secrets/sui.key");
-        std::fs::read_to_string(path)?.trim().to_string()
-    };
+    let key_str = sui_signer_key_str()?.context("no funded Sui key available")?;
     let key =
         podseq_sui::parse_signer_key(&key_str).map_err(|e| anyhow!("invalid sui key: {e}"))?;
     let sender = key.public_key().derive_address();
@@ -305,7 +286,7 @@ async fn wait_for_height(
 ) -> Result<u64> {
     let deadline = Instant::now() + timeout;
     loop {
-        match eth_block_number(http, rpc_url).await {
+        match podseq_e2e::eth::eth_block_number(http, rpc_url).await {
             Ok(h) if h >= min => return Ok(h),
             Ok(_) => {}
             Err(e) => eprintln!("e2e: eth_blockNumber retrying: {e}"),
@@ -384,63 +365,6 @@ async fn fetch_blob_retrying(
     }
 }
 
-#[derive(Deserialize)]
-struct RpcEnvelope<R> {
-    result: Option<R>,
-    #[serde(default)]
-    error: Option<serde_json::Value>,
-}
-
-async fn rpc_call<T: serde::de::DeserializeOwned>(
-    http: &reqwest::Client,
-    rpc_url: &str,
-    method: &str,
-    params: Vec<serde_json::Value>,
-) -> Result<T> {
-    let env: RpcEnvelope<T> = http
-        .post(rpc_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": params,
-        }))
-        .send()
-        .await?
-        .json()
-        .await?;
-    if let Some(e) = env.error {
-        bail!("rpc error ({method}): {e}");
-    }
-    env.result
-        .ok_or_else(|| anyhow!("rpc ({method}) returned no result"))
-}
-
-async fn eth_block_number(http: &reqwest::Client, rpc_url: &str) -> Result<u64> {
-    let s: String = rpc_call(http, rpc_url, "eth_blockNumber", vec![]).await?;
-    Ok(u64::from_str_radix(s.trim_start_matches("0x"), 16)?)
-}
-
-async fn eth_chain_id(http: &reqwest::Client, rpc_url: &str) -> Result<u64> {
-    let s: String = rpc_call(http, rpc_url, "eth_chainId", vec![]).await?;
-    Ok(u64::from_str_radix(s.trim_start_matches("0x"), 16)?)
-}
-
-async fn eth_get_transaction_count(
-    http: &reqwest::Client,
-    rpc_url: &str,
-    address: Address,
-) -> Result<u64> {
-    let s: String = rpc_call(
-        http,
-        rpc_url,
-        "eth_getTransactionCount",
-        vec![format!("{address:?}").into(), "pending".into()],
-    )
-    .await?;
-    Ok(u64::from_str_radix(s.trim_start_matches("0x"), 16)?)
-}
-
 async fn eth_get_transaction_receipt(
     http: &reqwest::Client,
     rpc_url: &str,
@@ -477,8 +401,7 @@ async fn send_self_transfer(
     chain_id: u64,
     nonce: u64,
 ) -> Result<String> {
-    let price_hex: String = rpc_call(http, rpc_url, "eth_gasPrice", vec![]).await?;
-    let price = u128::from_str_radix(price_hex.trim_start_matches("0x"), 16)?;
+    let price = eth_gas_price(http, rpc_url).await?;
 
     let mut tx = TxEip1559 {
         chain_id,
@@ -539,15 +462,7 @@ fn load_relayer_signer(path: &std::path::Path) -> Result<PrivateKeySigner> {
 
 /// Loads the funded Sui signer key from env or file.
 fn sui_signer_key() -> Result<Ed25519PrivateKey> {
-    let key_str = if let Ok(k) = std::env::var("SUI_SIGNER_KEY") {
-        k.trim().to_string()
-    } else {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("docker/secrets/sui.key");
-        std::fs::read_to_string(path)?.trim().to_string()
-    };
+    let key_str = sui_signer_key_str()?.context("no funded Sui key available")?;
     podseq_sui::parse_signer_key(&key_str).map_err(|e| anyhow!("invalid sui key: {e}"))
 }
 
@@ -561,8 +476,7 @@ async fn fund_relayer(
     let genesis = PrivateKeySigner::from_str(GENESIS_PKEY)?;
     let from: Address = GENESIS_ADDRESS.parse()?;
     let nonce = eth_get_transaction_count(http, rpc_url, from).await?;
-    let price_hex: String = rpc_call(http, rpc_url, "eth_gasPrice", vec![]).await?;
-    let price = u128::from_str_radix(price_hex.trim_start_matches("0x"), 16)?;
+    let price = eth_gas_price(http, rpc_url).await?;
 
     let mut tx = TxEip1559 {
         chain_id,
@@ -605,107 +519,6 @@ async fn fund_relayer(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
-
-/// Returns the first 4 bytes of `keccak256(signature)` — the Solidity selector.
-fn selector(signature: &[u8]) -> Vec<u8> {
-    keccak256(signature).0[..4].to_vec()
-}
-
-/// Reads a `uint256` length word (right-aligned in 32 bytes) as `usize`.
-fn abi_word_len(word: &[u8]) -> usize {
-    let mut arr = [0u8; 8];
-    arr.copy_from_slice(&word[24..]);
-    u64::from_be_bytes(arr) as usize
-}
-
-/// Decodes an ABI `string` whose 32-byte length word starts at `len_offset`.
-/// `len_offset` is 32 for a direct `string` return and 36 for a revert payload.
-fn decode_abi_string_at(bytes: &[u8], len_offset: usize) -> Result<String> {
-    anyhow::ensure!(
-        bytes.len() >= len_offset + 32,
-        "abi string return too short"
-    );
-    let len = abi_word_len(&bytes[len_offset..len_offset + 32]);
-    let data_pos = len_offset + 32;
-    let end = data_pos
-        .checked_add(len)
-        .context("abi string length overruns usize")?;
-    anyhow::ensure!(end <= bytes.len(), "abi string length overruns buffer");
-    Ok(String::from_utf8_lossy(&bytes[data_pos..end]).to_string())
-}
-
-/// ABI-encodes `initialize(address)`.
-fn encode_factory_initialize(relayer: Address) -> Vec<u8> {
-    let mut out = selector(b"initialize(address)").to_vec();
-    let mut addr_word = [0u8; 32];
-    addr_word[12..].copy_from_slice(relayer.as_ref());
-    out.extend_from_slice(&addr_word);
-    out
-}
-
-/// ABI-encodes `initialize(string,string,string,address)`.
-fn encode_bridge_initialize(
-    name: &str,
-    symbol: &str,
-    coin_type: &str,
-    relayer: Address,
-) -> Vec<u8> {
-    let selector = selector(b"initialize(string,string,string,address)");
-    let mut out = selector.to_vec();
-    // Header: 3 string offsets + 1 static address = 4 words.
-    let mut dynamic = Vec::new();
-    let mut offset = 4 * 32;
-    for s in [name, symbol, coin_type] {
-        out.extend_from_slice(&U256::from(offset).to_be_bytes::<32>());
-        let bytes = s.as_bytes();
-        let padded_len = bytes.len().div_ceil(32) * 32;
-        dynamic.extend_from_slice(&U256::from(bytes.len()).to_be_bytes::<32>());
-        dynamic.extend_from_slice(bytes);
-        dynamic.resize(dynamic.len() + (padded_len - bytes.len()), 0);
-        offset += 32 + padded_len;
-    }
-    let mut addr_word = [0u8; 32];
-    addr_word[12..].copy_from_slice(relayer.as_ref());
-    out.extend_from_slice(&addr_word);
-    out.extend_from_slice(&dynamic);
-    out
-}
-
-/// ABI-encodes `adoptBridge(string,address)`.
-fn encode_adopt_bridge(coin_type: &str, token: Address) -> Vec<u8> {
-    let mut out = selector(b"adoptBridge(string,address)").to_vec();
-    // Head: string offset + the static address word.
-    out.extend_from_slice(&U256::from(32 + 32).to_be_bytes::<32>());
-    let mut addr_word = [0u8; 32];
-    addr_word[12..].copy_from_slice(token.as_ref());
-    out.extend_from_slice(&addr_word);
-    // Tail: the string.
-    let bytes = coin_type.as_bytes();
-    let padded_len = bytes.len().div_ceil(32) * 32;
-    out.extend_from_slice(&U256::from(bytes.len()).to_be_bytes::<32>());
-    out.extend_from_slice(bytes);
-    out.resize(out.len() + (padded_len - bytes.len()), 0);
-    out
-}
-
-/// ABI-encodes `createBridge(string,string,string)`.
-fn encode_create_bridge(name: &str, symbol: &str, coin_type: &str) -> Vec<u8> {
-    let mut out = selector(b"createBridge(string,string,string)").to_vec();
-    let mut dynamic = Vec::new();
-    let mut offset = 3 * 32;
-    for s in [name, symbol, coin_type] {
-        out.extend_from_slice(&U256::from(offset).to_be_bytes::<32>());
-        let bytes = s.as_bytes();
-        let padded_len = bytes.len().div_ceil(32) * 32;
-        dynamic.extend_from_slice(&U256::from(bytes.len()).to_be_bytes::<32>());
-        dynamic.extend_from_slice(bytes);
-        dynamic.resize(dynamic.len() + (padded_len - bytes.len()), 0);
-        offset += 32 + padded_len;
-    }
-    out.extend_from_slice(&dynamic);
-    out
-}
-
 /// Sends a signed tx from the relayer account to an L2 contract and waits for
 /// a successful receipt, returning it.
 #[allow(clippy::too_many_arguments)]
@@ -721,8 +534,7 @@ async fn send_contract_tx(
 ) -> Result<serde_json::Value> {
     let from = relayer.address();
     let nonce = eth_get_transaction_count(http, rpc_url, from).await?;
-    let price_hex: String = rpc_call(http, rpc_url, "eth_gasPrice", vec![]).await?;
-    let price = u128::from_str_radix(price_hex.trim_start_matches("0x"), 16)?;
+    let price = eth_gas_price(http, rpc_url).await?;
 
     // Dry-run via eth_call to surface the revert reason before spending gas.
     let call_resp: serde_json::Value = http
@@ -743,7 +555,10 @@ async fn send_contract_tx(
         .await?;
     if let Some(result) = call_resp.get("result").and_then(|v| v.as_str()) {
         if result.starts_with("0x08c379a0") {
-            bail!("{label} would revert: {}", decode_revert_string(result));
+            bail!(
+                "{label} would revert: {}",
+                podseq_e2e::abi::decode_revert_string(result)
+            );
         }
     }
 
@@ -851,15 +666,6 @@ async fn bootstrap_l2_bridge(
     )
     .await?;
     Ok(())
-}
-
-/// Decodes a Solidity revert string from an `eth_call` result.
-fn decode_revert_string(hex_result: &str) -> String {
-    let bytes = match hex::decode(hex_result.trim_start_matches("0x")) {
-        Ok(b) => b,
-        Err(_) => return hex_result.to_string(),
-    };
-    decode_abi_string_at(&bytes, 36).unwrap_or_else(|_| hex_result.to_string())
 }
 
 /// Polls until the factory is initialized and its relayer matches: that is the
@@ -987,8 +793,7 @@ async fn initiate_withdrawal(
 ) -> Result<()> {
     let from = signer.address();
     let nonce = eth_get_transaction_count(http, rpc_url, from).await?;
-    let price_hex: String = rpc_call(http, rpc_url, "eth_gasPrice", vec![]).await?;
-    let price = u128::from_str_radix(price_hex.trim_start_matches("0x"), 16)?;
+    let price = eth_gas_price(http, rpc_url).await?;
 
     let selector = selector(b"initiateWithdrawal(bytes32,uint256)");
     let mut calldata = selector;
@@ -1085,164 +890,4 @@ async fn sui_vault_withdraw_nonce(vault_id: &str) -> Result<u64> {
         .await
         .map(|status| status.withdraw_nonce)
         .map_err(|e| anyhow!("vault status: {e}"))
-}
-
-/// `balanceOf(address)` via eth_call.
-async fn eth_balance_of(
-    http: &reqwest::Client,
-    rpc_url: &str,
-    token: &str,
-    holder: &str,
-) -> Result<u64> {
-    let selector = selector(b"balanceOf(address)");
-    let mut addr_word = [0u8; 32];
-    let holder_addr: Address = holder.parse()?;
-    addr_word[12..].copy_from_slice(holder_addr.as_ref());
-    let mut calldata = selector;
-    calldata.extend_from_slice(&addr_word);
-
-    let to: Address = token.parse()?;
-    let resp: serde_json::Value = http
-        .post(rpc_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "eth_call",
-            "params": [{
-                "to": format!("{to:?}"),
-                "data": format!("0x{}", hex::encode(&calldata)),
-            }, "latest"],
-        }))
-        .send()
-        .await?
-        .json()
-        .await?;
-    if let Some(error) = resp.get("error") {
-        bail!("eth_call balanceOf error: {error}");
-    }
-    let result = resp
-        .get("result")
-        .and_then(|v| v.as_str())
-        .context("eth_call balanceOf: no result")?;
-    Ok(u64::from_str_radix(result.trim_start_matches("0x"), 16)?)
-}
-
-/// eth_call returning a bool (for initialized()).
-async fn eth_call_bool(
-    http: &reqwest::Client,
-    rpc_url: &str,
-    to: &str,
-    selector: &[u8],
-) -> Result<bool> {
-    let bytes = eth_call_raw(http, rpc_url, to, selector).await?;
-    Ok(bytes.last().is_some_and(|b| *b != 0))
-}
-
-/// eth_call returning an address (for relayer()).
-async fn eth_call_address(
-    http: &reqwest::Client,
-    rpc_url: &str,
-    to: &str,
-    selector: &[u8],
-) -> Result<Address> {
-    let bytes = eth_call_raw(http, rpc_url, to, selector).await?;
-    anyhow::ensure!(bytes.len() >= 32, "eth_call address return too short");
-    let mut addr = [0u8; 20];
-    addr.copy_from_slice(&bytes[12..32]);
-    Ok(Address::from(addr))
-}
-
-async fn eth_call_raw(
-    http: &reqwest::Client,
-    rpc_url: &str,
-    to: &str,
-    selector: &[u8],
-) -> Result<Vec<u8>> {
-    let to_addr: Address = to.parse()?;
-    let resp: serde_json::Value = http
-        .post(rpc_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "eth_call",
-            "params": [{
-                "to": format!("{to_addr:?}"),
-                "data": format!("0x{}", hex::encode(selector)),
-            }, "latest"],
-        }))
-        .send()
-        .await?
-        .json()
-        .await?;
-    if let Some(error) = resp.get("error") {
-        bail!("eth_call error: {error}");
-    }
-    let hex = resp.get("result").and_then(|v| v.as_str()).unwrap_or("0x");
-    Ok(hex::decode(hex.trim_start_matches("0x"))?)
-}
-
-#[cfg(test)]
-mod abi_tests {
-    use super::*;
-
-    /// Builds the ABI encoding of a Solidity `string` with optional 4-byte
-    /// selector prefix (for revert payloads) and a 32-byte offset word (for
-    /// direct `string` returns).
-    fn encode_string(payload: &str, with_selector: bool) -> Vec<u8> {
-        let mut out = Vec::new();
-        if with_selector {
-            out.extend_from_slice(&[0x08, 0xc3, 0x79, 0xa0]); // Error(string) selector
-        }
-        // offset word = 0x20 (32)
-        out.extend_from_slice(&[0u8; 31]);
-        out.push(0x20);
-        // length word (32 bytes, big-endian, value in low bytes)
-        out.extend_from_slice(&[0u8; 24]);
-        out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-        out.extend_from_slice(payload.as_bytes());
-        let pad = (32 - (payload.len() % 32)) % 32;
-        out.extend(std::iter::repeat_n(0u8, pad));
-        out
-    }
-
-    #[test]
-    fn abi_word_len_reads_right_aligned_value() {
-        let mut word = vec![0u8; 32];
-        word[24..].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(abi_word_len(&word), 0x0102030405060708);
-    }
-
-    #[test]
-    fn decode_abi_string_reads_coin_type_return() {
-        let bytes = encode_string("0x2::sui::SUI", false);
-        assert_eq!(decode_abi_string_at(&bytes, 32).unwrap(), "0x2::sui::SUI");
-    }
-
-    #[test]
-    fn decode_abi_string_reads_revert_payload() {
-        let bytes = encode_string("bad coin type", true);
-        assert_eq!(decode_abi_string_at(&bytes, 36).unwrap(), "bad coin type");
-    }
-
-    #[test]
-    fn decode_abi_string_does_not_panic_on_full_length_word() {
-        // Regression: a fully-populated 32-byte length word must error, not panic.
-        let mut bytes = vec![0u8; 32];
-        bytes.extend_from_slice(&[0xff; 32]);
-        bytes.extend_from_slice(&[0u8; 32]);
-        assert!(decode_abi_string_at(&bytes, 32).is_err());
-    }
-
-    #[test]
-    fn decode_abi_string_rejects_short_buffer() {
-        assert!(decode_abi_string_at(&[0u8; 10], 32).is_err());
-        assert!(decode_abi_string_at(&[0u8; 10], 36).is_err());
-    }
-
-    #[test]
-    fn decode_revert_string_roundtrips_known_payload() {
-        let bytes = encode_string("invalid opcode", true);
-        let hex = format!("0x{}", hex::encode(&bytes));
-        assert_eq!(decode_revert_string(&hex), "invalid opcode");
-    }
 }
