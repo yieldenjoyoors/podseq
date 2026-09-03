@@ -359,11 +359,22 @@ impl Config {
     /// Writes the config atomically (tmp + rename) so a crash mid-write cannot
     /// destroy deployed settlement or bridge object IDs.
     pub fn save(&self, path: &Path) -> Result<()> {
+        self.write(path, |from, to| std::fs::rename(from, to))
+    }
+
+    fn write(&self, path: &Path, rename: fn(&Path, &Path) -> std::io::Result<()>) -> Result<()> {
         let tmp = path.with_extension("toml.tmp");
         std::fs::write(&tmp, self.to_toml()?)
             .with_context(|| format!("writing config to {}", tmp.display()))?;
-        std::fs::rename(&tmp, path)
-            .with_context(|| format!("renaming config into place at {}", path.display()))?;
+        if let Err(e) = rename(&tmp, path) {
+            std::fs::copy(&tmp, path).with_context(|| {
+                format!(
+                    "copying config into place at {} (rename failed: {e})",
+                    path.display()
+                )
+            })?;
+            let _ = std::fs::remove_file(&tmp);
+        }
         Ok(())
     }
 
@@ -508,5 +519,55 @@ listen_addr = "127.0.0.1:9100"
         let parsed = Config::from_str(&serialized).unwrap();
         assert_eq!(parsed.metrics.enabled, config.metrics.enabled);
         assert_eq!(parsed.metrics.listen_addr, config.metrics.listen_addr);
+    }
+
+    fn tmp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "podseq-config-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn save_replaces_existing_file_and_leaves_no_tmp() {
+        let dir = tmp_dir();
+        let path = dir.join("podseq.toml");
+        std::fs::write(&path, "[reth]\njwt_path = \"old.hex\"\n").unwrap();
+
+        let mut config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        config.sui.registry_id = Some("0xreg".into());
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.sui.registry_id.as_deref(), Some("0xreg"));
+        assert!(!path.with_extension("toml.tmp").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_falls_back_to_in_place_copy_when_rename_fails() {
+        // A single-file bind mount (docker `-v podseq.toml:/etc/podseq/podseq.toml`)
+        // is a mount point: rename onto it returns EBUSY (os error 16). Simulate
+        // that and assert the config still lands in the existing file, since the
+        // e2e harness and operators read it back from the host.
+        let dir = tmp_dir();
+        let path = dir.join("podseq.toml");
+        std::fs::write(&path, "[reth]\njwt_path = \"old.hex\"\n").unwrap();
+
+        let mut config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        config.sui.registry_id = Some("0xreg".into());
+        config
+            .write(&path, |_, _| Err(std::io::Error::from_raw_os_error(16)))
+            .unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.sui.registry_id.as_deref(), Some("0xreg"));
+        assert!(!path.with_extension("toml.tmp").exists());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
