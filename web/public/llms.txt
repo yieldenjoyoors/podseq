@@ -1,0 +1,36 @@
+# Podseq
+
+> Podseq is an EVM L2 sequencer written in Rust. It drives an out-of-process Reth node over the Engine API, posts block data to Walrus for data availability, and settles block commitments on Sui. This file maps the documentation. Rendered docs live at https://podseq.xyz/#/docs, the markdown sources are linked below.
+
+## Docs
+
+- [Introduction](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/README.md): what podseq is, the stack at a glance, quick start, repository layout.
+- [Node Setup](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/setup.md): running a sequencer node: Reth in L2 mode, Walrus access, signer keys, p2p identity.
+- [Settlement Contract](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/contract.md): the Sui Move contract, an append-only registry mapping block height to Walrus blob ID.
+- [Enshrined Bridge](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/bridge.md): lock coins on Sui, receive a matching ERC20 on L2; the sequencer itself relays both directions.
+- [Architecture](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/architecture.md): how block production, execution, data availability, and settlement are separated.
+- [Block Production](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/block-production.md): a transaction's path from the Reth mempool to settlement on Sui.
+- [Roadmap](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/roadmap.md): shipped phases and planned work.
+
+## Components
+
+- [Overview](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/components/README.md): how the crates split responsibilities.
+- [Core](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/components/core.md): shared types and traits, the Ed25519 block signer, the Commonware runtime bridge.
+- [Engine](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/components/engine.md): the Reth Engine API client: build, accept, finalize, JWT auth.
+- [Block signing](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/components/sequencer.md): how headers are signed and what Reth owns (transaction selection and ordering).
+- [Store](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/components/store.md): persistent block and chain state storage, crash recovery.
+- [Sui](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/components/sui.md): Walrus data availability, Sui settlement, and the bridge vault client.
+- [P2P](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/components/p2p.md): Commonware-based block propagation between sequencer and full nodes.
+
+## Reference
+
+- [Engine API](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/engine-api.md): the JWT-authenticated Engine API calls podseq makes to Reth.
+- [Walrus & Sui](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/walrus-sui.md): how Walrus blobs and Sui settlement work together.
+- [Metrics](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/metrics.md): the Prometheus endpoint and the full metric reference.
+- [MCP Server](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/docs/src/mcp.md): the read-only MCP endpoint (`podseq mcp`) with tools for node status, stored blocks, DA blobs, settlement, and the bridge.
+
+## Code
+
+- [Repository](https://github.com/yieldenjoyoors/podseq): source, issues, releases.
+- [Contributing](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/CONTRIBUTING.md): development setup and conventions.
+- [License](https://raw.githubusercontent.com/yieldenjoyoors/podseq/main/LICENSE): Apache-2.0.

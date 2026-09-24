@@ -6,11 +6,13 @@ mod bridge;
 mod config;
 mod full_node;
 mod keyring;
+mod mcp;
 mod metrics;
 mod runner;
 mod settlement;
 mod store;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -47,6 +49,12 @@ enum Commands {
     Start,
     /// Show chain height and settlement status.
     Status,
+    /// Serve a read-only MCP (Model Context Protocol) endpoint for LLM clients.
+    Mcp {
+        /// Address to bind (default: 127.0.0.1:9101).
+        #[arg(long, default_value = mcp::DEFAULT_LISTEN_ADDR)]
+        listen: SocketAddr,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,8 +90,12 @@ fn main() -> Result<()> {
         )
         .init();
 
-    let cli = Cli::parse();
+    run(Cli::parse())
+}
 
+/// Dispatches one parsed command, separate from `main` so the dispatch is
+/// callable without the tracing setup.
+fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Init { action } => match action {
             InitCommands::Config { out } => {
@@ -125,6 +137,13 @@ fn main() -> Result<()> {
                 Some(pkg) => println!("Settlement package: {pkg}"),
                 None => println!("Settlement: not configured"),
             }
+        }
+
+        Commands::Mcp { listen } => {
+            let config = load_config(&cli.config)?;
+            let server =
+                mcp::McpServer::from_config(&config).context("building mcp server from config")?;
+            mcp::run(server, listen)?;
         }
 
         Commands::Start => {

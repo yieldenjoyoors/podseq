@@ -121,6 +121,7 @@ podseq keyring generate-key            # sequencer key (Sui ed25519)
 podseq keyring generate-evm-key        # bridge relayer EVM key (secp256k1)
 podseq keyring list                    # show configured keys
 podseq status                          # query Reth height + settlement config
+podseq mcp                             # serve the read-only MCP endpoint
 podseq start                           # start the node
 ```
 

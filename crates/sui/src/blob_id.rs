@@ -6,7 +6,8 @@ use podseq_core::BlobId;
 
 use crate::Error;
 
-pub(crate) fn decode(s: &str) -> Result<BlobId, Error> {
+/// Decodes a blob ID from its base64url string representation (no padding).
+pub fn decode(s: &str) -> Result<BlobId, Error> {
     let bytes = URL_SAFE_NO_PAD
         .decode(s.as_bytes())
         .map_err(|e| Error::InvalidBlobId(format!("base64url decode: {e}")))?;
