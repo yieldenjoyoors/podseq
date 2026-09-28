@@ -112,8 +112,17 @@ See `docs/src/contract.md`.
 
 ## Notes
 
-- Reth runs with `--chain=dev` so the stack starts without a custom genesis. For
-  a production L2, replace the `reth` service `command` with your own chain spec
-  (podseq drives Reth purely over the Engine API).
-- Pin `ghcr.io/paradigmxyz/reth:latest` to a specific tag for production.
+- Reth runs the custom genesis at `examples/reth-genesis.json` (forks active from
+  timestamp 0); podseq drives it purely over the Engine API.
+- The Reth image is pinned to `ghcr.io/paradigmxyz/reth:v2.7.0`. Bump it deliberately
+  and check the release notes for breaking changes first.
+- `--rpc-cache.cache-computed-bals` (Reth ≥ 2.6) caches the block access lists
+  computed for tracing. The chain has no Amsterdam fork, so BALs are always
+  RPC-computed; caching them speeds up Blockscout's trace/debug indexing. Reth
+  2.7 bounds the cache by default (byte limits + idle eviction), so no tuning is
+  needed.
+- Reth 2.6+ enables partial persistence by default: state writes are delayed by
+  up to ~50 blocks. That is safe here — podseq and Blockscout only talk to Reth
+  over RPC, nothing reads the database out-of-process. If you add an
+  out-of-process DB reader, set `--engine.num-state-masking-blocks 0`.
 - Verify the Walrus mainnet endpoints against the Walrus docs before mainnet use.

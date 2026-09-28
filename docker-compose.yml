@@ -25,7 +25,7 @@ services:
     # podseq acts as the consensus client, so Reth is driven purely over the
     # authenticated Engine API. Uses a custom genesis with all forks active from
     # timestamp 0 (Shanghai, Cancun, Prague).
-    image: ghcr.io/paradigmxyz/reth:latest
+    image: ghcr.io/paradigmxyz/reth:v2.7.0
     pull_policy: missing
     depends_on:
       init-jwt:
@@ -43,6 +43,7 @@ services:
       - --datadir=/data
       - --disable-discovery
       - --jit
+      - --rpc-cache.cache-computed-bals
     volumes:
       - jwt:/jwt:ro
       - reth-data:/data

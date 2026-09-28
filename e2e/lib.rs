@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
-/// Default Reth image tag pinned for reproducible CI runs.
-pub const RETH_IMAGE: &str = "ghcr.io/paradigmxyz/reth:latest";
+/// Reth image tag pinned for reproducible CI runs.
+pub const RETH_IMAGE: &str = "ghcr.io/paradigmxyz/reth:v2.7.0";
 
 /// Polling interval when waiting for an endpoint to become reachable.
 const POLL: Duration = Duration::from_millis(500);
@@ -94,6 +94,7 @@ impl Stack {
       - --datadir=/data
       - --disable-discovery
       - --jit
+      - --rpc-cache.cache-computed-bals
     ports:
       - "{rpc_port}:8545"
       - "{engine_port}:8551"
@@ -334,6 +335,7 @@ mode = "sequencer"
       - --datadir=/data
       - --disable-discovery
       - --jit
+      - --rpc-cache.cache-computed-bals
     ports:
       - "{rpc_port}:8545"
       - "{engine_port}:8551"
