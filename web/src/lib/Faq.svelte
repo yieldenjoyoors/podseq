@@ -78,7 +78,7 @@
         <p class="mt-8 text-center micro text-[var(--muted)]">
             Still have questions?
             <a
-                href="#/docs"
+                href="/docs/"
                 class="font-bold text-[var(--brand)] underline underline-offset-4 hover:no-underline"
             >
                 Read the full documentation

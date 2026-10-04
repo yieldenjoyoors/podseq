@@ -30,7 +30,7 @@
                 class="reveal mt-8 flex flex-col gap-3 sm:flex-row"
                 style="animation-delay:220ms"
             >
-                <a href="#/docs/setup" class="btn btn-brand">
+                <a href="/docs/setup/" class="btn btn-brand">
                     Start building
                     <svg
                         width="13"
@@ -43,7 +43,7 @@
                         <path d="M5 12h14M13 6l6 6-6 6" />
                     </svg>
                 </a>
-                <a href="#/docs" class="btn">Explore the docs</a>
+                <a href="/docs/" class="btn">Explore the docs</a>
             </div>
 
             <div

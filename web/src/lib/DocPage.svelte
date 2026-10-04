@@ -1,17 +1,24 @@
 <script lang="ts">
-    import { SECTIONS, DEFAULT_DOC, renderDoc } from "./docs";
+    import { DEFAULT_DOC, SECTIONS, type RenderedDoc } from "./docs";
 
-    let { doc, anchor = null }: { doc: string; anchor?: string | null } =
-        $props();
+    let {
+        slug,
+        title,
+        description,
+        rendered,
+    }: {
+        slug: string;
+        title: string;
+        description: string;
+        rendered: RenderedDoc;
+    } = $props();
 
     let query = $state("");
     let sidebarOpen = $state(false);
     let contentEl = $state<HTMLElement | null>(null);
 
-    const rendered = $derived(renderDoc(doc));
-
     const flat = $derived(SECTIONS.flatMap((s) => s.entries));
-    const index = $derived(flat.findIndex((e) => e.slug === doc));
+    const index = $derived(flat.findIndex((e) => e.slug === slug));
     const prev = $derived(index > 0 ? flat[index - 1] : null);
     const next = $derived(
         index >= 0 && index < flat.length - 1 ? flat[index + 1] : null,
@@ -29,38 +36,6 @@
               })).filter((s) => s.entries.length)
             : SECTIONS,
     );
-
-    // Scroll to anchor (or top) whenever the document or anchor changes.
-    $effect(() => {
-        void rendered.html;
-        const a = anchor;
-        const el = contentEl;
-        if (!el) return;
-
-        const apply = () => {
-            if (a) {
-                const target = el.querySelector(`#${CSS.escape(a)}`);
-                if (target) {
-                    target.scrollIntoView({
-                        behavior: "smooth",
-                        block: "start",
-                    });
-                    return;
-                }
-            }
-            window.scrollTo({ top: 0, behavior: "auto" });
-        };
-
-        const reduce = window.matchMedia(
-            "(prefers-reduced-motion: reduce)",
-        ).matches;
-        if (reduce) {
-            apply();
-        } else {
-            const raf = requestAnimationFrame(apply);
-            return () => cancelAnimationFrame(raf);
-        }
-    });
 
     // Copy buttons inside rendered code blocks (event delegation).
     $effect(() => {
@@ -92,6 +67,13 @@
         return () => el.removeEventListener("click", onClick);
     });
 </script>
+
+<svelte:head>
+    <title>{title} · Podseq docs</title>
+    {#if description}
+        <meta name="description" content={description} />
+    {/if}
+</svelte:head>
 
 <div class="docs-layout">
     <!-- mobile toggle -->
@@ -143,9 +125,9 @@
                     <p class="side-heading">{section.section}</p>
                     {#each section.entries as entry (entry.slug)}
                         <a
-                            href={`#/docs/${entry.slug}`}
+                            href={`/docs/${entry.slug}/`}
                             class="side-link"
-                            class:active={entry.slug === doc}
+                            class:active={entry.slug === slug}
                             onclick={() => (sidebarOpen = false)}
                         >
                             {entry.title}
@@ -157,7 +139,7 @@
 
         <div class="side-foot">
             <a
-                href="#/"
+                href="/"
                 class="micro text-[var(--muted)] hover:text-[var(--brand)] transition-colors"
             >
                 ← back to overview
@@ -168,12 +150,12 @@
     <!-- main -->
     <main class="docs-main">
         <div class="docs-breadcrumb">
-            <a href="#/docs">docs</a>
+            <a href="/docs/">docs</a>
             <span class="sep">/</span>
             <span
-                >{doc === DEFAULT_DOC
+                >{slug === DEFAULT_DOC
                     ? "introduction"
-                    : doc.replace(/\//g, " / ")}</span
+                    : slug.replace(/\//g, " / ")}</span
             >
         </div>
 
@@ -183,7 +165,7 @@
 
         <div class="docs-pager">
             {#if prev}
-                <a class="pager-link" href={`#/docs/${prev.slug}`}>
+                <a class="pager-link" href={`/docs/${prev.slug}/`}>
                     <span class="docs-kicker">prev</span>
                     <span class="pager-title">{prev.title}</span>
                 </a>
@@ -191,7 +173,7 @@
                 <span></span>
             {/if}
             {#if next}
-                <a class="pager-link right" href={`#/docs/${next.slug}`}>
+                <a class="pager-link right" href={`/docs/${next.slug}/`}>
                     <span class="docs-kicker">next</span>
                     <span class="pager-title"
                         >{next.title}
@@ -218,7 +200,7 @@
             <nav>
                 {#each rendered.outline as item (item.id)}
                     <a
-                        href={`#/docs/${doc}~${item.id}`}
+                        href={`#${item.id}`}
                         class="outline-link"
                         class:sub={item.level === 3}
                     >

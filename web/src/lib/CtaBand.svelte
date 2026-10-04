@@ -13,7 +13,7 @@
         </p>
         <div class="mt-8 flex flex-wrap items-center gap-3">
             <a
-                href="#/docs/setup"
+                href="/docs/setup/"
                 class="btn !bg-white !text-[var(--brand)] !border-white"
             >
                 Start building

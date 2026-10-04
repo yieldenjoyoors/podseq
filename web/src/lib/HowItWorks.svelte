@@ -34,7 +34,7 @@
                     Three steps.
                 </p>
             </div>
-            <a href="#/docs/block-production" class="btn shrink-0">
+            <a href="/docs/block-production/" class="btn shrink-0">
                 Full data flow
                 <svg
                     width="13"

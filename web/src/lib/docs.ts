@@ -1,4 +1,4 @@
-import { Marked } from "marked";
+import { Marked, type RendererObject, type Tokens } from "marked";
 import { markedHighlight } from "marked-highlight";
 import hljs from "highlight.js/lib/common";
 
@@ -66,14 +66,90 @@ export function highlightCode(code: string, lang: string): string {
   }
 }
 
-const markedInstance = new Marked(
-  markedHighlight({
-    langPrefix: "hljs language-",
-    highlight: highlightCode,
-  }),
-);
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&(?!#?\w+;)/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-markedInstance.setOptions({ gfm: true, breaks: false });
+// Plain text from rendered inline HTML (heading ids + outline text).
+function plainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+// Render a doc page to HTML without touching the DOM, so it works at build
+// time (prerendering) and in the browser. Heading ids, internal links, and
+// copy buttons are emitted directly by the renderers.
+export function renderDoc(slug: string): RenderedDoc {
+  const outline: OutlineItem[] = [];
+  const seen = new Map<string, number>();
+
+  const markedInstance = new Marked(markedHighlight({ highlight: highlightCode }));
+
+  const renderer: RendererObject = {
+    heading(token) {
+      const inner = this.parser.parseInline(token.tokens);
+      if (token.depth !== 2 && token.depth !== 3) {
+        return `<h${token.depth}>${inner}</h${token.depth}>`;
+      }
+
+      const text = plainText(inner);
+      let id = slugify(text);
+      const count = seen.get(id) ?? 0;
+      seen.set(id, count + 1);
+      if (count > 0) id = `${id}-${count}`;
+      outline.push({ id, text, level: token.depth });
+
+      return (
+        `<h${token.depth} id="${id}">${inner}` +
+        `<a class="heading-anchor" href="#${id}" aria-label="Link to ${escapeHtml(text)}">#</a>` +
+        `</h${token.depth}>`
+      );
+    },
+
+    link(token) {
+      const text = this.parser.parseInline(token.tokens);
+      const title = token.title ? ` title="${escapeHtml(token.title)}"` : "";
+      if (/^(https?:|mailto:)/.test(token.href)) {
+        return `<a href="${token.href}"${title} target="_blank" rel="noopener">${text}</a>`;
+      }
+      if (/\.md($|#)/.test(token.href)) {
+        const resolved = resolveDocLink(token.href, slug);
+        if (resolved) {
+          const href = resolved.anchor
+            ? `/docs/${resolved.slug}/#${resolved.anchor}`
+            : `/docs/${resolved.slug}/`;
+          return `<a href="${href}" data-internal="true">${text}</a>`;
+        }
+      }
+      return `<a href="${token.href}"${title}>${text}</a>`;
+    },
+
+    code(token) {
+      const first = (token.lang || "").trim().split(/\s+/)[0] || "text";
+      const lang = aliasFor(first);
+      const body = token.escaped ? token.text : escapeHtml(token.text);
+      return (
+        `<pre data-lang="${lang}">` +
+        `<code class="hljs language-${lang}">${body}</code>` +
+        `<button class="doc-copy" type="button" aria-label="Copy code">copy</button>` +
+        `</pre>`
+      );
+    },
+  };
+
+  markedInstance.use({ gfm: true, breaks: false, renderer });
+  const html = markedInstance.parse(docContent(slug)) as string;
+  return { html, outline };
+}
 
 export function docContent(slug: string): string {
   return raw[slug] ?? raw[DEFAULT_DOC] ?? "";
@@ -86,6 +162,34 @@ export function docExists(slug: string): boolean {
 export function docTitle(slug: string): string {
   const match = docContent(slug).match(/^#\s+(.+)$/m);
   return match ? match[1].trim() : slug;
+}
+
+// All doc slugs except the SUMMARY table of contents.
+export function docSlugs(): string[] {
+  return Object.keys(raw).filter((slug) => slug !== "SUMMARY");
+}
+
+// First prose line of a doc, for per-page meta descriptions.
+export function docDescription(slug: string): string {
+  for (const line of docContent(slug).split("\n")) {
+    const t = line.trim();
+    if (
+      !t ||
+      t.startsWith("#") ||
+      t.startsWith("```") ||
+      t.startsWith("---") ||
+      t.startsWith("|") ||
+      t.startsWith("<")
+    ) {
+      continue;
+    }
+    const text = t
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/[*_`]/g, "");
+    if (!text) continue;
+    return text.length > 160 ? `${text.slice(0, 157).trimEnd()}…` : text;
+  }
+  return "";
 }
 
 export function slugify(text: string): string {
@@ -120,77 +224,7 @@ export function resolveDocLink(
   return { slug, anchor: anchor ? slugify(anchor) : null };
 }
 
-export function renderDoc(slug: string): RenderedDoc {
-  const md = docContent(slug);
-  const html = markedInstance.parse(md) as string;
 
-  if (typeof document === "undefined") return { html, outline: [] };
-
-  const container = document.createElement("div");
-  container.innerHTML = html;
-
-  const outline: OutlineItem[] = [];
-  const seen = new Map<string, number>();
-
-  container.querySelectorAll("h2, h3").forEach((heading) => {
-    const text = (heading.textContent || "").replace(/\s+/g, " ").trim();
-    if (!text) return;
-    let id = slugify(text);
-    const count = seen.get(id) ?? 0;
-    seen.set(id, count + 1);
-    if (count > 0) id = `${id}-${count}`;
-    heading.id = id;
-    outline.push({ id, text, level: heading.tagName === "H2" ? 2 : 3 });
-
-    // Append a `#` anchor that routes to this section using the same
-    // `~/anchor` scheme the outline uses.
-    const headingLink = document.createElement("a");
-    headingLink.className = "heading-anchor";
-    headingLink.href = `#/docs/${slug}~${id}`;
-    headingLink.setAttribute("aria-label", `Link to ${text}`);
-    headingLink.textContent = "#";
-    heading.appendChild(headingLink);
-  });
-
-  container.querySelectorAll("a").forEach((link) => {
-    const href = link.getAttribute("href") || "";
-    if (/^(https?:|mailto:)/.test(href)) {
-      link.setAttribute("target", "_blank");
-      link.setAttribute("rel", "noopener");
-      return;
-    }
-    if (href.startsWith("/")) return;
-
-    const resolved = resolveDocLink(href, slug);
-    if (resolved) {
-      link.setAttribute(
-        "href",
-        resolved.anchor
-          ? `#/docs/${resolved.slug}~${resolved.anchor}`
-          : `#/docs/${resolved.slug}`,
-      );
-      link.dataset.internal = "true";
-    }
-  });
-
-  container.querySelectorAll("pre > code").forEach((code) => {
-    const lang = [...code.classList]
-      .find((c) => c.startsWith("language-"))
-      ?.replace("language-", "");
-    const pre = code.parentElement;
-    if (pre) {
-      pre.setAttribute("data-lang", lang || "text");
-      const btn = document.createElement("button");
-      btn.className = "doc-copy";
-      btn.type = "button";
-      btn.setAttribute("aria-label", "Copy code");
-      btn.textContent = "copy";
-      pre.appendChild(btn);
-    }
-  });
-
-  return { html: container.innerHTML, outline };
-}
 
 export function parseSummary(): DocSection[] {
   const text = raw["SUMMARY"] ?? "";

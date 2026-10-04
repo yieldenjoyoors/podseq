@@ -6,9 +6,9 @@
         {
             title: "Docs",
             links: [
-                { label: "Architecture", href: "#/docs/architecture" },
-                { label: "Node setup", href: "#/docs/setup" },
-                { label: "Block production", href: "#/docs/block-production" },
+                { label: "Architecture", href: "/docs/architecture/" },
+                { label: "Node setup", href: "/docs/setup/" },
+                { label: "Block production", href: "/docs/block-production/" },
             ],
         },
         {

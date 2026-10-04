@@ -92,7 +92,7 @@ podseq start --config podseq.toml --mode full`,
                     Create your keys, write a minimal config, and start.
                     Everything else defaults to testnet.
                 </p>
-                <a href="#/docs/setup" class="btn mt-6">
+                <a href="/docs/setup/" class="btn mt-6">
                     Full setup guide
                     <svg
                         width="13"

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="theme-color" content="#00754a" />
+
+        <link
+            rel="icon"
+            type="image/svg+xml"
+            href="%sveltekit.assets%/favicon.svg"
+        />
+
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap"
+            rel="stylesheet"
+        />
+
+        <script>
+            // Old hash routes land here (#/docs/x~anchor was never sent to the
+            // server), rewrite them to real paths before the app boots.
+            (function () {
+                var h = location.hash;
+                if (h.indexOf("#/docs") === 0) {
+                    var rest = h.slice(6).replace(/^\//, "");
+                    var parts = rest.split("~");
+                    var slug = parts[0]
+                        ? decodeURIComponent(parts[0])
+                        : "README";
+                    location.replace(
+                        "/docs/" +
+                            slug +
+                            "/" +
+                            (parts[1] ? "#" + parts[1] : ""),
+                    );
+                } else if (h.length > 2 && h.charAt(1) === "/") {
+                    location.replace("/#" + h.slice(2));
+                }
+            })();
+        </script>
+
+        %sveltekit.head%
+    </head>
+    <body data-sveltekit-preload-data="hover">
+        <div style="display: contents">%sveltekit.body%</div>
+    </body>
+</html>

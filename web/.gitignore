@@ -3,6 +3,8 @@ node_modules/
 
 # Build output
 dist/
+build/
+.svelte-kit/
 dist-ssr/
 .vite/
 *.local

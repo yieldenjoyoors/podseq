@@ -2,9 +2,9 @@
     let open = $state(false);
 
     const links = [
-        { label: "Why", href: "#why" },
-        { label: "How", href: "#how" },
-        { label: "Docs", href: "#/docs" },
+        { label: "Why", href: "/#why" },
+        { label: "How", href: "/#how" },
+        { label: "Docs", href: "/docs/" },
     ];
 
     function close() {
@@ -18,7 +18,7 @@
     <div
         class="mx-auto max-w-5xl px-4 h-14 flex items-center justify-between gap-6"
     >
-        <a href="#hero" class="flex items-center gap-2" onclick={close}>
+        <a href="/#hero" class="flex items-center gap-2" onclick={close}>
             <span class="mark" aria-hidden="true">
                 <svg width="24" height="24" viewBox="0 0 22 22" fill="none">
                     <rect x="0" y="0" width="22" height="22" fill="#0a0a0a" />
@@ -52,7 +52,7 @@
 
         <div class="flex items-center gap-2">
             <a
-                href="#/docs/setup"
+                href="/docs/setup/"
                 class="btn btn-brand hidden sm:inline-flex !py-1.5 !px-3"
             >
                 Start building
