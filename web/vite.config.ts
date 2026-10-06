@@ -12,7 +12,7 @@ export default defineConfig({
     plugins: [
         tailwindcss(),
         sveltekit({
-            adapter: adapter(),
+            adapter: adapter({ pages: "dist", assets: "dist" }),
             preprocess: vitePreprocess(),
         }),
     ],

@@ -41,12 +41,12 @@ bun run dev     # http://localhost:5173
 ## Build
 
 ```sh
-bun run build       # outputs build/
+bun run build       # outputs dist/
 bun run preview     # serve the build
 bun run check       # svelte-check (types)
 ```
 
-Deploy: upload the `build/` directory to any static host.
+Deploy: upload the `dist/` directory to any static host.
 
 > The `src/docs` symlink must exist. If it is missing, recreate it from the
 > `web` directory: `ln -s ../../docs src/docs`.
