@@ -1,6 +1,12 @@
 .PHONY: help install-tools build release fmt fmt-check clippy test \
-        e2e e2e-engine e2e-full move docker sui-key \
+        e2e e2e-engine e2e-full move bridge-init docker sui-key reth \
         coverage crap crap-baseline crap-regression ci clean
+
+
+# Full run:
+# make sui-key          # then fund the printed address via faucet.sui.io
+# make move             # settlement bytecode for auto-deploy
+# docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d --build
 
 # Workspace excludes the e2e crate from unit-test / coverage runs:
 # it brings up its own Reth container via Docker Compose.
@@ -50,7 +56,33 @@ docker: ## Build the podseq Docker image (local, tagged podseq:ci)
 
 sui-key: ## Generate docker/secrets/sui.key; fund the printed address with SUI
 	docker compose -f docker-compose.yml -f docker-compose.testnet.yml run --rm --no-deps \
-	  -v ./docker/secrets:/out podseq keyring generate-key --out /out/sui.key
+# Demo chain. Requires local reth-genesis.json and jwt.hex.
+reth: ## Start Reth with the custom genesis (docker, host network)
+	docker run --network host --rm \
+	  -v "$(PWD)/reth-genesis.json:/genesis.json:ro" \
+	  -v "$(PWD)/jwt.hex:/jwt/jwt.hex:ro" \
+	  ghcr.io/paradigmxyz/reth node \
+	  --chain=/genesis.json \
+	  --authrpc.jwtsecret=/jwt/jwt.hex \
+	  --authrpc.addr 127.0.0.1 --authrpc.port 8551 \
+	  --http --http.addr 127.0.0.1 --http.port 8545 \
+	  --http.api all --disable-discovery --jit.enabled
+
+run: build ## Build then start podseq with podseq.toml
+	./target/debug/podseq start --config podseq.toml
+
+# Bridged token metadata (name, symbol) and the Sui coin type it bridges.
+BRIDGE_NAME    := "Bridged USDSui"
+BRIDGE_SYMBOL  := "USDS"
+BRIDGE_COIN    := "0x2::sui::SUI"
+BRIDGE_ADMIN   := 0xB5B190f398E01f6e8a968a1c1B1C6430Ac8ccF13
+BRIDGE_ADDR    := 0x4200000000000000000000000000000000000010
+
+bridge-init: ## Initialize the bridge (requires relayer.key and cast)
+	cast send $(BRIDGE_ADDR) \
+	  "initialize(string,string,string,address)" \
+	  $(BRIDGE_NAME) $(BRIDGE_SYMBOL) $(BRIDGE_COIN) $(BRIDGE_ADMIN) \
+	  --private-key $$(cat relayer.key)
 
 coverage: $(LCOV) ## Generate LCOV coverage report
 
