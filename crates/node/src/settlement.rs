@@ -23,7 +23,12 @@ const DEPLOY_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs
 /// - First-start deploy: verifies the Move package is built (bytecode present).
 pub async fn preflight(
     sui: &crate::config::SuiConfig,
-    ids: (&Option<String>, &Option<String>, &Option<String>),
+    ids: (
+        &Option<String>,
+        &Option<String>,
+        &Option<String>,
+        &Option<String>,
+    ),
     signer_key_path: &Path,
 ) -> Result<()> {
     info!(rpc = %sui.rpc_url, "preflight: probing Sui RPC");
@@ -35,7 +40,7 @@ pub async fn preflight(
     }
 
     match ids {
-        (Some(_), Some(_), Some(registry_id)) => {
+        (Some(_), Some(_), Some(registry_id), Some(_)) => {
             // Validate the Registry object exists and is readable.
             if let Err(e) =
                 podseq_sui::settlement::latest_height(&sui.rpc_url, registry_id).await
@@ -47,7 +52,7 @@ pub async fn preflight(
             }
             Ok(())
         }
-        (None, None, None) => {
+        (None, None, None, None) => {
             // First-start deploy: the Move package must be built first.
             let bytecode_dir = sui
                 .move_dir
@@ -78,7 +83,7 @@ pub async fn preflight(
             Ok(())
         }
         _ => anyhow::bail!(
-            "settlement IDs are partially configured; either set all three (settlement_package_id, settler_cap_id, registry_id) or none"
+            "settlement IDs are partially configured; either set all four (settlement_package_id, settler_cap_id, registry_id, inbox_id) or none"
         ),
     }
 }
@@ -95,22 +100,24 @@ pub async fn setup_signer(
         &config.sui.settlement_package_id,
         &config.sui.settler_cap_id,
         &config.sui.registry_id,
+        &config.sui.inbox_id,
     );
 
     match ids {
-        (Some(pkg), Some(cap), Some(reg)) => {
+        (Some(pkg), Some(cap), Some(reg), Some(inbox)) => {
             let settlement = podseq_sui::SettlementSigner::new(
                 signer_key_path,
                 pkg,
                 cap,
                 reg,
+                inbox,
                 &config.sui.rpc_url,
             )
             .context("building settlement signer")?;
             info!(key = %signer_key_path.display(), "settlement signer attached");
             Ok(settlement)
         }
-        (None, None, None) => {
+        (None, None, None, None) => {
             info!(key = %signer_key_path.display(), "deploying settlement contract on first start");
             let bytecode_dir = config
                 .sui
@@ -135,6 +142,7 @@ pub async fn setup_signer(
             config.sui.settlement_package_id = Some(deployed.package_id.clone());
             config.sui.settler_cap_id = Some(deployed.settler_cap_id.clone());
             config.sui.registry_id = Some(deployed.registry_id.clone());
+            config.sui.inbox_id = Some(deployed.inbox_id.clone());
             config.save(config_path)?;
             info!(config = %config_path.display(), "config updated with settlement IDs");
 
@@ -143,12 +151,13 @@ pub async fn setup_signer(
                 &deployed.package_id,
                 &deployed.settler_cap_id,
                 &deployed.registry_id,
+                &deployed.inbox_id,
                 &config.sui.rpc_url,
             )
             .context("building settlement signer after deploy")
         }
         _ => {
-            anyhow::bail!("settlement IDs are partially configured; either set all three (settlement_package_id, settler_cap_id, registry_id) or none")
+            anyhow::bail!("settlement IDs are partially configured; either set all four (settlement_package_id, settler_cap_id, registry_id, inbox_id) or none")
         }
     }
 }

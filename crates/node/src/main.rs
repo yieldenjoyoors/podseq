@@ -329,6 +329,7 @@ async fn start_sequencer(
             &config.sui.settlement_package_id,
             &config.sui.settler_cap_id,
             &config.sui.registry_id,
+            &config.sui.inbox_id,
         ),
         &signer_key_path,
     )

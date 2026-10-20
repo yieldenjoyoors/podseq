@@ -142,6 +142,9 @@ pub struct SuiConfig {
     /// Shared settlement Registry object ID.
     #[serde(default)]
     pub registry_id: Option<String>,
+    /// Shared force-inclusion Inbox object ID.
+    #[serde(default)]
+    pub inbox_id: Option<String>,
 }
 
 fn default_sui_rpc() -> String {
@@ -160,6 +163,7 @@ impl Default for SuiConfig {
             settlement_package_id: None,
             settler_cap_id: None,
             registry_id: None,
+            inbox_id: None,
         }
     }
 }

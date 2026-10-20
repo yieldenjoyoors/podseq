@@ -48,6 +48,22 @@ pub(crate) fn parse_address(s: &str, label: &str) -> Result<Address, SettlementE
         .map_err(|e| SettlementError::Parse(format!("{label} {s}: {e}")))
 }
 
+/// Parses the four contract object IDs in one go: package, SettlerCap,
+/// Registry, and force-inclusion Inbox.
+fn parse_contract_ids(
+    package_id: &str,
+    cap_id: &str,
+    registry_id: &str,
+    inbox_id: &str,
+) -> Result<(Address, Address, Address, Address), SettlementError> {
+    Ok((
+        parse_address(package_id, "package id")?,
+        parse_address(cap_id, "cap id")?,
+        parse_address(registry_id, "registry id")?,
+        parse_address(inbox_id, "inbox id")?,
+    ))
+}
+
 /// Fetches the raw BCS contents of an object in one `get_object`.
 pub(crate) async fn object_contents(
     rpc_url: &str,
@@ -120,6 +136,7 @@ pub struct DeployedContract {
     pub package_id: String,
     pub settler_cap_id: String,
     pub registry_id: String,
+    pub inbox_id: String,
 }
 
 /// Sui settlement client that commits block anchors on-chain.
@@ -129,6 +146,7 @@ pub struct Settlement {
     package: Address,
     cap: Address,
     registry: Address,
+    inbox: Address,
     rpc: sui_rpc::Client,
 }
 
@@ -148,16 +166,20 @@ impl Settlement {
         package_id: &str,
         cap_id: &str,
         registry_id: &str,
+        inbox_id: &str,
         rpc_url: &str,
     ) -> Result<Self, SettlementError> {
         let (key, sender) = load_signer(key_path)?;
         let rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+        let (package, cap, registry, inbox) =
+            parse_contract_ids(package_id, cap_id, registry_id, inbox_id)?;
         Ok(Self {
             key,
             sender,
-            package: parse_address(package_id, "package id")?,
-            cap: parse_address(cap_id, "cap id")?,
-            registry: parse_address(registry_id, "registry id")?,
+            package,
+            cap,
+            registry,
+            inbox,
             rpc,
         })
     }
@@ -167,28 +189,38 @@ impl Settlement {
         self.sender
     }
 
-    /// Commits a block header and blob id on Sui via the settle entrypoint.
-    pub async fn commit(&mut self, header: &Header, blob: &BlobId) -> Result<(), SettlementError> {
-        let function = Function::new(
-            self.package,
-            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
-            Identifier::new("settle").map_err(|e| SettlementError::Parse(e.to_string()))?,
-        );
+    /// Reads the inbox's `included_count` (the settle cursor) from Sui.
+    pub async fn inbox_cursor(&mut self) -> Result<u64, SettlementError> {
+        let mut rpc = self.rpc.clone();
+        let response = rpc
+            .ledger_client()
+            .get_object(
+                GetObjectRequest::new(&self.inbox).with_read_mask(FieldMask::from_str("contents")),
+            )
+            .await
+            .map_err(|e| SettlementError::Rpc(format!("get_object: {e}")))?;
+        let obj = response
+            .into_inner()
+            .object
+            .ok_or_else(|| SettlementError::Execution("inbox object not found".into()))?;
+        let bytes = obj
+            .contents
+            .and_then(|c| c.value)
+            .ok_or_else(|| SettlementError::Execution("inbox has no contents".into()))?;
+        parse_inbox_cursor(bytes.as_ref())
+            .map_err(|e| SettlementError::Parse(format!("decoding inbox contents as BCS: {e}")))
+    }
 
-        let mut builder = TransactionBuilder::new();
-        let cap = builder.object(ObjectInput::new(self.cap));
-        let registry = builder.object(ObjectInput::new(self.registry));
-        let blob_id_arg = builder.pure(&blob.0.to_vec());
-        let height_arg = builder.pure(&header.height);
-        builder.move_call(function, vec![cap, registry, blob_id_arg, height_arg]);
-        builder.set_sender(self.sender);
+    /// Commits a block header and blob id on Sui via the settle entrypoint.
+    ///
+    /// The inbox cursor passed to the contract is the on-chain `included_count`,
+    /// read fresh before every settle: the client never advances the cursor
+    /// itself, so restarts cannot regress it. Sequencer-side inclusion tracking
+    /// builds on this by passing its own cursor once it tracks inclusions.
+    pub async fn commit(&mut self, header: &Header, blob: &BlobId) -> Result<(), SettlementError> {
+        let tx = self.build_settle_tx(header, blob).await?;
 
         let mut rpc = self.rpc.clone();
-        let tx = builder
-            .build(&mut rpc)
-            .await
-            .map_err(|e| SettlementError::Build(e.to_string()))?;
-
         let inner = sign_and_execute(&mut rpc, &self.key, tx, "settle", COMMIT_TX_WAIT).await?;
 
         info!(
@@ -198,6 +230,50 @@ impl Settlement {
         );
 
         Ok(())
+    }
+
+    /// Builds the settle transaction for `header` + `blob`, fetching the
+    /// on-chain inbox cursor first.
+    async fn build_settle_tx(
+        &mut self,
+        header: &Header,
+        blob: &BlobId,
+    ) -> Result<sui_sdk_types::Transaction, SettlementError> {
+        let cursor = self.inbox_cursor().await?;
+
+        let function = Function::new(
+            self.package,
+            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("settle").map_err(|e| SettlementError::Parse(e.to_string()))?,
+        );
+
+        let mut builder = TransactionBuilder::new();
+        let cap = builder.object(ObjectInput::new(self.cap));
+        let registry = builder.object(ObjectInput::new(self.registry));
+        let inbox = builder.object(ObjectInput::new(self.inbox));
+        let blob_id_arg = builder.pure(&blob.0.to_vec());
+        let height_arg = builder.pure(&header.height);
+        let block_ts_arg = builder.pure(&header.timestamp);
+        let cursor_arg = builder.pure(&cursor);
+        builder.move_call(
+            function,
+            vec![
+                cap,
+                registry,
+                inbox,
+                blob_id_arg,
+                height_arg,
+                block_ts_arg,
+                cursor_arg,
+            ],
+        );
+        builder.set_sender(self.sender);
+
+        let mut rpc = self.rpc.clone();
+        builder
+            .build(&mut rpc)
+            .await
+            .map_err(|e| SettlementError::Build(e.to_string()))
     }
 
     /// Publishes the settlement package and returns the created object IDs.
@@ -265,28 +341,18 @@ impl Settlement {
 
         info!(package_id = %package_id, "settlement package published");
 
-        // 2. Initialize the package (creates the shared Registry + SettlerCap).
+        // 2. Initialize the settlement module (creates the shared Registry +
+        // SettlerCap).
         let package_addr = parse_address(&package_id, "package id")?;
-        let mut builder = TransactionBuilder::new();
-        builder.move_call(
-            Function::new(
-                package_addr,
-                Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
-                Identifier::new("initialize").map_err(|e| SettlementError::Parse(e.to_string()))?,
-            ),
-            vec![],
-        );
-        builder.set_sender(sender);
-        let init_tx = builder
-            .build(&mut rpc)
-            .await
-            .map_err(|e| SettlementError::Build(format!("initialize: {e}")))?;
-        let changes = sign_and_execute(&mut rpc, &key, init_tx, "initialize", DEPLOY_TX_WAIT)
-            .await?
-            .transaction()
-            .effects()
-            .changed_objects()
-            .to_vec();
+        let changes = call_initialize(
+            &mut rpc,
+            &key,
+            sender,
+            package_addr,
+            "settlement",
+            "settlement init",
+        )
+        .await?;
 
         // Registry: shared object created by `initialize`.
         let registry_id =
@@ -306,12 +372,57 @@ impl Settlement {
             "settlement contract initialized"
         );
 
+        // 3. Initialize the force-inclusion inbox in its own transaction: the
+        // only shared object it creates is the Inbox, so discovery by owner
+        // kind stays unambiguous.
+        let inbox_changes =
+            call_initialize(&mut rpc, &key, sender, package_addr, "inbox", "inbox init").await?;
+        let inbox_id =
+            find_created_object(&inbox_changes, owner::OwnerKind::Shared).ok_or_else(|| {
+                SettlementError::Execution("Inbox not found in inbox init response".into())
+            })?;
+
+        info!(inbox_id = %inbox_id, "force-inclusion inbox initialized");
+
         Ok(DeployedContract {
             package_id,
             settler_cap_id,
             registry_id,
+            inbox_id,
         })
     }
+}
+
+/// Executes `package::<module>::initialize` and returns the changed objects,
+/// so `deploy` can discover the objects each module creates.
+async fn call_initialize(
+    rpc: &mut sui_rpc::Client,
+    key: &Ed25519PrivateKey,
+    sender: Address,
+    package: Address,
+    module: &str,
+    label: &str,
+) -> Result<Vec<sui_rpc::proto::sui::rpc::v2::ChangedObject>, SettlementError> {
+    let mut builder = TransactionBuilder::new();
+    builder.move_call(
+        Function::new(
+            package,
+            Identifier::new(module).map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("initialize").map_err(|e| SettlementError::Parse(e.to_string()))?,
+        ),
+        vec![],
+    );
+    builder.set_sender(sender);
+    let tx = builder
+        .build(rpc)
+        .await
+        .map_err(|e| SettlementError::Build(format!("{label}: {e}")))?;
+    Ok(sign_and_execute(rpc, key, tx, label, DEPLOY_TX_WAIT)
+        .await?
+        .transaction()
+        .effects()
+        .changed_objects()
+        .to_vec())
 }
 
 /// Signs `tx` with `key` and submits it, waiting up to `wait` for checkpoint
@@ -438,6 +549,27 @@ pub fn parse_latest_height(contents: &[u8]) -> Result<u64, SettlementError> {
     Ok(latest)
 }
 
+/// Decodes the `included_count` field (the settle cursor) from raw inbox BCS
+/// contents.
+///
+/// Layout: `[32 bytes: id][8: next_nonce (le)][8: included_count (le)]
+/// [8: last_settled_ts (le)][40: pending table]`.
+pub fn parse_inbox_cursor(contents: &[u8]) -> Result<u64, SettlementError> {
+    if contents.len() < 48 {
+        return Err(SettlementError::Execution(format!(
+            "inbox BCS too short: {} bytes",
+            contents.len()
+        )));
+    }
+
+    let cursor = u64::from_le_bytes(
+        contents[40..48]
+            .try_into()
+            .map_err(|_| SettlementError::Execution("invalid included_count".into()))?,
+    );
+    Ok(cursor)
+}
+
 /// Extracts the commitments Table UID from raw registry BCS contents.
 fn parse_table_uid(bytes: &[u8]) -> Result<Address, SettlementError> {
     #[derive(serde::Deserialize)]
@@ -525,6 +657,7 @@ mod tests {
             "0x2",
             "0x3",
             "0x4",
+            "0x5",
             "https://fullnode.testnet.sui.io:443",
         );
         assert!(result.is_err());
@@ -535,6 +668,45 @@ mod tests {
         let mut buf = vec![0u8; 40];
         buf[32..40].copy_from_slice(&height.to_le_bytes());
         buf
+    }
+
+    /// Mirrors `Inbox { id: UID, next_nonce: u64, included_count: u64,
+    /// last_settled_ts: u64, pending: Table }` under BCS.
+    #[derive(serde::Serialize)]
+    #[allow(dead_code)]
+    struct InboxMirror {
+        id: sui_sdk_types::Address,
+        next_nonce: u64,
+        included_count: u64,
+        last_settled_ts: u64,
+        pending: TableMirror,
+    }
+
+    fn inbox_contents(next_nonce: u64, included_count: u64, last_settled_ts: u64) -> Vec<u8> {
+        let inbox = InboxMirror {
+            id: sui_sdk_types::Address::new([0; 32]),
+            next_nonce,
+            included_count,
+            last_settled_ts,
+            pending: TableMirror {
+                id: sui_sdk_types::Address::new([0; 32]),
+                size: 0,
+            },
+        };
+        bcs::to_bytes(&inbox).unwrap()
+    }
+
+    #[test]
+    fn parse_inbox_cursor_reads_little_endian_field() {
+        let contents = inbox_contents(7, 5, 1_000);
+        // 32-byte id + 8-byte next_nonce put `included_count` at offset 40.
+        assert_eq!(contents.len(), 96);
+        assert_eq!(parse_inbox_cursor(&contents).unwrap(), 5);
+    }
+
+    #[test]
+    fn parse_inbox_cursor_rejects_short_buffer() {
+        assert!(parse_inbox_cursor(&[0u8; 47]).is_err());
     }
 
     #[test]

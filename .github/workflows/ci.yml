@@ -82,6 +82,9 @@ jobs:
       - name: Build settlement package
         run: sui move build
 
+      - name: Run Move unit tests
+        run: sui move test
+
   docker:
     name: docker build
     runs-on: ubuntu-latest

@@ -21,13 +21,14 @@ records the design decisions behind it.
    fetching each nonce's dynamic-field object). It submits the transaction bytes to
    Reth's transaction pool and tracks which built block contains them.
 3. **Settle.** Every `settle` call now carries two extra values: the timestamp of the
-   block being settled, and an inbox cursor, the highest inbox nonce included in a
-   settled block. The contract advances the cursor, removing covered entries, and
-   then checks the deadline of the oldest remaining entry.
+   block being settled, and an inbox cursor, the count of inbox transactions
+   included in settled blocks. The contract advances the cursor, removing covered
+   entries, and then checks the deadline of the oldest remaining entry.
 4. **Halt.** If the oldest pending entry's deadline is older than the settled block's
-   timestamp, `settle` aborts with `E_DEADLINE_EXCEEDED`. No state change lands. The
-   abort repeats on every retry until the transaction is included, so the halt is not
-   a one-shot flag: it is the permanent shape of the state until inclusion happens.
+   timestamp, `settle` aborts with `E_DEADLINE_EXCEEDED`. No state change lands, so
+   the abort repeats on every retry until the transaction is included: the halt is
+   not a one-shot flag but the persistent shape of the state until inclusion
+   happens.
 
 ## Design decisions
 
@@ -65,19 +66,20 @@ meantime, and full nodes observe the settlement stall directly on chain.
 
 ### Halt state is derived, not stored
 
-An aborting Sui transaction has no effects, so a `halted` flag written in the same
-transaction that aborts would be rolled back with it. Instead, halt is the derived
-state "the oldest pending entry is expired". Deadlines never change, block
-timestamps never regress, and an entry can only leave the table via the cursor, so
-the condition is naturally sticky. Anyone can evaluate it with one dynamic-field
-read:
+An aborting Sui transaction has no effects, so a `halted` flag written in the
+same transaction that aborts would be rolled back with it. Instead, halt is the
+derived state "the oldest pending entry is expired". Deadlines never change,
+block timestamps never regress, and an entry can only leave the table via the
+cursor, so the condition is naturally sticky. The inbox exposes it directly:
 
 ```move
-public fun is_halted(inbox: &Inbox): bool
+public fun oldest_pending_deadline(inbox: &Inbox): Option<u64>
 ```
 
-returns true when the oldest pending entry's deadline is older than
-`last_settled_ts`.
+returns the deadline of the oldest pending entry, or `none` when the inbox is
+empty. On chain, a halt is visible as settlement stalls and as `settle`
+transactions reverting with `E_DEADLINE_EXCEEDED`; the expired entry itself
+stays readable in the inbox.
 
 ### One-way module dependency
 
@@ -104,9 +106,9 @@ censorship at 10 minutes per transaction.
 
 ## Objects and API
 
-| Object  | Type   | Purpose                                                            |
-| ------- | ------ | ------------------------------------------------------------------ |
-| `Inbox` | Shared | Nonce table of pending transactions, cursor, `last_settled_ts`.    |
+| Object  | Type   | Purpose                                                         |
+| ------- | ------ | --------------------------------------------------------------- |
+| `Inbox` | Shared | Nonce table of pending transactions, cursor, `last_settled_ts`. |
 
 `inbox.move` has no capability object: `submit` is permissionless, and the cursor
 only moves inside `settle`, which is already gated by `SettlerCap`.
@@ -114,9 +116,10 @@ only moves inside `settle`, which is already gated by `SettlerCap`.
 ```move
 public fun submit(inbox: &mut Inbox, clock: &sui::clock::Clock, tx_bytes: vector<u8>)
 public fun next_nonce(inbox: &Inbox): u64
-public fun included_up_to(inbox: &Inbox): u64
+public fun included_count(inbox: &Inbox): u64
+public fun last_settled_ts(inbox: &Inbox): u64
 public fun pending_at(inbox: &Inbox, nonce: u64): &PendingTx
-public fun is_halted(inbox: &Inbox): bool
+public fun oldest_pending_deadline(inbox: &Inbox): Option<u64>
 ```
 
 `settlement::settle` grows three parameters:
@@ -148,13 +151,15 @@ check.
 
 ## Full node verification
 
-A full node verifies the halt from chain data alone: read `Inbox` (cursor, oldest
-pending entry, `last_settled_ts`), read `Registry` for the settled height, and fetch
-block timestamps from the committed blobs on Walrus. No sequencer endpoint is
-involved. A full node that observes `is_halted` true while settlement keeps advancing
-has proof of equivocation: either a settle call skipped the inbox gate (impossible
-in this package) or the block timestamps in the blobs disagree with the values
-passed to `settle`.
+A full node verifies the halt from chain data alone: read `Inbox` (cursor,
+oldest pending deadline), read `Registry` for the settled height, and compare
+the deadline against the node's own clock with a margin. An expired oldest
+deadline combined with settlement not advancing means the chain is halted:
+either the sequencer stopped settling, or its `settle` calls are reverting with
+`E_DEADLINE_EXCEEDED`. Both are observable without trusting any sequencer
+endpoint. If settlement keeps advancing while a pending entry's deadline is
+long past, the block timestamps committed in the Walrus blobs disagree with the
+values passed to `settle`, which is an attributable equivocation.
 
 ## Open work
 
