@@ -11,10 +11,12 @@ use std::path::Path;
 use thiserror::Error;
 
 mod block_store;
+mod inbox_store;
 mod pending_store;
 mod state_store;
 
 pub use block_store::BlockStore;
+pub use inbox_store::{InboxStore, NonceRecord};
 pub use pending_store::PendingStore;
 pub use state_store::{ChainState, StateStore};
 
@@ -27,6 +29,8 @@ pub enum StoreError {
     Serde(#[from] serde_json::Error),
     #[error("block not found: height {0}")]
     BlockNotFound(u64),
+    #[error("state conflict: {0}")]
+    Conflict(String),
 }
 
 /// Creates the storage directory layout under `data_dir`.

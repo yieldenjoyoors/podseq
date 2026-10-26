@@ -11,11 +11,12 @@ use alloy_primitives::{Address, B256};
 use alloy_rpc_types_engine::{ForkchoiceState, PayloadAttributes};
 use anyhow::{Context, Result};
 use commonware_cryptography::Digestible as _;
-use podseq_core::{Block, BlockSigner, DataAvailability, Settlement};
+use podseq_core::{Block, BlockSigner, DataAvailability as _};
 use podseq_engine::{payload_into_block, Engine, PARENT_BEACON_BLOCK_ROOT};
 use podseq_p2p::BlockBroadcaster;
 use podseq_sui::Client as SuiClient;
 
+use crate::inbox::InboxIntegration;
 use crate::store::{BlockStore, ChainState as StoredState, PendingStore, StateStore};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
@@ -49,6 +50,7 @@ pub struct Runner {
     fee_recipient: Address,
     genesis_hash: Option<B256>,
     da_batch_size: usize,
+    inbox: Option<InboxIntegration>,
     metrics: Arc<PodseqMetrics>,
 }
 
@@ -64,6 +66,7 @@ impl Runner {
         data_dir: &std::path::Path,
         broadcaster: Option<BlockBroadcaster>,
         da_batch_size: usize,
+        inbox: Option<InboxIntegration>,
         metrics: Arc<PodseqMetrics>,
     ) -> Result<Self> {
         crate::store::init(data_dir).context("initializing storage under data_dir")?;
@@ -79,6 +82,7 @@ impl Runner {
             fee_recipient: config.fee_recipient.parse().unwrap_or_default(),
             genesis_hash,
             da_batch_size,
+            inbox,
             metrics,
         })
     }
@@ -125,6 +129,7 @@ impl Runner {
         let (tx, rx) = mpsc::unbounded_channel::<PendingBlock>();
         let shutting_down = Arc::new(AtomicBool::new(false));
         let metrics = self.metrics;
+        let inbox = self.inbox;
         let mut finalizer_handle = tokio::spawn(finalize_blocks(
             engine.clone(),
             self.sui,
@@ -135,11 +140,21 @@ impl Runner {
             self.pending_store.clone(),
             shutting_down.clone(),
             self.da_batch_size,
+            inbox.clone(),
             Arc::clone(&metrics),
         ));
 
         // Crash recovery: re-submit persisted blocks that never reached DA.
         recover_pending(&self.pending_store, &self.block_store, &tx);
+
+        // Force-inclusion poller: inbox nonces → pool submissions. No handle
+        // to join: the poller exits within one interval of shutdown.
+        crate::inbox::spawn_poller(
+            inbox.clone(),
+            Arc::clone(&metrics),
+            Arc::clone(&shutting_down),
+            self.block_time,
+        );
 
         info!(
             block_time_ms = self.block_time.as_millis(),
@@ -161,7 +176,7 @@ impl Runner {
                     if let Err(e) = produce_block(
                         &engine, &state, fee_recipient, &block_signer, &tx,
                         &block_store, &state_store, &pending_store,
-                        &broadcaster, &metrics,
+                        &broadcaster, &inbox, &metrics,
                     ).await {
                         error!(error = ?e, "block production failed");
                     }
@@ -212,6 +227,7 @@ async fn produce_block(
     state_store: &StateStore,
     pending_store: &PendingStore,
     broadcaster: &Option<BlockBroadcaster>,
+    inbox: &Option<InboxIntegration>,
     metrics: &PodseqMetrics,
 ) -> Result<()> {
     let s = state.lock().await;
@@ -266,6 +282,13 @@ async fn produce_block(
 
     // Persist + mark pending so a crash before settlement triggers re-submission.
     block_store.put(&block).context("persisting block")?;
+    // Record which built block contains each forced transaction (idempotent
+    // marker, persisted before the settle call that covers it).
+    crate::inbox::observe_block_inclusions(
+        inbox.as_ref(),
+        &built.payload.payload_inner.payload_inner.transactions,
+        height,
+    );
     pending_store
         .mark(height)
         .with_context(|| format!("marking height {height} pending"))?;
@@ -307,6 +330,7 @@ async fn finalize_blocks(
     pending_store: Arc<PendingStore>,
     shutting_down: Arc<AtomicBool>,
     batch_size_bytes: usize,
+    inbox: Option<InboxIntegration>,
     metrics: Arc<PodseqMetrics>,
 ) {
     let mut batch: Vec<PendingBlock> = Vec::new();
@@ -328,7 +352,7 @@ async fn finalize_blocks(
                         flush_batch(
                             &engine, &sui, &state, &mut batch, &mut batch_bytes,
                             &block_store, &state_store, &pending_store, &shutting_down,
-                            &metrics,
+                            &inbox, &metrics,
                         ).await;
                         metrics.pending_blocks.set(batch.len() as i64);
                     }
@@ -338,7 +362,7 @@ async fn finalize_blocks(
                         flush_batch(
                             &engine, &sui, &state, &mut batch, &mut batch_bytes,
                             &block_store, &state_store, &pending_store, &shutting_down,
-                            &metrics,
+                            &inbox, &metrics,
                         ).await;
                         metrics.pending_blocks.set(batch.len() as i64);
                     }
@@ -374,6 +398,7 @@ async fn flush_batch(
     state_store: &StateStore,
     pending_store: &Arc<PendingStore>,
     shutting_down: &Arc<AtomicBool>,
+    inbox: &Option<InboxIntegration>,
     metrics: &PodseqMetrics,
 ) {
     if batch.is_empty() {
@@ -424,7 +449,15 @@ async fn flush_batch(
     // + on disk. Retry with backoff until success or shutdown.
     while !batch.is_empty() {
         let front = &batch[0];
-        let settled = settle_block(sui, &front.block, &blob_id, shutting_down, metrics).await;
+        let settled = settle_block(
+            sui,
+            inbox.as_ref(),
+            &front.block,
+            &blob_id,
+            shutting_down,
+            metrics,
+        )
+        .await;
         if !settled {
             // Shutdown interrupted settlement: finalize the rest locally and
             // leave pending markers so they are re-settled on restart.
@@ -466,39 +499,19 @@ async fn flush_batch(
 /// Retries settlement for a single block until it succeeds or shutdown.
 /// Returns `true` if committed on Sui, `false` if shutdown interrupted it
 /// (the pending marker is left intact so the block is re-settled on restart).
+///
+/// Delegates to [`crate::inbox::settle_with_gate`], which first refuses to
+/// settle while a force-inclusion nonce is past its block deadline, then
+/// commits with the sequencer's inclusion cursor.
 async fn settle_block(
     sui: &SuiClient,
+    inbox: Option<&InboxIntegration>,
     block: &Block,
     blob_id: &podseq_core::BlobId,
     shutting_down: &Arc<AtomicBool>,
     metrics: &PodseqMetrics,
 ) -> bool {
-    let height = block.header.height;
-    let committed = retry_with_backoff(
-        shutting_down,
-        Duration::from_millis(500),
-        Duration::from_secs(10),
-        || async {
-            let started = std::time::Instant::now();
-            match sui.commit(block, blob_id).await {
-                Ok(()) => {
-                    metrics
-                        .settlement_duration
-                        .observe(started.elapsed().as_secs_f64());
-                    Ok(())
-                }
-                Err(e) => Err(e.to_string()),
-            }
-        },
-    )
-    .await;
-    match committed {
-        Some(()) => {
-            info!(height, "block committed on Sui");
-            true
-        }
-        None => false,
-    }
+    crate::inbox::settle_with_gate(sui, inbox, block, blob_id, shutting_down, metrics).await
 }
 
 /// Retries an operation with exponential backoff until it succeeds or shutdown
@@ -507,7 +520,7 @@ async fn settle_block(
 /// On each failure the backoff doubles, capped at `max_backoff`. Shutdown is
 /// checked before each attempt, so a shutdown during a long backoff still exits
 /// promptly on the next iteration.
-async fn retry_with_backoff<F, Fut>(
+pub(crate) async fn retry_with_backoff<F, Fut>(
     shutting_down: &Arc<AtomicBool>,
     initial: Duration,
     max_backoff: Duration,

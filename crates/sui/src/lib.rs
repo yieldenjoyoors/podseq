@@ -4,6 +4,7 @@
 
 pub mod blob_id;
 pub mod bridge;
+pub mod inbox;
 pub mod settlement;
 pub mod wire;
 
@@ -264,6 +265,27 @@ impl Settlement for Client {
         let mut guard = settlement.lock().await;
         guard
             .commit(&block.header, blob)
+            .await
+            .map_err(|e| podseq_core::Error::Settlement(e.to_string()))
+    }
+}
+
+impl Client {
+    /// Commits a block, passing the sequencer's inclusion cursor. The signer
+    /// clamps it to the on-chain cursor, so a cold tracker never regresses.
+    pub async fn commit_with_cursor(
+        &self,
+        block: &Block,
+        blob: &BlobId,
+        tracked_cursor: u64,
+    ) -> Result<(), podseq_core::Error> {
+        let settlement = self
+            .settlement
+            .as_ref()
+            .ok_or_else(|| podseq_core::Error::Settlement("settlement not configured".into()))?;
+        let mut guard = settlement.lock().await;
+        guard
+            .commit_with_cursor(&block.header, blob, tracked_cursor)
             .await
             .map_err(|e| podseq_core::Error::Settlement(e.to_string()))
     }

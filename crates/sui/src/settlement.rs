@@ -216,15 +216,37 @@ impl Settlement {
     /// The inbox cursor passed to the contract is the on-chain `included_count`,
     /// read fresh before every settle: the client never advances the cursor
     /// itself, so restarts cannot regress it. Sequencer-side inclusion tracking
-    /// builds on this by passing its own cursor once it tracks inclusions.
+    /// uses [`Self::commit_with_cursor`] instead.
     pub async fn commit(&mut self, header: &Header, blob: &BlobId) -> Result<(), SettlementError> {
-        let tx = self.build_settle_tx(header, blob).await?;
+        let cursor = self.inbox_cursor().await?;
+        self.commit_with_cursor(header, blob, cursor).await
+    }
+
+    /// Commits a block header and blob id, passing the sequencer's own
+    /// inclusion cursor.
+    ///
+    /// The effective cursor is `max(on_chain, tracked)`: the contract aborts
+    /// on cursor regression, and the on-chain cursor is the restart-safe
+    /// floor (a fresh tracker contributes 0). Passing the tracked cursor lets
+    /// `settle` prune nonces included in built-but-unsettled blocks instead
+    /// of waiting for the next on-chain sync. Plain [`Self::commit`] passes
+    /// the on-chain cursor, which this clamps to unchanged behavior.
+    pub async fn commit_with_cursor(
+        &mut self,
+        header: &Header,
+        blob: &BlobId,
+        tracked_cursor: u64,
+    ) -> Result<(), SettlementError> {
+        let on_chain = self.inbox_cursor().await?;
+        let cursor = tracked_cursor.max(on_chain);
+        let tx = self.build_settle_tx(header, blob, cursor).await?;
 
         let mut rpc = self.rpc.clone();
         let inner = sign_and_execute(&mut rpc, &self.key, tx, "settle", COMMIT_TX_WAIT).await?;
 
         info!(
             height = header.height,
+            cursor,
             digest = ?inner.transaction().transaction().digest(),
             "block committed on Sui"
         );
@@ -232,15 +254,14 @@ impl Settlement {
         Ok(())
     }
 
-    /// Builds the settle transaction for `header` + `blob`, fetching the
-    /// on-chain inbox cursor first.
+    /// Builds the settle transaction for `header` + `blob` with the given
+    /// inbox cursor.
     async fn build_settle_tx(
         &mut self,
         header: &Header,
         blob: &BlobId,
+        cursor: u64,
     ) -> Result<sui_sdk_types::Transaction, SettlementError> {
-        let cursor = self.inbox_cursor().await?;
-
         let function = Function::new(
             self.package,
             Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,

@@ -5,6 +5,7 @@
 mod bridge;
 mod config;
 mod full_node;
+mod inbox;
 mod keyring;
 mod mcp;
 mod metrics;
@@ -354,6 +355,16 @@ async fn start_sequencer(
         .transpose()
         .context("invalid genesis_hash")?;
 
+    // Force-inclusion inbox integration: `None` when no inbox is configured,
+    // which leaves the runner's behavior unchanged.
+    let inbox = inbox::InboxIntegration::from_config(
+        &config.sui,
+        &config.reth.rpc_url,
+        &config.data_dir,
+        config.sequencer.block_time_ms,
+    )
+    .context("building force-inclusion inbox integration")?;
+
     let block_signer = {
         let signer = podseq_core::Ed25519BlockSigner::from_suiprivkey_file(&signer_key_path)
             .context("loading signer key for block signing")?;
@@ -372,6 +383,7 @@ async fn start_sequencer(
         &config.data_dir,
         broadcaster,
         config.walrus.batch_size_bytes,
+        inbox,
         Arc::clone(&podseq_metrics),
     )?;
 

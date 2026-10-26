@@ -890,7 +890,10 @@ async fn eth_gas_price(http: &reqwest::Client, l2_rpc: &str) -> Result<u128> {
     Ok(gwei.max(1_000_000_000))
 }
 
-async fn eth_send_raw_transaction(
+/// Submits raw transaction bytes to Reth's transaction pool via
+/// `eth_sendRawTransaction`. Shared by the bridge relayer and the
+/// force-inclusion poller.
+pub(crate) async fn eth_send_raw_transaction(
     http: &reqwest::Client,
     l2_rpc: &str,
     raw: &[u8],
