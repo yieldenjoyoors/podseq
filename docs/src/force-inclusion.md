@@ -46,6 +46,10 @@ settled**, which the sequencer passes to `settle`. A transaction included in any
 block whose timestamp precedes its deadline is on time, no matter when that block
 settles.
 
+Both sides of that comparison are epoch milliseconds. The L2 header carries unix
+seconds, so the sequencer converts before building the settle call; raw seconds
+would sit under every millisecond deadline and the abort would never fire.
+
 The sequencer supplies that timestamp, and Move cannot read Walrus to verify it. The
 mitigation is attribution: the timestamp is verifiable against the block header in
 the blob that `settle` commits to, and a mismatch is an equivocation signed by the

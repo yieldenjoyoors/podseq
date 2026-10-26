@@ -274,7 +274,7 @@ impl Settlement {
         let inbox = builder.object(ObjectInput::new(self.inbox));
         let blob_id_arg = builder.pure(&blob.0.to_vec());
         let height_arg = builder.pure(&header.height);
-        let block_ts_arg = builder.pure(&header.timestamp);
+        let block_ts_arg = builder.pure(&settle_block_ts(header.timestamp));
         let cursor_arg = builder.pure(&cursor);
         builder.move_call(
             function,
@@ -625,6 +625,18 @@ fn parse_field_blob_id(bytes: &[u8]) -> Result<BlobId, SettlementError> {
     parse_blob_id(&field.value)
 }
 
+/// Converts the L2 header timestamp into the clock the inbox deadline is
+/// anchored on.
+///
+/// EVM payload timestamps are unix seconds; `inbox::enforce_settle` compares
+/// `block_ts` against `deadline_ms` (Sui clock, milliseconds). Passing the raw
+/// seconds value keeps every check vacuously true — seconds sit orders of
+/// magnitude below millisecond deadlines — which silently disables the
+/// contract-enforced halt.
+fn settle_block_ts(header_timestamp_secs: u64) -> u64 {
+    header_timestamp_secs.saturating_mul(1000)
+}
+
 /// Reads the immutable commitments-table UID from the registry object.
 ///
 /// The table UID is fixed at `initialize` and never changes, so callers should
@@ -852,5 +864,15 @@ mod tests {
         assert!(!is_sui_coin_type("0x3::test::TEST"));
         assert!(!is_sui_coin_type("garbage"));
         assert!(!is_sui_coin_type(""));
+    }
+
+    #[test]
+    fn settle_block_ts_converts_header_seconds_to_milliseconds() {
+        // EVM payload timestamps are unix seconds; `inbox.move` anchors
+        // deadlines on the Sui clock in milliseconds, so the settle boundary
+        // must convert. 1_793_045_000 s ≈ 2026-10-26; passing the raw seconds
+        // value would make every deadline check vacuously true and silently
+        // disable the contract-enforced halt.
+        assert_eq!(settle_block_ts(1_793_045_000), 1_793_045_000_000);
     }
 }
