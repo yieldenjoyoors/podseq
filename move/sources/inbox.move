@@ -372,6 +372,48 @@ module podseq::inbox {
     }
 
     #[test]
+    fun settle_gate_accepts_block_at_exact_deadline_timestamp() {
+        // Boundary: a transaction must be included in a block whose timestamp
+        // is at most the deadline, so equality passes and only a strictly
+        // later block aborts.
+        let ctx = &mut tx_context::dummy();
+        let mut inbox = inbox_for_testing(ctx);
+        let mut clock = clock::create_for_testing(ctx);
+        clock::set_for_testing(&mut clock, 1_000_000);
+
+        submit(&mut inbox, &clock, b"tx-a");
+        enforce_settle(&mut inbox, 1_600_000, 0);
+
+        assert!(included_count(&inbox) == 0);
+        assert!(last_settled_ts(&inbox) == 1_600_000);
+
+        drain_for_testing(&mut inbox);
+        clock::destroy_for_testing(clock);
+        destroy_inbox_for_testing(inbox);
+    }
+
+    #[test, expected_failure(abort_code = E_DEADLINE_EXCEEDED)]
+    fun settle_gate_halts_at_epoch_scale_timestamps() {
+        // Realistic magnitudes: deadlines and settled timestamps are epoch
+        // milliseconds (~1.79e12 in 2026). Callers that pass the L2 header's
+        // unix-SECONDS timestamp (~1.79e9) would never trip this abort, so
+        // pin the units the gate actually compares.
+        let ctx = &mut tx_context::dummy();
+        let mut inbox = inbox_for_testing(ctx);
+        let mut clock = clock::create_for_testing(ctx);
+        clock::set_for_testing(&mut clock, 1_793_045_000_000);
+
+        submit(&mut inbox, &clock, b"tx-a");
+        // Deadline is 1_793_045_600_000; the block being settled is one
+        // millisecond past it and does not contain the transaction.
+        enforce_settle(&mut inbox, 1_793_045_600_001, 0);
+
+        clock::destroy_for_testing(clock);
+        drain_for_testing(&mut inbox);
+        destroy_inbox_for_testing(inbox);
+    }
+
+    #[test]
     fun halt_clears_once_overdue_transaction_is_covered() {
         // Two transactions submitted at different times. The older one's
         // deadline expires, but once a block including it settles, only the

@@ -895,6 +895,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn crash_between_mark_included_and_settle_preserves_cursor_and_gate() {
+        // The K2 crash window: produce_block marked nonce 0 included at
+        // height 11 (persist-before-settle), then the process died before the
+        // settle call landed. Recovery rebuilds the tracker from the same
+        // data dir and must (a) not lose the inclusion — the settle cursor
+        // still counts it, so the re-settled block covers the nonce on chain,
+        // (b) not double-include — the marked nonce never re-enters the pool
+        // submission set, and (c) leave the settlement gate clear, so the
+        // recovery path proceeds instead of halting on its own marker.
+        let dir = tmp_dir();
+        let transport = Arc::new(MockTransport::with_inbox(
+            2,
+            0,
+            &[(0, b"tx-a"), (1, b"tx-b")],
+        ));
+        {
+            let tracker = InboxTracker::new(
+                Arc::clone(&transport) as Arc<dyn InboxTransport>,
+                Address::new(INBOX_ID),
+                InboxStore::new(&dir),
+                3,
+            );
+            tracker.sync(10).await.unwrap();
+            tracker
+                .observe_transactions(11, &[bytes_of(b"tx-a")])
+                .unwrap();
+            // (crash: the settle call for height 11 never ran)
+        }
+        let recovered = InboxTracker::new(
+            Arc::clone(&transport) as Arc<dyn InboxTransport>,
+            Address::new(INBOX_ID),
+            InboxStore::new(&dir),
+            3,
+        );
+        assert_eq!(recovered.settle_cursor().unwrap(), 1);
+        assert_eq!(
+            recovered.halt_check(11).unwrap(),
+            HaltCheck::Clear,
+            "the recovered inclusion must not stall re-settlement"
+        );
+        let resubmit: Vec<u64> = recovered
+            .pending_submissions()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.nonce)
+            .collect();
+        assert_eq!(resubmit, vec![1]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn settle_cursor_counts_included_nonces() {
         let r = rig(3, 0, &[(0, b"a"), (1, b"b"), (2, b"c")], 3);
         r.tracker.sync(1).await.unwrap();
