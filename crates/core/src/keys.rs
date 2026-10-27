@@ -15,6 +15,12 @@ use sui_sdk_types::{Address, Ed25519PublicKey, SimpleSignature};
 ///
 /// The string is lowercased before bech32 decoding so mixed-case inputs don't
 /// fail.
+///
+/// # Errors
+///
+/// Returns a message when the input is neither valid bech32 nor valid
+/// base64, when the base64 payload is not 33 bytes, or when the scheme flag
+/// is not `0x00` (ed25519).
 pub fn parse_signer_key(s: &str) -> Result<Ed25519PrivateKey, String> {
     let trimmed = s.trim();
     if trimmed.starts_with("suiprivkey") {
@@ -53,6 +59,11 @@ impl Ed25519BlockSigner {
     ///
     /// Accepts both formats the Sui CLI produces: Bech32 `suiprivkey1...` and
     /// raw base64 (33-byte flag + key payload), via `parse_signer_key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Execution`] when the file cannot be read or the key
+    /// string does not parse.
     pub fn from_suiprivkey_file(path: &Path) -> Result<Self, Error> {
         let key_str = std::fs::read_to_string(path)
             .map_err(|e| Error::Execution(format!("reading block key: {e}")))?
@@ -64,11 +75,13 @@ impl Ed25519BlockSigner {
     }
 
     /// Returns the sequencer's ed25519 public key.
+    #[must_use]
     pub fn pub_key(&self) -> Ed25519PublicKey {
         self.key.public_key()
     }
 
     /// Returns the Sui address derived from the public key.
+    #[must_use]
     pub fn address(&self) -> Address {
         self.key.public_key().derive_address()
     }
@@ -109,7 +122,7 @@ mod tests {
 
     #[test]
     fn trims_whitespace() {
-        let padded = format!("  {}  ", BASE64_KEY);
+        let padded = format!("  {BASE64_KEY}  ");
         let key = parse_signer_key(&padded).expect("whitespace should be trimmed");
         let baseline = parse_signer_key(BASE64_KEY).expect("baseline key should parse");
         assert_eq!(key.public_key(), baseline.public_key());

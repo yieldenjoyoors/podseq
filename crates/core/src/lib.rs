@@ -57,11 +57,17 @@ pub trait Settlement: Send + Sync {
 
 /// Signs a header to produce a block signature.
 pub trait BlockSigner: Send + Sync {
+    /// Signs `header`'s signing message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Execution`] when the signing operation fails.
     fn sign_header(&self, header: &Header) -> Result<Signature, Error>;
 }
 
 impl Header {
     /// BCS-like encoding of the header fields for signing.
+    #[must_use]
     pub fn signing_message(&self) -> Vec<u8> {
         let mut msg = Vec::with_capacity(8 + 32 + 32 + 8);
         msg.extend_from_slice(&self.height.to_le_bytes());
@@ -101,6 +107,9 @@ mod serde_signature {
     use super::Signature;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    // serde's `serialize_with` contract fixes the parameter as `&Option<T>`;
+    // `Option<&T>` would break the call site.
+    #[allow(clippy::ref_option)]
     pub fn serialize<S: Serializer>(sig: &Option<Signature>, s: S) -> Result<S::Ok, S::Error> {
         sig.map(|arr| arr.to_vec()).serialize(s)
     }

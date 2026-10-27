@@ -18,11 +18,12 @@ mod tests {
 
     #[test]
     fn tokio_context_satisfies_runtime() {
-        fn _accepts_runtime<R: Runtime>(_: R) {}
-        fn _ctx_is_runtime(ctx: Context) {
-            _accepts_runtime(ctx);
+        fn accepts_runtime<R: Runtime>(_: R) {}
+        fn ctx_is_runtime(ctx: Context) {
+            accepts_runtime(ctx);
         }
-        let _ = _ctx_is_runtime;
+        // Compile-time type-bound check only; the test body never runs it.
+        let _ = ctx_is_runtime as fn(Context);
     }
 
     #[test]
