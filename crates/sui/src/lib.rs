@@ -4,6 +4,7 @@
 
 pub mod blob_id;
 pub mod bridge;
+pub mod deadline;
 pub mod inbox;
 pub mod settlement;
 pub mod wire;

@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use podseq_core::DataAvailability;
 use podseq_engine::{Engine, PARENT_BEACON_BLOCK_ROOT};
 use podseq_p2p::BlockReceiver;
+use podseq_sui::deadline::{DeadlineError, DeadlineStatus};
 use podseq_sui::Client as SuiClient;
 
 use crate::store::StateStore;
@@ -42,6 +43,10 @@ pub struct FullNode {
     sequencer_pubkey: Option<sui_crypto::ed25519::Ed25519VerifyingKey>,
     /// Cached commitments-table UID (immutable).
     table_uid: Option<sui_sdk_types::Address>,
+    /// Trustless deadline monitor over the shared inbox; `None` when no
+    /// `sui.inbox_id` is configured (deadline verification disabled).
+    deadline: Option<podseq_sui::deadline::DeadlineMonitor<podseq_sui::inbox::SuiInboxTransport>>,
+    halt_gate: HaltGate,
 }
 
 impl FullNode {
@@ -104,6 +109,12 @@ impl FullNode {
             }
             None => (0, None),
         };
+
+        // Deadline verification: read-only, from Sui state alone. Optional so
+        // existing full-node configs keep working; without the inbox id the
+        // node cannot detect a halt on its own.
+        let deadline = build_deadline_monitor(config);
+
         Ok(Self {
             engine,
             sui,
@@ -120,6 +131,8 @@ impl FullNode {
             p2p_receiver,
             sequencer_pubkey: Some(sequencer_pubkey),
             table_uid: None,
+            deadline,
+            halt_gate: HaltGate::default(),
         })
     }
 
@@ -160,6 +173,11 @@ impl FullNode {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
+                    if let Some(monitor) = &self.deadline {
+                        if self.halt_gate.update(monitor.status().await) {
+                            continue;
+                        }
+                    }
                     if let Err(e) = self.sync_from_settlement().await {
                         error!(error = ?e, "full node: DA sync failed");
                     }
@@ -427,4 +445,165 @@ fn parse_forkchoice(state: &crate::store::ChainState) -> Option<(B256, B256, B25
         parse(&state.safe)?,
         parse(&state.finalized)?,
     ))
+}
+
+/// Builds the trustless deadline monitor from node config.
+///
+/// `None` disables verification: no `sui.inbox_id` configured (warned — the
+/// node cannot detect a halt on its own), or an id that does not parse.
+fn build_deadline_monitor(
+    config: &Config,
+) -> Option<podseq_sui::deadline::DeadlineMonitor<podseq_sui::inbox::SuiInboxTransport>> {
+    let id = config.sui.inbox_id.as_deref().unwrap_or("").trim();
+    if id.is_empty() {
+        warn!(
+            "full node: sui.inbox_id unset — deadline verification disabled (the node will not detect a force-inclusion halt)"
+        );
+        return None;
+    }
+    match podseq_sui::deadline::monitor_from_config(
+        &config.sui.rpc_url,
+        id,
+        podseq_sui::deadline::DEFAULT_MARGIN_MS,
+    ) {
+        Ok(monitor) => {
+            info!(inbox = id, "full node: deadline verification enabled");
+            Some(monitor)
+        }
+        Err(e) => {
+            warn!(error = %e, "full node: deadline verification disabled");
+            None
+        }
+    }
+}
+
+/// Turns deadline-status reads into a pause decision for the sync loop.
+///
+/// A confirmed halt or a violated gate pauses block application; a transport
+/// error never does (availability over false positives). Status transitions
+/// are logged once, not every tick.
+#[derive(Default)]
+struct HaltGate {
+    last: Option<DeadlineStatus>,
+}
+
+impl HaltGate {
+    /// Consumes one read and returns whether the node must skip applying
+    /// blocks this tick.
+    fn update(&mut self, read: Result<DeadlineStatus, DeadlineError>) -> bool {
+        match read {
+            Ok(status) if status.is_halted() => {
+                if self.last.as_ref() != Some(&status) {
+                    error!(
+                        status = ?status,
+                        "full node: force-inclusion halt — not applying further blocks"
+                    );
+                }
+                self.last = Some(status);
+                true
+            }
+            Ok(_) => {
+                if self.last.take().is_some() {
+                    info!("full node: halt cleared — overdue transaction included");
+                }
+                false
+            }
+            Err(e) => {
+                warn!(error = %e, "full node: deadline check unavailable; assuming active");
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod halt_gate_tests {
+    use super::*;
+
+    fn halted() -> DeadlineStatus {
+        DeadlineStatus::Halted {
+            nonce: 7,
+            deadline_ms: 1_600_000,
+        }
+    }
+
+    fn violated() -> DeadlineStatus {
+        DeadlineStatus::Violated {
+            nonce: 7,
+            deadline_ms: 1_600_000,
+            settled_ts_ms: 1_900_000,
+        }
+    }
+
+    #[test]
+    fn active_reads_never_pause() {
+        let mut gate = HaltGate::default();
+
+        assert!(!gate.update(Ok(DeadlineStatus::Active)));
+    }
+
+    #[test]
+    fn transport_errors_never_pause() {
+        let mut gate = HaltGate::default();
+
+        assert!(!gate.update(Err(DeadlineError::InboxId("down".into()))));
+    }
+
+    #[test]
+    fn halted_reads_pause_until_cleared() {
+        let mut gate = HaltGate::default();
+
+        assert!(gate.update(Ok(halted())));
+        assert!(gate.update(Ok(halted())));
+
+        assert!(!gate.update(Ok(DeadlineStatus::Active)));
+    }
+
+    #[test]
+    fn violated_reads_pause_too() {
+        let mut gate = HaltGate::default();
+
+        assert!(gate.update(Ok(violated())));
+    }
+}
+
+#[cfg(test)]
+mod deadline_monitor_tests {
+    use super::*;
+
+    fn config_with(inbox_id: Option<&str>) -> Config {
+        let mut config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        config.sui.inbox_id = inbox_id.map(str::to_string);
+        config
+    }
+
+    #[test]
+    fn builds_a_monitor_from_a_valid_inbox_id() {
+        let config = config_with(Some(
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+        ));
+
+        assert!(build_deadline_monitor(&config).is_some());
+    }
+
+    #[test]
+    fn no_inbox_id_disables_verification() {
+        let config = config_with(None);
+
+        assert!(build_deadline_monitor(&config).is_none());
+    }
+
+    #[test]
+    fn blank_inbox_id_disables_verification() {
+        let config = config_with(Some("  "));
+
+        assert!(build_deadline_monitor(&config).is_none());
+    }
+
+    #[test]
+    fn unparseable_inbox_id_disables_verification() {
+        let config = config_with(Some("not-an-address"));
+
+        assert!(build_deadline_monitor(&config).is_none());
+    }
 }
