@@ -19,6 +19,17 @@ updates:
         patterns:
           - walrus-*
 
+  # The fuzz harness has its own lockfile; without an explicit entry the
+  # auto-discovered security job crashes trying to bump rsa past the
+  # advisory, which fastcrypto 0.1.9 (pinned sui crates) makes impossible
+  # by requiring ^0.8. Revisit when the sui pin moves fastcrypto to 0.9.
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: rsa
+
   - package-ecosystem: npm
     directory: /web
     schedule:
