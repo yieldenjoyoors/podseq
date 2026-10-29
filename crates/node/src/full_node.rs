@@ -480,8 +480,9 @@ fn build_deadline_monitor(
 /// Turns deadline-status reads into a pause decision for the sync loop.
 ///
 /// A confirmed halt or a violated gate pauses block application; a transport
-/// error never does (availability over false positives). Status transitions
-/// are logged once, not every tick.
+/// error or an unconfirmed read
+/// ([`DeadlineError::InconsistentSnapshot`]) never does (availability over
+/// false positives). Status transitions are logged once, not every tick.
 #[derive(Default)]
 struct HaltGate {
     last: Option<DeadlineStatus>,
@@ -547,6 +548,14 @@ mod halt_gate_tests {
         let mut gate = HaltGate::default();
 
         assert!(!gate.update(Err(DeadlineError::InboxId("down".into()))));
+    }
+
+    #[test]
+    fn inconsistent_snapshot_errors_never_pause() {
+        // An unconfirmed read is not a halt; the node keeps applying blocks.
+        let mut gate = HaltGate::default();
+
+        assert!(!gate.update(Err(DeadlineError::InconsistentSnapshot { attempts: 3 })));
     }
 
     #[test]

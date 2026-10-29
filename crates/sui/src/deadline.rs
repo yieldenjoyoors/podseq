@@ -28,6 +28,20 @@
 //! deadline (`deadline >= block_ts`), so a full node only calls a deadline
 //! expired strictly after `deadline + margin` — the margin absorbs the gap
 //! between a full node's poll and the block timestamps that can still settle.
+//!
+//! ## Read protocol
+//!
+//! The three objects are read in separate round trips, so a settle can land
+//! between them and leave the first read stale. The monitor therefore never
+//! asserts a halt on a possibly stale snapshot: after a `Halted`/`Violated`
+//! classification the inbox is re-read, and the verdict stands only if the
+//! settle cursor (`included_count`) and witness (`last_settled_ts`) are
+//! unchanged — the two fields a settle updates, which is why a racing
+//! `submit` (which only moves `next_nonce`) cannot invalidate a verdict. An
+//! `Active` verdict needs no confirmation: a removed pending entry proves
+//! the include already happened, and a stale clock only ever delays a halt.
+//! If a concurrent settle invalidates every read, the poll fails with
+//! [`DeadlineError::InconsistentSnapshot`] — unconfirmed, never a halt.
 
 use std::str::FromStr;
 
@@ -93,6 +107,11 @@ pub enum DeadlineError {
     Inbox(#[from] InboxError),
     #[error("invalid inbox id: {0}")]
     InboxId(String),
+    #[error("inbox changed under all {attempts} reads; deadline status unconfirmed")]
+    InconsistentSnapshot {
+        /// Read attempts made before giving up.
+        attempts: usize,
+    },
 }
 
 /// Classifies the deadline status from a single consistent read.
@@ -157,6 +176,12 @@ pub struct DeadlineMonitor<T> {
 }
 
 impl<T: InboxTransport> DeadlineMonitor<T> {
+    /// Read attempts before a halt verdict is reported as unconfirmed:
+    /// every `Halted`/`Violated` classification is re-confirmed against a
+    /// fresh inbox read, so a concurrent settle may invalidate the snapshot
+    /// this many times.
+    const CONFIRM_LIMIT: usize = 3;
+
     /// Creates a monitor for the inbox at `inbox`, expiring deadlines after
     /// `margin_ms` of grace.
     pub fn new(transport: T, inbox: Address, margin_ms: u64) -> Self {
@@ -169,7 +194,28 @@ impl<T: InboxTransport> DeadlineMonitor<T> {
 
     /// Reads the inbox, the clock, and the oldest pending entry, and returns
     /// the current deadline status.
+    ///
+    /// A `Halted`/`Violated` verdict is only asserted against a snapshot no
+    /// concurrent settle invalidates: the inbox is re-read and its settle
+    /// cursor and witness must be unchanged. If a concurrent settle keeps
+    /// invalidating every read, the status is reported as
+    /// [`DeadlineError::InconsistentSnapshot`] rather than asserted.
     pub async fn status(&self) -> Result<DeadlineStatus, DeadlineError> {
+        for _ in 0..Self::CONFIRM_LIMIT {
+            let (inbox, now_ms, oldest) = self.read_snapshot().await?;
+            let status = classify(now_ms, self.margin_ms, &inbox, oldest.as_ref());
+            if !status.is_halted() || self.confirm_unchanged(&inbox).await? {
+                return Ok(status);
+            }
+        }
+        Err(DeadlineError::InconsistentSnapshot {
+            attempts: Self::CONFIRM_LIMIT,
+        })
+    }
+
+    /// One read of the inbox object, the clock, and the oldest pending
+    /// entry at the settle cursor.
+    async fn read_snapshot(&self) -> Result<(InboxStatus, u64, Option<PendingTx>), DeadlineError> {
         let inbox_bytes = self.transport.object_contents(&self.inbox).await?;
         let inbox = parse_inbox_status(&inbox_bytes)?;
 
@@ -184,8 +230,16 @@ impl<T: InboxTransport> DeadlineMonitor<T> {
             None => None,
             Some(bytes) => Some(parse_pending_tx(&bytes)?),
         };
+        Ok((inbox, now_ms, oldest))
+    }
 
-        Ok(classify(now_ms, self.margin_ms, &inbox, oldest.as_ref()))
+    /// Whether a fresh inbox read still agrees with `read` on the settle
+    /// cursor and witness — the two fields a settle updates.
+    async fn confirm_unchanged(&self, read: &InboxStatus) -> Result<bool, DeadlineError> {
+        let confirm_bytes = self.transport.object_contents(&self.inbox).await?;
+        let confirm = parse_inbox_status(&confirm_bytes)?;
+        Ok(confirm.included_count == read.included_count
+            && confirm.last_settled_ts == read.last_settled_ts)
     }
 }
 
@@ -582,5 +636,275 @@ mod tests {
             Address::from_str("0x6").unwrap(),
             "Sui's shared Clock is the well-known object 0x6"
         );
+    }
+
+    /// Transport with a scripted sequence of inbox versions: each inbox read
+    /// serves the next version (the last one repeats), so tests can model Sui
+    /// state changing between the monitor's reads. Clock and pending-table
+    /// reads are static maps, and inbox reads are counted. The script is
+    /// mutex-guarded because the transport trait reads through `&self`.
+    struct ScriptedTransport {
+        inbox_id: Address,
+        script: std::sync::Mutex<Script>,
+        clock: Vec<u8>,
+        fields: std::collections::BTreeMap<(Address, u64), Vec<u8>>,
+    }
+
+    struct Script {
+        inbox_versions: std::collections::VecDeque<Vec<u8>>,
+        /// Re-queue every popped version so reads alternate forever instead
+        /// of settling on the last one.
+        cycle: bool,
+        inbox_reads: usize,
+    }
+
+    impl ScriptedTransport {
+        fn inbox_reads(&self) -> usize {
+            self.script.lock().unwrap().inbox_reads
+        }
+    }
+
+    /// BCS bytes of an `InboxMirror` with the given cursor state.
+    fn inbox_bytes(
+        table_uid: Address,
+        next_nonce: u64,
+        included_count: u64,
+        last_settled_ts: u64,
+    ) -> Vec<u8> {
+        let inbox = InboxMirror {
+            id: Address::new([0; 32]),
+            next_nonce,
+            included_count,
+            last_settled_ts,
+            pending: TableMirror {
+                id: table_uid,
+                size: next_nonce - included_count,
+            },
+        };
+        bcs::to_bytes(&inbox).unwrap()
+    }
+
+    impl InboxTransport for ScriptedTransport {
+        fn object_contents<'a>(
+            &'a self,
+            id: &'a Address,
+        ) -> crate::inbox::InboxFuture<'a, Result<Vec<u8>, InboxError>> {
+            Box::pin(async move {
+                if *id == SUI_CLOCK_ID {
+                    return Ok(self.clock.clone());
+                }
+                if *id == self.inbox_id {
+                    let mut script = self.script.lock().unwrap();
+                    script.inbox_reads += 1;
+                    let last = script.inbox_versions.len() == 1 && !script.cycle;
+                    let bytes = if last {
+                        script
+                            .inbox_versions
+                            .front()
+                            .cloned()
+                            .expect("scripted inbox version")
+                    } else {
+                        let popped = script
+                            .inbox_versions
+                            .pop_front()
+                            .expect("scripted inbox version");
+                        if script.cycle {
+                            script.inbox_versions.push_back(popped.clone());
+                        }
+                        popped
+                    };
+                    return Ok(bytes);
+                }
+                Err(InboxError::NotFound(format!("no object {id}")))
+            })
+        }
+
+        fn field_contents<'a>(
+            &'a self,
+            table: &'a Address,
+            key: u64,
+        ) -> crate::inbox::InboxFuture<'a, Result<Option<Vec<u8>>, InboxError>> {
+            Box::pin(async move { Ok(self.fields.get(&(*table, key)).cloned()) })
+        }
+    }
+
+    impl InboxTransport for std::sync::Arc<ScriptedTransport> {
+        fn object_contents<'a>(
+            &'a self,
+            id: &'a Address,
+        ) -> crate::inbox::InboxFuture<'a, Result<Vec<u8>, InboxError>> {
+            (**self).object_contents(id)
+        }
+
+        fn field_contents<'a>(
+            &'a self,
+            table: &'a Address,
+            key: u64,
+        ) -> crate::inbox::InboxFuture<'a, Result<Option<Vec<u8>>, InboxError>> {
+            (**self).field_contents(table, key)
+        }
+    }
+
+    /// Builds a scripted transport whose first inbox read serves the
+    /// pre-settle state (cursor 2, witness `pre_witness`, oldest entry
+    /// pending at deadline `900_000`) and whose next read serves `post`:
+    /// `(next_nonce, included_count, witness)`. The clock reads `1_000_000`
+    /// ms, past the deadline's grace window.
+    fn raced_transport(
+        pre_witness: u64,
+        post: (u64, u64, u64),
+    ) -> std::sync::Arc<ScriptedTransport> {
+        let inbox_id = Address::new([0x11; 32]);
+        let table_uid = Address::new([0x22; 32]);
+        std::sync::Arc::new(ScriptedTransport {
+            inbox_id,
+            script: std::sync::Mutex::new(Script {
+                inbox_versions: std::collections::VecDeque::from(vec![
+                    inbox_bytes(table_uid, 3, 2, pre_witness),
+                    inbox_bytes(table_uid, post.0, post.1, post.2),
+                ]),
+                cycle: false,
+                inbox_reads: 0,
+            }),
+            clock: clock_contents(1_000_000),
+            fields: std::collections::BTreeMap::from([(
+                (table_uid, 2),
+                field_contents_bytes(2, 900_000, b"tx"),
+            )]),
+        })
+    }
+
+    /// Builds a scripted transport whose reads alternate forever between two
+    /// halted-looking inbox states that differ in their witness, so no read
+    /// sequence ever stabilizes.
+    fn churning_transport() -> std::sync::Arc<ScriptedTransport> {
+        let inbox_id = Address::new([0x11; 32]);
+        let table_uid = Address::new([0x22; 32]);
+        std::sync::Arc::new(ScriptedTransport {
+            inbox_id,
+            script: std::sync::Mutex::new(Script {
+                inbox_versions: std::collections::VecDeque::from(vec![
+                    inbox_bytes(table_uid, 3, 2, 800_000),
+                    inbox_bytes(table_uid, 3, 2, 950_000),
+                ]),
+                cycle: true,
+                inbox_reads: 0,
+            }),
+            clock: clock_contents(1_000_000),
+            fields: std::collections::BTreeMap::from([(
+                (table_uid, 2),
+                field_contents_bytes(2, 900_000, b"tx"),
+            )]),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_settle_between_reads_cannot_flap_a_healthy_chain_to_halted() {
+        // Read 1 serves the pre-settle inbox: cursor 2, witness before the
+        // deadline, oldest entry still present. The next inbox read serves
+        // the post-settle inbox: the entry was included and the witness
+        // moved past the deadline. The stale first read classifies as
+        // Halted; the monitor must not assert that halt on a snapshot that
+        // a concurrent settle invalidates.
+        let transport = raced_transport(800_000, (3, 3, 950_000));
+        let monitor = DeadlineMonitor::new(transport.clone(), transport.inbox_id, 1_000);
+
+        assert_eq!(monitor.status().await.unwrap(), DeadlineStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn a_witness_only_change_between_reads_reclassifies_before_halting() {
+        // Same race, but the concurrent settle does not include the pending
+        // entry — it only moves the witness past the deadline. After the
+        // retry the truthful classification is Violated, not Halted.
+        let transport = raced_transport(800_000, (3, 2, 950_000));
+        let monitor = DeadlineMonitor::new(transport.clone(), transport.inbox_id, 1_000);
+
+        assert_eq!(
+            monitor.status().await.unwrap(),
+            DeadlineStatus::Violated {
+                nonce: 2,
+                deadline_ms: 900_000,
+                settled_ts_ms: 950_000,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_inbox_churn_never_yields_an_unconfirmed_halt() {
+        // Every read is invalidated by a concurrent settle alternating the
+        // witness, so no snapshot ever stabilizes. The monitor must report
+        // the reads as unconfirmed instead of asserting a halt verdict it
+        // could not confirm.
+        let transport = churning_transport();
+        let monitor = DeadlineMonitor::new(transport.clone(), transport.inbox_id, 1_000);
+
+        assert!(matches!(
+            monitor.status().await,
+            Err(DeadlineError::InconsistentSnapshot { .. })
+        ));
+    }
+
+    /// A stable transport serving one inbox version forever, with read
+    /// counting.
+    fn stable_transport(
+        next_nonce: u64,
+        included_count: u64,
+        last_settled_ts: u64,
+        oldest: Option<(u64, u64)>,
+    ) -> std::sync::Arc<ScriptedTransport> {
+        let inbox_id = Address::new([0x11; 32]);
+        let table_uid = Address::new([0x22; 32]);
+        let mut fields = std::collections::BTreeMap::new();
+        if let Some((nonce, deadline)) = oldest {
+            fields.insert(
+                (table_uid, nonce),
+                field_contents_bytes(nonce, deadline, b"tx"),
+            );
+        }
+        std::sync::Arc::new(ScriptedTransport {
+            inbox_id,
+            script: std::sync::Mutex::new(Script {
+                inbox_versions: std::collections::VecDeque::from(vec![inbox_bytes(
+                    table_uid,
+                    next_nonce,
+                    included_count,
+                    last_settled_ts,
+                )]),
+                cycle: false,
+                inbox_reads: 0,
+            }),
+            clock: clock_contents(1_000_000),
+            fields,
+        })
+    }
+
+    #[tokio::test]
+    async fn an_active_classification_skips_the_confirmation_read() {
+        // Active verdicts need no confirmation: a removed pending entry
+        // proves the include already happened, and a stale clock only ever
+        // delays a halt. The common poll must stay at one inbox read.
+        let transport = stable_transport(3, 3, 1_000, None);
+        let monitor = DeadlineMonitor::new(transport.clone(), transport.inbox_id, 1_000);
+
+        assert_eq!(monitor.status().await.unwrap(), DeadlineStatus::Active);
+        assert_eq!(transport.inbox_reads(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_halt_costs_one_extra_read() {
+        // The halt path pays exactly one confirmation read when the state is
+        // stable.
+        let transport = stable_transport(3, 2, 800_000, Some((2, 900_000)));
+        let monitor = DeadlineMonitor::new(transport.clone(), transport.inbox_id, 1_000);
+
+        assert_eq!(
+            monitor.status().await.unwrap(),
+            DeadlineStatus::Halted {
+                nonce: 2,
+                deadline_ms: 900_000,
+            }
+        );
+        assert_eq!(transport.inbox_reads(), 2);
     }
 }
