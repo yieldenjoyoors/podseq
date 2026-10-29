@@ -267,6 +267,30 @@ impl BridgeClient {
         })?;
 
         info!(%package_id, %vault_id, %cap_id, "bridge Vault initialized on Sui");
+
+        // Entomb the BridgeCap into the Vault: seeds the rotation state that
+        // `withdraw_as`'s authority gate reads. Without the ceremony every
+        // release aborts in `dynamic_field::borrow_child_object` — the Vault
+        // counterpart of the settlement deploy fix. Signed by the cap owner
+        // (the initializer), who is also the initial withdrawal authority.
+        {
+            let mut builder = TransactionBuilder::new();
+            let cap_arg =
+                builder.object(ObjectInput::new(parse_address(&cap_id, "bridge cap id")?));
+            let vault_arg = builder.object(ObjectInput::new(parse_address(&vault_id, "vault id")?));
+            builder.move_call(
+                bridge_function(package, "entomb_bridge_cap"),
+                vec![cap_arg, vault_arg],
+            );
+            builder.set_sender(sender);
+            let tx = builder
+                .build(&mut rpc)
+                .await
+                .map_err(|e| BridgeError::Build(format!("entomb bridge cap: {e}")))?;
+            sign_and_execute(&mut rpc, &key, tx, "entomb bridge cap", DEPLOY_TX_WAIT).await?;
+            info!(%vault_id, "bridge cap entombed; vault rotation state seeded");
+        }
+
         Ok(DeployedBridge { vault_id, cap_id })
     }
 }

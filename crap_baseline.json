@@ -3416,13 +3416,13 @@
       "file": "./crates/sui/src/bridge.rs",
       "function": "BridgeClient::initialize_with_key",
       "line": 238,
-      "cyclomatic": 7.0,
+      "cyclomatic": 11.0,
       "coverage": 0.0,
-      "crap": 56.0,
+      "crap": 132.0,
       "uncovered": [
         {
           "start": 238,
-          "end": 271
+          "end": 295
         }
       ]
     },
@@ -3515,49 +3515,49 @@
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "CoreError::from",
-      "line": 391,
+      "line": 415,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 391,
-          "end": 393
+          "start": 415,
+          "end": 417
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "bridge_function",
-      "line": 276,
+      "line": 300,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 276,
-          "end": 282
+          "start": 300,
+          "end": 306
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "deposit_at",
-      "line": 358,
+      "line": 382,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 358,
-          "end": 367
+          "start": 382,
+          "end": 391
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "parse_field_deposit",
-      "line": 378,
+      "line": 402,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -3565,7 +3565,7 @@
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "parse_vault_status",
-      "line": 344,
+      "line": 368,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -3573,28 +3573,28 @@
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "vault_contents",
-      "line": 310,
+      "line": 334,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 310,
-          "end": 315
+          "start": 334,
+          "end": 339
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "vault_status",
-      "line": 304,
+      "line": 328,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 304,
-          "end": 307
+          "start": 328,
+          "end": 331
         }
       ]
     },
