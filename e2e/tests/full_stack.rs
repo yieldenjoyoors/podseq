@@ -97,7 +97,8 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     };
 
     // 1. podseq is producing: Reth height advances past 0.
-    let produced_height = wait_for_height(&http, &rpc_url, 1, Duration::from_secs(60)).await?;
+    let produced_height =
+        wait_for_height(&stack, &http, &rpc_url, 1, Duration::from_secs(60)).await?;
     println!("e2e: podseq produced up to height {produced_height}");
 
     // 2. A user tx lands on Reth. Send a 1-wei self-transfer from the funded
@@ -112,6 +113,7 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     let receipt_deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if Instant::now() >= receipt_deadline {
+            stack.dump_logs();
             bail!("user tx {tx_hash} was never included");
         }
         if let Some(receipt) = eth_get_transaction_receipt(&http, &rpc_url, &tx_hash).await? {
@@ -124,7 +126,11 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     }
 
     // 3. Settlement advances on Sui: latest_height moves past 0.
-    let settled = wait_for_settlement(&registry_id, Duration::from_secs(300)).await?;
+    //    Dumps the podseq logs on timeout: a stalled settle is either a node
+    //    error (WARN retry loop shows the Sui failure) or a gate hold (WARN
+    //    "settlement paused"), and without logs the two are indistinguishable
+    //    from testnet lag.
+    let settled = wait_for_settlement(&stack, &registry_id, Duration::from_secs(300)).await?;
     println!("e2e: settlement at height {settled}");
 
     // 4. Walrus blob for a settled height is retrievable and decodes to a block
@@ -279,6 +285,7 @@ async fn preflight_sui_balance() -> Result<()> {
 }
 
 async fn wait_for_height(
+    stack: &FullStack,
     http: &reqwest::Client,
     rpc_url: &str,
     min: u64,
@@ -292,13 +299,18 @@ async fn wait_for_height(
             Err(e) => eprintln!("e2e: eth_blockNumber retrying: {e}"),
         }
         if Instant::now() >= deadline {
+            stack.dump_logs();
             bail!("wait_for_height({min}) timed out after {timeout:?}");
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
-async fn wait_for_settlement(registry_id: &str, timeout: Duration) -> Result<u64> {
+async fn wait_for_settlement(
+    stack: &FullStack,
+    registry_id: &str,
+    timeout: Duration,
+) -> Result<u64> {
     let deadline = Instant::now() + timeout;
     loop {
         match latest_height(SUI_RPC, registry_id).await {
@@ -307,6 +319,7 @@ async fn wait_for_settlement(registry_id: &str, timeout: Duration) -> Result<u64
             Err(e) => eprintln!("e2e: latest_height RPC error (retrying): {e}"),
         }
         if Instant::now() >= deadline {
+            stack.dump_logs();
             bail!("settlement never advanced on Sui after {timeout:?}");
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
