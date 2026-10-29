@@ -145,6 +145,14 @@ pub struct SuiConfig {
     /// Shared force-inclusion Inbox object ID.
     #[serde(default)]
     pub inbox_id: Option<String>,
+    /// Path to the staged next signer key (suiprivkey) for cap rotation.
+    ///
+    /// Key ceremony: `keyring generate` mints the key here and the address is
+    /// funded with SUI; the sequencer pre-authorizes it with a rotation
+    /// request, claims it on schedule, swaps the running signers, and retires
+    /// the old key. Unset leaves the watcher in observe-only mode.
+    #[serde(default)]
+    pub rotation_key_path: Option<PathBuf>,
 }
 
 fn default_sui_rpc() -> String {
@@ -164,6 +172,7 @@ impl Default for SuiConfig {
             settler_cap_id: None,
             registry_id: None,
             inbox_id: None,
+            rotation_key_path: None,
         }
     }
 }

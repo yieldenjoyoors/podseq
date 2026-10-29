@@ -6,12 +6,13 @@ pub mod blob_id;
 pub mod bridge;
 pub mod deadline;
 pub mod inbox;
+pub mod rotation;
 pub mod settlement;
 pub mod wire;
 
 use podseq_core::{BlobId, Block, DataAvailability, Settlement};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
@@ -118,8 +119,10 @@ pub struct Client {
     http: reqwest::Client,
     config: Config,
     settlement: Option<Arc<Mutex<SettlementSigner>>>,
-    /// Snapshot of the settlement signer's address, for lock-free queries.
-    settlement_sender: Option<sui_sdk_types::Address>,
+    /// Snapshot of the settlement signer's address, shared across client
+    /// clones and swapped atomically by the rotation watcher, so every clone
+    /// observes the hot-swapped key lock-free.
+    settlement_sender: Option<Arc<RwLock<sui_sdk_types::Address>>>,
 }
 
 impl Client {
@@ -137,7 +140,7 @@ impl Client {
 
     /// Attaches a settlement signer, enabling on-chain commitments.
     pub fn with_settlement(mut self, settlement: SettlementSigner) -> Self {
-        self.settlement_sender = Some(settlement.sender());
+        self.settlement_sender = Some(Arc::new(RwLock::new(settlement.sender())));
         self.settlement = Some(Arc::new(Mutex::new(settlement)));
         self
     }
@@ -146,13 +149,37 @@ impl Client {
         self.settlement.is_some()
     }
 
+    /// Returns a handle to the shared settlement signer, for the rotation
+    /// watcher's in-place key swap. `None` without a settlement signer.
+    pub fn settlement_handle(&self) -> Option<Arc<Mutex<SettlementSigner>>> {
+        self.settlement.clone()
+    }
+
+    /// Returns the shared address-snapshot handle (see [`Self::settlement_sender`]).
+    pub fn settlement_sender_handle(&self) -> Option<Arc<RwLock<sui_sdk_types::Address>>> {
+        self.settlement_sender.clone()
+    }
+
+    /// Returns the settlement key's Sui address, or `None` if no settlement
+    /// signer is attached. Reads the shared snapshot, so a rotation swap is
+    /// visible to every client clone.
+    pub fn settlement_sender(&self) -> Option<sui_sdk_types::Address> {
+        Some(
+            *self
+                .settlement_sender
+                .as_ref()?
+                .read()
+                .expect("address snapshot"),
+        )
+    }
+
     /// Returns the settlement key's SUI balance in mistos, or `None` if no
     /// settlement signer is attached.
     ///
     /// Read-only: queries the Sui RPC directly without taking the settlement
     /// lock, so it never blocks `commit`.
     pub async fn sui_balance(&self) -> Result<Option<u64>, Error> {
-        let Some(owner) = self.settlement_sender else {
+        let Some(owner) = self.settlement_sender() else {
             return Ok(None);
         };
         settlement::sui_balance(&self.config.sui_rpc_url, &owner.to_hex())
@@ -382,6 +409,66 @@ mod tests {
         assert!(client.publisher_url().contains("walrus-testnet"));
         assert!(client.aggregator_url().contains("aggregator"));
         assert_eq!(client.rpc_url(), "https://fullnode.testnet.sui.io:443");
+    }
+
+    /// Writes a throwaway suiprivkey file for signer construction.
+    fn temp_key(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "podseq-rotation-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = sui_crypto::ed25519::Ed25519PrivateKey::new([0x5E; 32]);
+        let path = dir.join("sequencer.key");
+        std::fs::write(&path, key.to_suiprivkey().unwrap()).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn signer_swap_is_visible_across_client_clones() {
+        // The rotation watcher swaps the shared signer and its address
+        // snapshot; clones must observe the new address without rebuilds.
+        let signer = SettlementSigner::new(
+            &temp_key("swap"),
+            "0x2",
+            "0x3",
+            "0x4",
+            "0x5",
+            "http://localhost:9000",
+        )
+        .unwrap();
+        let old_sender = signer.sender();
+        let client = Client::new(Config::default())
+            .unwrap()
+            .with_settlement(signer);
+        let clone = client.clone();
+
+        let new_key = sui_crypto::ed25519::Ed25519PrivateKey::new([0x77; 32]);
+        let new_sender = new_key.public_key().derive_address();
+        let handle = client.settlement_handle().unwrap();
+        {
+            let mut guard = handle.lock().await;
+            guard.swap_key(new_key);
+        }
+        *client.settlement_sender_handle().unwrap().write().unwrap() = new_sender;
+
+        assert_ne!(old_sender, new_sender);
+        assert_eq!(
+            clone.settlement_handle().unwrap().lock().await.sender(),
+            new_sender
+        );
+        assert_eq!(clone.settlement_sender(), Some(new_sender));
+    }
+
+    #[test]
+    fn client_without_settlement_has_no_rotation_handles() {
+        let client = Client::new(Config::default()).unwrap();
+        assert!(client.settlement_handle().is_none());
+        assert!(client.settlement_sender_handle().is_none());
+        assert!(client.settlement_sender().is_none());
     }
 
     #[tokio::test]

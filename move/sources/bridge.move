@@ -16,6 +16,7 @@
 /// same way a full node reads settled heights: by fetching each nonce's dynamic
 /// field object id. This mirrors `settlement::commitment_at`.
 module podseq::bridge {
+    use podseq::rotation;
     use sui::coin::{Self, Coin};
     use sui::bag::{Self, Bag};
     use sui::object::{Self, UID};
@@ -33,6 +34,8 @@ module podseq::bridge {
     const E_INSUFFICIENT_LIQUIDITY: u64 = 1;
     /// L2 recipient must be exactly 20 bytes.
     const E_INVALID_RECIPIENT: u64 = 2;
+    /// The capability gate moved into rotation state; `withdraw` is retired.
+    const E_ROTATED: u64 = 3;
 
     /// Authorizes the sequencer to release locked coins. Transferred to the
     /// operator at initialization; transferable for sequencer rotation.
@@ -140,18 +143,46 @@ module podseq::bridge {
         });
     }
 
-    /// Releases `amount` of coin type `T` to `recipient` on Sui.
+    /// Retired: the capability gate moved into rotation state on the Vault.
     ///
-    /// Only the `BridgeCap` holder (the sequencer) calls this, in response to a
-    /// burn observed on L2. `l2_nonce` is the L2 withdrawal nonce that triggered
-    /// the release, replayed in the event so indexers can correlate the two sides.
-    ///
-    /// Idempotent per `(T, l2_nonce)`: re-submitting the same burn is a no-op that
-    /// returns `false` (transaction still succeeds). This is what makes a relayer
-    /// crash safe — the relayer advances its cursor on tx success, and a replay
-    /// can never release coins twice.
+    /// The signature is frozen by Sui's upgrade-compatibility rules, so the
+    /// entrypoint stays and aborts instead. The relayer calls
+    /// [`withdraw_as`]; entombment (`entomb_bridge_cap`) makes this input
+    /// impossible to provide, and this abort is defense in depth.
+    #[allow(unused_type_parameter)]
     public fun withdraw<T>(
         _cap: &BridgeCap,
+        _vault: &mut Vault,
+        _recipient: address,
+        _amount: u64,
+        _l2_nonce: u64,
+        _ctx: &mut TxContext,
+    ): bool {
+        abort E_ROTATED
+    }
+
+    /// Releases `amount` of coin type `T` to `recipient` on Sui as the
+    /// rotation-state authority (or the previous authority inside its grace
+    /// window).
+    ///
+    /// `l2_nonce` is the L2 withdrawal nonce that triggered the release,
+    /// replayed in the `Withdrawal` event for indexer correlation. Idempotent
+    /// per `(T, l2_nonce)`: re-submitting the same burn is a no-op that
+    /// returns `false`, so a relayer crash can never release coins twice.
+    public fun withdraw_as<T>(
+        vault: &mut Vault,
+        clock: &sui::clock::Clock,
+        recipient: address,
+        amount: u64,
+        l2_nonce: u64,
+        ctx: &mut TxContext,
+    ): bool {
+        rotation::assert_can_act(&vault.id, clock, ctx);
+        do_withdraw<T>(vault, recipient, amount, l2_nonce, ctx)
+    }
+
+    /// The withdraw body shared by the rotation-aware entrypoint.
+    fun do_withdraw<T>(
         vault: &mut Vault,
         recipient: address,
         amount: u64,
@@ -181,6 +212,47 @@ module podseq::bridge {
         });
         transfer::public_transfer(coin, recipient);
         true
+    }
+
+    /// Entombs the BridgeCap inside the Vault and initializes rotation state
+    /// with the sender as authority. The migration step after a package
+    /// upgrade; ideally in the same programmable transaction block as the
+    /// upgrade, signed by the current cap owner.
+    public fun entomb_bridge_cap(cap: BridgeCap, vault: &mut Vault, ctx: &TxContext) {
+        rotation::entomb(&mut vault.id, cap, ctx)
+    }
+
+    /// Pre-authorizes `to` to claim the bridge authority after `delay_ms`.
+    public fun request_rotation(
+        vault: &mut Vault,
+        clock: &sui::clock::Clock,
+        to: address,
+        delay_ms: u64,
+        ctx: &TxContext,
+    ) {
+        rotation::request_rotation(&mut vault.id, to, delay_ms, clock, ctx)
+    }
+
+    /// Cancels the pending bridge rotation. Authority only.
+    public fun cancel_rotation(vault: &mut Vault, ctx: &TxContext) {
+        rotation::cancel_rotation(&mut vault.id, ctx)
+    }
+
+    /// Claims the bridge authority. Pending target only, inside the claim
+    /// window; starts the previous owner's grace window.
+    public fun claim_rotation(vault: &mut Vault, clock: &sui::clock::Clock, ctx: &TxContext) {
+        rotation::claim_rotation(&mut vault.id, clock, ctx)
+    }
+
+    /// Retires the previous bridge authority early. Authority only.
+    public fun retire_previous(vault: &mut Vault, ctx: &TxContext) {
+        rotation::retire_previous(&mut vault.id, ctx)
+    }
+
+    /// Borrows the bridge rotation state (for indexers and tests; the node
+    /// reads the dynamic field's BCS directly).
+    public fun rotation_state(vault: &Vault): &rotation::RotationState {
+        rotation::state(&vault.id)
     }
 
     /// Returns the next deposit nonce to be assigned.
@@ -228,10 +300,71 @@ module podseq::bridge {
 
     #[test_only]
     use sui::balance;
+    #[test_only]
+    use sui::clock;
+    #[test_only]
+    use sui::dynamic_field as df;
+    #[test_only]
+    use std::option;
 
     /// Phantom coin type standing in for a real bridged asset.
     #[test_only]
     public struct TestCoin has drop {}
+
+    /// Mirrors `rotation::E_*`; constants are module-private there.
+    #[test_only]
+    const E_NOT_AUTHORIZED_FOR_TEST: u64 = 0;
+    #[test_only]
+    const E_NOT_CLAIM_TARGET_FOR_TEST: u64 = 2;
+    #[test_only]
+    const E_CLAIM_TOO_EARLY_FOR_TEST: u64 = 3;
+
+    #[test_only]
+    const ALICE: address = @0xA;
+    #[test_only]
+    const BOB: address = @0xB;
+
+    /// Sender-switching test context; `dummy` pins the sender to @0x0.
+    ///
+    /// `tx_context::sender` reads a runtime native: in unit tests the
+    /// effective sender is the one from the most recently *constructed*
+    /// context, so bind a fresh context before every sender-sensitive call.
+    #[test_only]
+    fun ctx_for(sender: address, hint: u64): TxContext {
+        tx_context::new_from_hint(sender, hint, 0, 0, 0)
+    }
+
+    #[test_only]
+    fun test_cap(ctx: &mut TxContext): BridgeCap {
+        BridgeCap { id: object::new(ctx) }
+    }
+
+    /// A vault whose cap is entombed, so `withdraw_as` is callable.
+    #[test_only]
+    fun rotated_vault_for_testing(ctx: &mut TxContext): Vault {
+        let mut vault = test_vault(ctx);
+        entomb_bridge_cap(test_cap(ctx), &mut vault, ctx);
+        vault
+    }
+
+    /// Removes the entombed cap and rotation state so tests can destroy the
+    /// vault.
+    #[test_only]
+    fun destroy_rotation_for_testing(vault: &mut Vault) {
+        let _ = df::remove<rotation::StateKey, rotation::RotationState>(
+            &mut vault.id,
+            rotation::state_key(),
+        );
+        let cap = df::remove<rotation::TombKey, BridgeCap>(&mut vault.id, rotation::tomb_key());
+        let BridgeCap { id } = cap;
+        id.delete();
+    }
+
+    /// Removes a processed-withdrawal marker so the table can be destroyed.
+    #[test_only]
+    fun clear_withdrawal_for_testing<T>(vault: &mut Vault, l2_nonce: u64) {
+        table::remove<vector<u8>, bool>(&mut vault.processed_withdrawals, withdraw_key<T>(l2_nonce));
+    }
 
     #[test_only]
     fun test_vault(ctx: &mut TxContext): Vault {
@@ -314,5 +447,162 @@ module podseq::bridge {
     fun drain_test_reserve<T: drop>(vault: &mut Vault) {
         let held = bag::remove<vector<u8>, Coin<T>>(&mut vault.reserves, type_key<T>());
         balance::destroy_for_testing(coin::into_balance(held));
+    }
+
+    #[test]
+    fun withdraw_as_releases_idempotently_per_l2_nonce() {
+        let ctx = &mut ctx_for(ALICE, 1);
+        let mut vault = rotated_vault_for_testing(ctx);
+        let clock = clock::create_for_testing(ctx);
+
+        let coin = coin::mint_for_testing<TestCoin>(250, ctx);
+        deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, ctx);
+
+        assert!(withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 100, 7, ctx), 0);
+        assert!(reserve<TestCoin>(&vault) == 150, 0);
+        assert!(withdraw_nonce(&vault) == 1, 0);
+
+        // Crash-retry of the same L2 burn: no-op success.
+        assert!(!withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 100, 7, ctx), 0);
+        assert!(reserve<TestCoin>(&vault) == 150, 0);
+        assert!(withdraw_nonce(&vault) == 1, 0);
+
+        // A distinct L2 nonce releases again.
+        assert!(withdraw_as<TestCoin>(&mut vault, &clock, @0x2, 50, 8, ctx), 0);
+        assert!(reserve<TestCoin>(&vault) == 100, 0);
+
+        clock::destroy_for_testing(clock);
+        drain_test_reserve<TestCoin>(&mut vault);
+        let rec = table::remove(&mut vault.deposits, 0);
+        let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } = rec;
+        clear_withdrawal_for_testing<TestCoin>(&mut vault, 7);
+        clear_withdrawal_for_testing<TestCoin>(&mut vault, 8);
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED_FOR_TEST, location = rotation)]
+    fun withdraw_as_requires_the_authority() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut vault = rotated_vault_for_testing(&mut ctx_a);
+        let clock = clock::create_for_testing(&mut ctx_a);
+
+        let mut ctx_b = ctx_for(BOB, 2);
+        withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 1, 7, &mut ctx_b);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+    }
+
+    #[test]
+    fun bridge_rotation_swaps_release_authority() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut vault = rotated_vault_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        let coin = coin::mint_for_testing<TestCoin>(100, &mut ctx_a);
+        deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, &mut ctx_a);
+        assert!(withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 10, 7, &mut ctx_a), 0);
+
+        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ctx_b = ctx_for(BOB, 2);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut vault, &clock, &ctx_b);
+        assert!(rotation::authority(rotation_state(&vault)) == BOB);
+
+        // The new authority releases; the old one still releases in grace.
+        let mut ctx_b_mut = ctx_for(BOB, 5);
+        assert!(withdraw_as<TestCoin>(&mut vault, &clock, @0x2, 10, 8, &mut ctx_b_mut), 0);
+        let mut ctx_a2 = ctx_for(ALICE, 3);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms() + rotation::prev_grace_ms());
+        assert!(withdraw_as<TestCoin>(&mut vault, &clock, @0x3, 10, 9, &mut ctx_a2), 0);
+
+        let ctx_b2 = ctx_for(BOB, 4);
+        retire_previous(&mut vault, &ctx_b2);
+
+        clock::destroy_for_testing(clock);
+        drain_test_reserve<TestCoin>(&mut vault);
+        let rec = table::remove(&mut vault.deposits, 0);
+        let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } = rec;
+        clear_withdrawal_for_testing<TestCoin>(&mut vault, 7);
+        clear_withdrawal_for_testing<TestCoin>(&mut vault, 8);
+        clear_withdrawal_for_testing<TestCoin>(&mut vault, 9);
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED_FOR_TEST, location = rotation)]
+    fun old_bridge_authority_is_rejected_after_retire_and_grace() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut vault = rotated_vault_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        let coin = coin::mint_for_testing<TestCoin>(100, &mut ctx_a);
+        deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, &mut ctx_a);
+
+        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ctx_b = ctx_for(BOB, 2);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut vault, &clock, &ctx_b);
+        retire_previous(&mut vault, &ctx_b);
+
+        let mut ctx_a2 = ctx_for(ALICE, 3);
+        clock::set_for_testing(
+            &mut clock,
+            rotation::min_delay_ms() + rotation::prev_grace_ms() + 1,
+        );
+        withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 10, 7, &mut ctx_a2);
+
+        clock::destroy_for_testing(clock);
+        drain_test_reserve<TestCoin>(&mut vault);
+        let rec = table::remove(&mut vault.deposits, 0);
+        let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } = rec;
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_CLAIM_TARGET_FOR_TEST, location = rotation)]
+    fun bridge_claim_by_the_wrong_owner_aborts() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut vault = rotated_vault_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        request_rotation(&mut vault, &clock, ALICE, rotation::min_delay_ms(), &ctx_a);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        let ctx_b = ctx_for(BOB, 2);
+        claim_rotation(&mut vault, &clock, &ctx_b);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+    }
+
+    #[test, expected_failure(abort_code = E_CLAIM_TOO_EARLY_FOR_TEST, location = rotation)]
+    fun bridge_claim_before_the_timelock_elapses_aborts() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut vault = rotated_vault_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms() - 1);
+        let ctx_b = ctx_for(BOB, 2);
+        claim_rotation(&mut vault, &clock, &ctx_b);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+    }
+
+    #[test, expected_failure(abort_code = E_ROTATED)]
+    fun withdraw_aborts_once_the_package_rotates() {
+        let ctx = &mut tx_context::dummy();
+        let mut vault = test_vault(ctx);
+        let cap = test_cap(ctx);
+
+        withdraw<TestCoin>(&cap, &mut vault, @0x1, 1, 7, ctx);
+
+        destroy_vault_empty(vault);
+        let BridgeCap { id } = cap;
+        id.delete();
     }
 }

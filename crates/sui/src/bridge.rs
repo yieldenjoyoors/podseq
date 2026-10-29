@@ -106,11 +106,29 @@ impl BridgeClient {
         })
     }
 
-    /// Releases `amount` of `coin_type` to `recipient` on Sui via `bridge::withdraw`.
+    /// Returns the configured BridgeCap object id.
+    ///
+    /// Unused by releases after the rotation upgrade (`withdraw_as` takes no
+    /// cap); kept for the entombment ceremony tooling.
+    pub fn cap(&self) -> Address {
+        self.cap
+    }
+
+    /// Replaces the signing key in place (rotation hot-swap).
+    pub fn swap_key(&mut self, key: Ed25519PrivateKey) {
+        self.sender = key.public_key().derive_address();
+        self.key = key;
+        info!(sender = %self.sender, "bridge signer key swapped");
+    }
+
+    /// Releases `amount` of `coin_type` to `recipient` on Sui via
+    /// `bridge::withdraw_as`.
     ///
     /// `coin_type` is the Sui `TypeTag` (e.g. `0x2::sui::SUI`). `l2_nonce` is the
     /// L2 withdrawal nonce that triggered the release, recorded in the emitted
-    /// `Withdrawal` event for indexer correlation.
+    /// `Withdrawal` event for indexer correlation. After the rotation upgrade
+    /// the release gate lives in the Vault's rotation state, checked against
+    /// the sender; the frozen `withdraw` entrypoint aborts.
     pub async fn withdraw(
         &mut self,
         coin_type: TypeTag,
@@ -118,17 +136,17 @@ impl BridgeClient {
         amount: u64,
         l2_nonce: u64,
     ) -> Result<(), BridgeError> {
-        let function = bridge_function(self.package, "withdraw").with_type_args(vec![coin_type]);
+        let function = bridge_function(self.package, "withdraw_as").with_type_args(vec![coin_type]);
 
         let mut builder = TransactionBuilder::new();
-        let cap = builder.object(ObjectInput::new(self.cap));
         let vault = builder.object(ObjectInput::new(self.vault));
+        let clock = builder.object(ObjectInput::new(crate::deadline::SUI_CLOCK_ID));
         let recipient_arg = builder.pure(&recipient);
         let amount_arg = builder.pure(&amount);
         let l2_nonce_arg = builder.pure(&l2_nonce);
         builder.move_call(
             function,
-            vec![cap, vault, recipient_arg, amount_arg, l2_nonce_arg],
+            vec![vault, clock, recipient_arg, amount_arg, l2_nonce_arg],
         );
         builder.set_sender(self.sender);
 

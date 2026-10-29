@@ -43,7 +43,7 @@ pub(crate) fn load_signer(
 }
 
 /// Parses a hex object id, naming `label` in the error.
-pub(crate) fn parse_address(s: &str, label: &str) -> Result<Address, SettlementError> {
+pub fn parse_address(s: &str, label: &str) -> Result<Address, SettlementError> {
     s.parse()
         .map_err(|e| SettlementError::Parse(format!("{label} {s}: {e}")))
 }
@@ -189,6 +189,24 @@ impl Settlement {
         self.sender
     }
 
+    /// Returns the configured SettlerCap object id.
+    ///
+    /// Unused by commits after the rotation upgrade (`settle_as` takes no
+    /// cap); kept for the entombment ceremony tooling.
+    pub fn cap(&self) -> sui_sdk_types::Address {
+        self.cap
+    }
+
+    /// Replaces the signing key in place (rotation hot-swap).
+    ///
+    /// The next commit signs with the new key; callers share this signer
+    /// behind a mutex, so block production simply continues on it.
+    pub fn swap_key(&mut self, key: Ed25519PrivateKey) {
+        self.sender = key.public_key().derive_address();
+        self.key = key;
+        info!(sender = %self.sender, "settlement signer key swapped");
+    }
+
     /// Reads the inbox's `included_count` (the settle cursor) from Sui.
     pub async fn inbox_cursor(&mut self) -> Result<u64, SettlementError> {
         let mut rpc = self.rpc.clone();
@@ -256,6 +274,10 @@ impl Settlement {
 
     /// Builds the settle transaction for `header` + `blob` with the given
     /// inbox cursor.
+    ///
+    /// Targets `settlement::settle_as`: after the rotation upgrade the
+    /// capability gate lives in the Registry's rotation state, checked
+    /// against the sender, and the frozen `settle` entrypoint aborts.
     async fn build_settle_tx(
         &mut self,
         header: &Header,
@@ -265,13 +287,13 @@ impl Settlement {
         let function = Function::new(
             self.package,
             Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
-            Identifier::new("settle").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("settle_as").map_err(|e| SettlementError::Parse(e.to_string()))?,
         );
 
         let mut builder = TransactionBuilder::new();
-        let cap = builder.object(ObjectInput::new(self.cap));
         let registry = builder.object(ObjectInput::new(self.registry));
         let inbox = builder.object(ObjectInput::new(self.inbox));
+        let clock = builder.object(ObjectInput::new(crate::deadline::SUI_CLOCK_ID));
         let blob_id_arg = builder.pure(&blob.0.to_vec());
         let height_arg = builder.pure(&header.height);
         let block_ts_arg = builder.pure(&settle_block_ts(header.timestamp));
@@ -279,9 +301,9 @@ impl Settlement {
         builder.move_call(
             function,
             vec![
-                cap,
                 registry,
                 inbox,
+                clock,
                 blob_id_arg,
                 height_arg,
                 block_ts_arg,

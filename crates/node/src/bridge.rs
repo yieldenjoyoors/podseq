@@ -34,7 +34,7 @@ use podseq_sui::bridge::{deposit_at, vault_status};
 use serde::{Deserialize, Serialize};
 use sui_sdk_types::Address as SuiAddress;
 use sui_sdk_types::TypeTag;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 use tracing::{debug, info, warn};
 
 use crate::config::{BridgeConfig, Config};
@@ -266,6 +266,12 @@ impl BridgeRelayer {
             cursors_path,
             metrics,
         })
+    }
+
+    /// Returns a handle to the shared Sui bridge signer, for the rotation
+    /// watcher's in-place key swap.
+    pub fn sui_bridge_handle(&self) -> Arc<Mutex<podseq_sui::bridge::BridgeClient>> {
+        self.sui_bridge.clone()
     }
 
     /// Runs both relay loops until `shutdown` is set.
@@ -1156,14 +1162,17 @@ fn parse_hex_qty(s: &str) -> Result<u64> {
 /// handle and a shutdown flag for graceful drain. Returns `None` if the bridge
 /// is disabled in config.
 ///
-/// The relayer only starts once the L2 predeploy is initialized: setup retries
-/// with backoff, and the spawned task owns its own copy of `config` so it can
-/// persist Sui object IDs to `config_path` independently of the runner.
+/// `sui_bridge` receives the shared Sui bridge signer handle once the relayer
+/// is set up; the rotation watcher adopts it on a key swap. The relayer only
+/// starts once the L2 predeploy is initialized: setup retries with backoff,
+/// and the spawned task owns its own copy of `config` so it can persist Sui
+/// object IDs to `config_path` independently of the runner.
 pub fn spawn(
     config: Config,
     config_path: PathBuf,
     signer_key_path: PathBuf,
     metrics: Arc<crate::metrics::PodseqMetrics>,
+    sui_bridge: Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
 ) -> Option<(tokio::task::JoinHandle<()>, Arc<AtomicBool>)> {
     if !config.bridge.enabled {
         return None;
@@ -1177,6 +1186,7 @@ pub fn spawn(
             signer_key_path,
             shutdown_clone,
             metrics,
+            sui_bridge,
         )
         .await;
     });
@@ -1195,13 +1205,22 @@ async fn relay_until_ready(
     signer_key_path: PathBuf,
     shutdown: Arc<AtomicBool>,
     metrics: Arc<crate::metrics::PodseqMetrics>,
+    sui_bridge: Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
 ) {
     let backoff = Duration::from_secs(5);
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return;
         }
-        match setup_relayer(&mut config, &config_path, &signer_key_path, &metrics).await {
+        match setup_relayer(
+            &mut config,
+            &config_path,
+            &signer_key_path,
+            &metrics,
+            &sui_bridge,
+        )
+        .await
+        {
             Ok(relayer) => {
                 if let Err(e) = relayer.run(shutdown.clone()).await {
                     warn!(error = %e, "bridge relayer exited with error; will restart");
@@ -1239,6 +1258,7 @@ async fn setup_relayer(
     config_path: &Path,
     signer_key_path: &Path,
     metrics: &Arc<crate::metrics::PodseqMetrics>,
+    sui_bridge: &Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
 ) -> Result<BridgeRelayer> {
     let package_id = config
         .sui
@@ -1279,6 +1299,11 @@ async fn setup_relayer(
         Arc::clone(metrics),
     )
     .await
+    .inspect(|relayer| {
+        // Share the Sui signer with the rotation watcher (best-effort: the
+        // watcher polls the cell until the relayer is up).
+        let _ = sui_bridge.set(relayer.sui_bridge_handle());
+    })
 }
 
 // ---------- cursor persistence ----------

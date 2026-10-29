@@ -9,6 +9,7 @@ mod inbox;
 mod keyring;
 mod mcp;
 mod metrics;
+mod rotation;
 mod runner;
 mod settlement;
 mod store;
@@ -339,6 +340,16 @@ async fn start_sequencer(
     let settlement = settlement::setup_signer(&mut config, &config_path, &signer_key_path).await?;
     sui_client = sui_client.with_settlement(settlement);
 
+    // Rotation handles: clone before the runner consumes the client, so the
+    // watcher can hot-swap the shared signer and address snapshot.
+    let settlement_handle = sui_client
+        .settlement_handle()
+        .context("settlement signer handle missing after attach")?;
+    let sender_snapshot = sui_client
+        .settlement_sender_handle()
+        .context("settlement address snapshot missing after attach")?;
+    let rotation_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Refresh the SUI gas balance gauge periodically.
     {
         let metrics = Arc::clone(&podseq_metrics);
@@ -390,15 +401,38 @@ async fn start_sequencer(
     // Enshrined bridge relayer: runs concurrently with the production loop and is
     // deliberately NON-FATAL. The spawned task owns its own config copy and may
     // persist Sui object IDs to the config file independently of the runner.
+    let sui_bridge_signer = Arc::new(tokio::sync::OnceCell::new());
     let bridge_handle = bridge::spawn(
         config.clone(),
         config_path.clone(),
         signer_key_path.clone(),
         Arc::clone(&podseq_metrics),
+        Arc::clone(&sui_bridge_signer),
     );
+
+    // Cap-rotation watcher: derives its role from chain state on every poll,
+    // claims the staged key when the timelock elapses, swaps the running
+    // signers in place, and retires the old key. Non-fatal like the relayer;
+    // disabled without deployed contract IDs or a staged key.
+    let rotation_handle = rotation::spawn(
+        &config,
+        settlement_handle,
+        sender_snapshot,
+        sui_bridge_signer,
+        Arc::clone(&rotation_shutdown),
+    )
+    .await;
 
     info!("starting sequencer loop (Ctrl+C to stop)");
     let result = runner.run().await;
+
+    if let Some(handle) = rotation_handle {
+        // An in-flight rotation step is an idempotent on-chain transition, so
+        // dropping it is safe: the next boot re-derives the role from chain
+        // state.
+        rotation_shutdown.store(true, Ordering::SeqCst);
+        handle.abort();
+    }
 
     shutdown_metrics(metrics_handle, metrics_shutdown).await;
 
