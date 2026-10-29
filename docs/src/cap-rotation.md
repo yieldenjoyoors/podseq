@@ -346,8 +346,7 @@ Step 2 is deliberately a rotation of zero addresses: it proves the whole mechani
   `request_rotation`, so the hot sequencer key can never steer rotation.
 - **`UpgradeCap` custody** is the true backstop above all of this (an upgrade can
   repoint anything); its custody and aging policy is its own hardening item.
-- **Fuzzing and gas measurement** of the rotation state machine and the
-  `settle_as`/`withdraw_as` hot path land with the implementation follow-ups.
+- Fuzzing and gas measurement landed; see [Verification](#verification).
 
 ## Requirements mapping (K4)
 
@@ -359,3 +358,95 @@ Step 2 is deliberately a rotation of zero addresses: it proves the whole mechani
 | Node-runtime wallet switch without stopping production or relayer  | in-place signer swap under the existing lock; watcher drives it        |
 | Crash mid-window resumes in the correct role                       | role derived from chain state; idempotent on-chain steps               |
 | Independent verification without trusting the sequencer            | `RotationState` + events are plain shared-object state, readable like the inbox |
+
+## Verification
+
+Adversarial tests, fuzzing, and gas measurement against the implementation. The
+closing question: whether a Cap swap can proceed atomically with an in-flight
+settlement batch, without a race with the old owner. Answer: yes — every
+interleaving of old-key and new-key calls inside the rotation window is either a
+valid sequential history or a clean abort; nothing lands twice and nothing
+invalid. Evidence below.
+
+### Adversarial cases
+
+Sui linearizes a shared object's transactions, so "concurrent" old-owner calls
+mean interleaved ones; the tests pin every interleaving class. Sender-sensitive
+calls bind a fresh tx context (see the Move test helper pattern).
+
+| Case | Where pinned | Result |
+| --- | --- | --- |
+| The pre-authorized target acts before its claim | `rotation::the_preauthorized_target_cannot_act_without_claiming` | aborts `E_NOT_AUTHORIZED` — the staged key is nobody until the claim lands, so a half-rotated sequencer fails closed |
+| The previous authority steers during its grace window | `rotation::the_previous_owner_cannot_steer_during_grace` | aborts — grace authorizes settle/withdraw, never `request_rotation`/`cancel_rotation`/`retire_previous`; the old key cannot pre-authorize itself a way back in |
+| The previous authority retires itself mid-grace | `rotation::the_previous_owner_cannot_retire_itself_during_grace` | aborts — retiring is the current authority's one-way act |
+| Retire vs. the grace clock | `rotation::retiring_the_previous_kills_its_window_immediately` | the old key is rejected immediately after the one-way retire; the window is not kept open by the clock |
+| Settlement interleaved with the full rotation window | `settlement::settles_interleave_with_the_claim_and_retry_across_the_swap` | old-key settles run through pre-authorization and the timelock wait, both keys settle inside grace, a duplicate submission is an idempotent no-op across the swap, heights stay sequential, no settlement failure |
+| Old-key equivocation after the swap | `settlement::the_previous_owner_cannot_rewrite_a_height_after_the_swap` | aborts `E_CONFLICTING_BLOB` — grace never licenses re-signing a settled height with a different blob |
+| Half-rotation (Vault rotated, Registry not) | `bridge::the_vault_gate_rotates_independently_of_the_registry_gate` | the rotated key releases on the Vault while the stale key settles the Registry: each gate checks only its own record |
+| The staged key settles an unrotated Registry | `bridge::the_new_authority_cannot_settle_while_the_registry_is_unrotated` | aborts `E_NOT_AUTHORIZED` — fail-closed per object |
+
+Node-runtime crash drills (`drill_*` in `crates/sui/src/rotation.rs`) rebuild the
+watcher from chain state alone on every poll — exactly what a restarted node
+sees — and drive `plan` → `apply` to convergence:
+
+| Crash boundary | First step after restart | Converges to |
+| --- | --- | --- |
+| Before the claim | `claim` | `claim → adopt → retire`, both objects on the staged key, prev records cleared |
+| After the claim, before the swap | `adopt` (never `retire`) | `adopt → retire`; the signers are swapped before the old window closes |
+| After the swap, before the retire | `retire` | the guard's adoption marker carries; no repeated adopt |
+| Single-object claim (adversarial half-state) | refuse (`Misconfigured`) | no steps execute, chain state untouched — the node never half-adopts |
+| Node down through the whole grace window | `adopt` then `retire` | converges anyway; the stale prev record is cleared on the next poll |
+
+The watcher seam regression: an adopt that lands before the relayer's setup
+completes is recorded in the shared `AdoptedKey` holder, and every signer source
+prefers the holder over the key file — a relayer that comes up after a swap can
+no longer resurrect the previous key (`an_adopt_before_the_relayer_is_up_records_the_key_for_late_setup`,
+`a_relayer_starting_after_an_adopt_signs_with_the_adopted_key`).
+
+### Fuzzing
+
+`cargo fuzz` (libFuzzer + ASan, nightly toolchain; targets in `fuzz/`), fixed
+budget of 120 s per target:
+
+| Target | Execs | Crashes | What it covers |
+| --- | --- | --- | --- |
+| `rotation_state_machine` | 5,073,343 | 0 | BCS `parse_rotation_state` never panics on arbitrary bytes; `derive_role`/`plan` agree with the role table (restated as an oracle) over adversarial timestamps (0, `u64::MAX`, ±window/±grace offsets) and arbitrary authority records |
+| `settlement_deadline` | 8,218,185 | 0 | `classify` matches the documented boundary (`now > deadline + margin`, equality active), the Active/Halted/Violated split over `last_settled_ts`, and `parse_clock` never panics — the oracle computes the boundary independently, so an arithmetic regression (plain `+` overflow, `<` instead of `<=`) fails the run |
+
+The one crash the campaign surfaced was in the harness itself (a length guard in
+the rotation target read past short inputs), fixed before the recorded runs.
+
+### Gas (Sui testnet, live execution)
+
+Measured by executing the node's real PTBs against testnet
+(`crates/sui/examples/rotation_gas_bench.rs`; digests in
+`bench_state.gas.csv` next to the run state). MIST, 1 SUI = 10⁹ MIST;
+net = computation + storage − rebate.
+
+| Transaction | Computation | Storage | Rebate | Net |
+| --- | --- | --- | --- | --- |
+| `settle_as` (baseline, one block anchor) | 1,000,000 | 4,902,000 | 3,450,055 | **2,451,945** |
+| `request_rotation` (both objects, one PTB) | 1,000,000 | 9,462,000 | 8,853,115 | **1,608,885** |
+| `claim_rotation` (both objects, one PTB) | 1,000,000 | 9,462,000 | 10,068,993 | **393,007** |
+| `retire_previous` (both objects, one PTB) | 1,000,000 | 8,854,000 | 9,461,054 | **392,946** |
+| `settle_as` on the new authority (post-swap) | 1,000,000 | 4,902,000 | 3,450,055 | **2,451,945** |
+| `entomb_settler_cap` (one-time migration) | 1,000,000 | 6,513,200 | 3,039,696 | **4,473,504** |
+| `entomb_bridge_cap` (one-time migration) | 1,000,000 | 7,090,800 | 3,617,238 | **4,473,562** |
+
+Reading the table:
+
+- Computation is flat at the 1 M MIST floor for every call — the Move logic
+  (deadline check, sender check, state transition) is noise next to storage.
+- Storage is deposited for the records a transaction creates and refunded when
+  a later transaction removes them: the claim *deletes* the pending records, so
+  its rebate exceeds its storage and its net cost (393 k MIST ≈ 0.0004 SUI) is
+  the cheapest step in the whole protocol. A full rotation (request + claim +
+  retire) nets ≈ 2.4 M MIST — about the price of a single block-anchor settle.
+- Settlement is reproducible to the MIST across payers and heights (the two
+  `settle_as` rows are byte-identical), so the numbers above are stable
+  references, not samples.
+- The plan's first risk — whether Move + Sui gas economics can express
+  deadline/halt/rotation efficiently — resolves to yes: deadline and authority
+  checks add nothing measurable to computation, rotation state lives in
+  existing shared objects (no new object churn), and the timelock bookkeeping
+  pays for itself by being deleted at the claim.

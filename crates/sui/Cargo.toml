@@ -25,4 +25,5 @@ tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 tokio.workspace = true

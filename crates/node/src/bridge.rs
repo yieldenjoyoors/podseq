@@ -186,6 +186,7 @@ impl BridgeRelayer {
     pub async fn new(
         cfg: &BridgeConfig,
         sui_signer_key_path: &Path,
+        adopted_key: podseq_sui::rotation::AdoptedKey,
         package_id: &str,
         cap_id: &str,
         vault_id: &str,
@@ -230,7 +231,8 @@ impl BridgeRelayer {
             .await
             .context("reading chain id from Reth via eth_chainId")?;
 
-        let sui_bridge = podseq_sui::bridge::BridgeClient::new(
+        let sui_bridge = podseq_sui::bridge::BridgeClient::new_or_adopted(
+            &adopted_key,
             sui_signer_key_path,
             package_id,
             cap_id,
@@ -1173,6 +1175,7 @@ pub fn spawn(
     signer_key_path: PathBuf,
     metrics: Arc<crate::metrics::PodseqMetrics>,
     sui_bridge: Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
+    adopted_key: podseq_sui::rotation::AdoptedKey,
 ) -> Option<(tokio::task::JoinHandle<()>, Arc<AtomicBool>)> {
     if !config.bridge.enabled {
         return None;
@@ -1187,6 +1190,7 @@ pub fn spawn(
             shutdown_clone,
             metrics,
             sui_bridge,
+            adopted_key,
         )
         .await;
     });
@@ -1206,6 +1210,7 @@ async fn relay_until_ready(
     shutdown: Arc<AtomicBool>,
     metrics: Arc<crate::metrics::PodseqMetrics>,
     sui_bridge: Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
+    adopted_key: podseq_sui::rotation::AdoptedKey,
 ) {
     let backoff = Duration::from_secs(5);
     loop {
@@ -1218,6 +1223,7 @@ async fn relay_until_ready(
             &signer_key_path,
             &metrics,
             &sui_bridge,
+            &adopted_key,
         )
         .await
         {
@@ -1259,6 +1265,7 @@ async fn setup_relayer(
     signer_key_path: &Path,
     metrics: &Arc<crate::metrics::PodseqMetrics>,
     sui_bridge: &Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
+    adopted_key: &podseq_sui::rotation::AdoptedKey,
 ) -> Result<BridgeRelayer> {
     let package_id = config
         .sui
@@ -1270,13 +1277,25 @@ async fn setup_relayer(
         (Some(cap), Some(vault)) => (cap.clone(), vault.clone()),
         (None, None) => {
             info!(key = %signer_key_path.display(), "initializing bridge Vault on first start");
-            let deployed = podseq_sui::bridge::BridgeClient::initialize(
-                signer_key_path,
-                &config.sui.rpc_url,
-                package_id,
-            )
-            .await
-            .context("initializing bridge Vault on Sui")?;
+            // A rotation that completed while the relayer was down wins over
+            // the key file, so the fresh Vault's authority matches the
+            // Registry's.
+            let deployed = match adopted_key.get() {
+                Some(key) => podseq_sui::bridge::BridgeClient::initialize_with_key(
+                    key,
+                    &config.sui.rpc_url,
+                    package_id,
+                )
+                .await
+                .context("initializing bridge Vault on Sui")?,
+                None => podseq_sui::bridge::BridgeClient::initialize(
+                    signer_key_path,
+                    &config.sui.rpc_url,
+                    package_id,
+                )
+                .await
+                .context("initializing bridge Vault on Sui")?,
+            };
 
             config.bridge.cap_id = Some(deployed.cap_id.clone());
             config.bridge.vault_id = Some(deployed.vault_id.clone());
@@ -1290,6 +1309,7 @@ async fn setup_relayer(
     BridgeRelayer::new(
         &config.bridge,
         signer_key_path,
+        adopted_key.clone(),
         package_id,
         &cap_id,
         &vault_id,

@@ -31,7 +31,8 @@ use tokio::sync::{Mutex, OnceCell};
 use tracing::{error, info, warn};
 
 use podseq_sui::rotation::{
-    self, Action, AdoptionGuard, Plan, RotationExecutor, RotationTargets, RotationWatcher,
+    self, Action, AdoptedKey, AdoptionGuard, Plan, RotationExecutor, RotationTargets,
+    RotationWatcher,
 };
 use podseq_sui::SettlementSigner;
 
@@ -53,6 +54,9 @@ pub struct SwapSinks {
     settlement: Arc<Mutex<SettlementSigner>>,
     sender_snapshot: Arc<RwLock<Address>>,
     sui_bridge: Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
+    /// Records each adopt so a relayer that starts after the swap
+    /// initializes on the rotated key instead of the stale key file.
+    adopted_key: AdoptedKey,
     rpc_url: String,
     targets: RotationTargets,
 }
@@ -60,8 +64,14 @@ pub struct SwapSinks {
 impl SwapSinks {
     /// Swaps every Sui signer to `key` (settlement now, bridge as soon as it
     /// exists) and updates the address snapshot.
+    ///
+    /// The adopt is recorded in `adopted_key` unconditionally and first: the
+    /// relayer may not exist yet (its setup retries while the L2 predeploy
+    /// is missing), and a late `BridgeClient` built from the key file would
+    /// resurrect the previous key after the swap.
     async fn swap_signers(&self, key: &Ed25519PrivateKey) {
         let address = key.public_key().derive_address();
+        self.adopted_key.set(key.clone());
         self.settlement.lock().await.swap_key(key.clone());
         *self.sender_snapshot.write().expect("address snapshot") = address;
         if let Some(bridge) = self.sui_bridge.get() {
@@ -112,6 +122,7 @@ pub async fn spawn(
     settlement: Arc<Mutex<SettlementSigner>>,
     sender_snapshot: Arc<RwLock<Address>>,
     sui_bridge: Arc<OnceCell<Arc<Mutex<podseq_sui::bridge::BridgeClient>>>>,
+    adopted_key: AdoptedKey,
     shutdown: Arc<AtomicBool>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     let (package_id, registry_id, vault_id) = match (
@@ -165,6 +176,7 @@ pub async fn spawn(
         settlement,
         sender_snapshot,
         sui_bridge,
+        adopted_key,
         rpc_url: config.sui.rpc_url.clone(),
         targets: RotationTargets {
             package,
@@ -239,4 +251,97 @@ fn load_staged_key(path: &Path) -> Result<Ed25519PrivateKey> {
         .with_context(|| format!("reading staged rotation key {}", path.display()))?;
     podseq_core::parse_signer_key(raw.trim())
         .map_err(|e| anyhow::anyhow!("parsing staged rotation key: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Writes a throwaway suiprivkey file with a fixed scalar.
+    fn temp_key_file(tag: &str, scalar: [u8; 32]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "podseq-node-rotation-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sequencer.key");
+        std::fs::write(
+            &path,
+            Ed25519PrivateKey::new(scalar)
+                .to_suiprivkey()
+                .expect("static key encoding"),
+        )
+        .unwrap();
+        path
+    }
+
+    fn swap_sinks(tag: &str, adopted_key: AdoptedKey) -> SwapSinks {
+        let settlement = SettlementSigner::new(
+            &temp_key_file(tag, [0x5E; 32]),
+            "0x2",
+            "0x3",
+            "0x4",
+            "0x5",
+            "http://localhost:9000",
+        )
+        .unwrap();
+        SwapSinks {
+            settlement: Arc::new(Mutex::new(settlement)),
+            sender_snapshot: Arc::new(RwLock::new(Address::new([0xAA; 32]))),
+            sui_bridge: Arc::new(OnceCell::new()),
+            adopted_key,
+            rpc_url: "http://localhost:9000".to_string(),
+            targets: RotationTargets {
+                package: Address::new([0x01; 32]),
+                registry: Address::new([0x02; 32]),
+                vault: Address::new([0x03; 32]),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn an_adopt_before_the_relayer_is_up_records_the_key_for_late_setup() {
+        // Regression pin: the relayer's setup can complete AFTER the
+        // rotation adopt (it retries while the L2 predeploy is missing). The
+        // swap must record the adopted key so the late BridgeClient
+        // constructor prefers it over the stale key file.
+        let holder = AdoptedKey::new();
+        let sinks = swap_sinks("late-relay", holder.clone());
+        let staged = Ed25519PrivateKey::new([0x77; 32]);
+        let staged_addr = staged.public_key().derive_address();
+
+        assert!(sinks.sui_bridge.get().is_none());
+        sinks.swap_signers(&staged).await;
+
+        // The late relayer constructor resolves the adopted key.
+        assert_eq!(
+            holder.get().map(|k| k.public_key().derive_address()),
+            Some(staged_addr)
+        );
+        // The running settlement signer and the shared snapshot swapped too.
+        assert_eq!(sinks.settlement.lock().await.sender(), staged_addr);
+        assert_eq!(*sinks.sender_snapshot.read().unwrap(), staged_addr);
+    }
+
+    #[tokio::test]
+    async fn a_second_adopt_updates_the_holder_and_every_sink() {
+        let holder = AdoptedKey::new();
+        let sinks = swap_sinks("re-adopt", holder.clone());
+
+        let first = Ed25519PrivateKey::new([0x66; 32]);
+        sinks.swap_signers(&first).await;
+        let second = Ed25519PrivateKey::new([0x77; 32]);
+        let second_addr = second.public_key().derive_address();
+        sinks.swap_signers(&second).await;
+
+        assert_eq!(
+            holder.get().map(|k| k.public_key().derive_address()),
+            Some(second_addr)
+        );
+        assert_eq!(*sinks.sender_snapshot.read().unwrap(), second_addr);
+        assert_eq!(sinks.settlement.lock().await.sender(), second_addr);
+    }
 }

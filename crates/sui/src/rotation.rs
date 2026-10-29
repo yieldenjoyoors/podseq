@@ -21,6 +21,7 @@
 //! Every step is an idempotent on-chain transition, so a crash at any point
 //! replays to the same result. Design record: docs/src/cap-rotation.md.
 
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use sui_sdk_types::{Address, Identifier, StructTag, TypeTag};
@@ -227,6 +228,35 @@ pub trait RotationExecutor: Send + Sync + 'static {
         &'a self,
         staged_key: &'a Ed25519PrivateKey,
     ) -> InboxFuture<'a, Result<(), SettlementError>>;
+}
+
+/// The key the rotation watcher adopted, shared with signer sources that
+/// come up after the swap.
+///
+/// A relayer that starts while the node is already on the staged key (its
+/// setup was crash-looping, or the bridge task lost the race with the
+/// adopt) must not reload the configured key file — that file still holds
+/// the previous key, which the on-chain gate rejects once the grace window
+/// closes or the previous authority is retired. Every signer constructor
+/// that takes a holder prefers it over the file.
+#[derive(Clone, Default)]
+pub struct AdoptedKey(Arc<RwLock<Option<Ed25519PrivateKey>>>);
+
+impl AdoptedKey {
+    /// Creates an empty holder.
+    pub fn new() -> Self {
+        Self(Arc::new(RwLock::new(None)))
+    }
+
+    /// Records the adopted key. Idempotent; the latest adopt wins.
+    pub fn set(&self, key: Ed25519PrivateKey) {
+        *self.0.write().expect("adopted key holder") = Some(key);
+    }
+
+    /// Returns the adopted key, if any.
+    pub fn get(&self) -> Option<Ed25519PrivateKey> {
+        self.0.read().expect("adopted key holder").clone()
+    }
 }
 
 /// Records when the staged key was adopted, so the retire step waits out one
@@ -1140,5 +1170,255 @@ mod tests {
         assert_eq!(DEFAULT_DELAY_MS, 86_400_000);
         assert_eq!(CLAIM_WINDOW_MS, 604_800_000);
         assert_eq!(PREV_GRACE_MS, 600_000);
+    }
+
+    // ---------- crash drills: restart at every phase boundary ----------
+
+    /// Chain state a drill boots from; the executor mutates it the way the
+    /// real PTBs mutate the chain.
+    struct ChainState {
+        settlement: RotationState,
+        vault: RotationState,
+        now_ms: u64,
+    }
+
+    /// Executor that applies each step's on-chain effect to a shared
+    /// [`ChainState`], so the drill loop can rebuild the watcher from chain
+    /// state alone on every poll — exactly what a restarted node sees.
+    struct ChainExecutor {
+        chain: Arc<std::sync::Mutex<ChainState>>,
+        log: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        active: Address,
+        staged_addr: Address,
+    }
+
+    impl ChainExecutor {
+        fn new(chain: ChainState) -> (Self, Arc<std::sync::Mutex<ChainState>>) {
+            let chain = Arc::new(std::sync::Mutex::new(chain));
+            let executor = Self {
+                chain: Arc::clone(&chain),
+                log: Arc::new(std::sync::Mutex::new(Vec::new())),
+                active: ALICE,
+                staged_addr: BOB,
+            };
+            (executor, chain)
+        }
+
+        fn steps(&self) -> Vec<&'static str> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl RotationExecutor for ChainExecutor {
+        fn claim<'a>(
+            &'a self,
+            _staged_key: &'a Ed25519PrivateKey,
+        ) -> InboxFuture<'a, Result<(), SettlementError>> {
+            Box::pin(async move {
+                let until_ms;
+                {
+                    let mut chain = self.chain.lock().unwrap();
+                    until_ms = chain.now_ms.saturating_add(PREV_GRACE_MS);
+                    let state = &mut *chain;
+                    for parent in [&mut state.settlement, &mut state.vault] {
+                        parent.authority = self.staged_addr;
+                        parent.prev = Some(PreviousAuthority {
+                            addr: self.active,
+                            until_ms,
+                        });
+                        parent.pending = None;
+                    }
+                }
+                self.log.lock().unwrap().push("claim");
+                Ok(())
+            })
+        }
+
+        fn adopt<'a>(
+            &'a self,
+            _staged_key: &'a Ed25519PrivateKey,
+        ) -> InboxFuture<'a, Result<(), SettlementError>> {
+            Box::pin(async move {
+                // The real adopt swaps in-memory signers: no chain change.
+                self.log.lock().unwrap().push("adopt");
+                Ok(())
+            })
+        }
+
+        fn retire_previous<'a>(
+            &'a self,
+            _staged_key: &'a Ed25519PrivateKey,
+        ) -> InboxFuture<'a, Result<(), SettlementError>> {
+            Box::pin(async move {
+                let mut chain = self.chain.lock().unwrap();
+                chain.settlement.prev = None;
+                chain.vault.prev = None;
+                drop(chain);
+                self.log.lock().unwrap().push("retire");
+                Ok(())
+            })
+        }
+    }
+
+    /// Drives plan→apply polls against a chain the executor mutates, until
+    /// the plan goes idle or refuses. The watcher is rebuilt from chain
+    /// state on every poll; `guard` and `executor` model one process
+    /// lifetime (a restart constructs fresh ones, which is how the tests
+    /// kill the watcher at a boundary).
+    async fn drill(
+        chain: &Arc<std::sync::Mutex<ChainState>>,
+        executor: &ChainExecutor,
+        guard: &AdoptionGuard,
+        key: &Ed25519PrivateKey,
+    ) -> Plan {
+        let package = Address::new([0x21; 32]);
+        for _ in 0..8 {
+            let (transport, _, registry, vault) = {
+                let snapshot = chain.lock().unwrap();
+                mock_chain(&snapshot.settlement, &snapshot.vault, snapshot.now_ms)
+            };
+            let watcher =
+                RotationWatcher::new(transport, package, registry, vault, ALICE, Some(BOB));
+            let plan = watcher.plan().await.unwrap();
+            if plan == Plan::Idle {
+                return plan;
+            }
+            let action = apply(&plan, Some(key), executor, guard).await.unwrap();
+            if matches!(action, Action::Idle | Action::Refused) {
+                return plan;
+            }
+        }
+        panic!("drill did not converge to an idle plan");
+    }
+
+    #[tokio::test]
+    async fn drill_a_crash_before_the_claim_resumes_and_converges() {
+        // Chain at boot: the pre-authorization landed and the timelock
+        // elapsed. The first step of the restarted watcher must be the
+        // claim; from there adopt and retire follow to the settled state.
+        let chain_state = ChainState {
+            settlement: state(ALICE, None, Some((BOB, 1_000))),
+            vault: state(ALICE, None, Some((BOB, 1_000))),
+            now_ms: 1_000,
+        };
+        let (executor, chain) = ChainExecutor::new(chain_state);
+        let guard = AdoptionGuard::new(Duration::ZERO);
+        let key = staged_key();
+
+        let plan = drill(&chain, &executor, &guard, &key).await;
+        assert_eq!(plan, Plan::Idle);
+        assert_eq!(executor.steps(), vec!["claim", "adopt", "retire"]);
+        let end = chain.lock().unwrap();
+        assert_eq!(end.settlement.authority, BOB);
+        assert_eq!(end.vault.authority, BOB);
+        assert!(end.settlement.prev.is_none() && end.vault.prev.is_none());
+    }
+
+    #[tokio::test]
+    async fn drill_a_crash_between_claim_and_adopt_swaps_before_retiring() {
+        // Chain at boot: the claim landed, the node died before the swap.
+        // The restarted watcher's first step must adopt (swap the signers),
+        // never retire — retiring without the swap in place is what a
+        // naive "submit retire" resume would do.
+        let chain_state = ChainState {
+            settlement: state(BOB, Some((ALICE, 1_000 + PREV_GRACE_MS)), None),
+            vault: state(BOB, Some((ALICE, 1_000 + PREV_GRACE_MS)), None),
+            now_ms: 1_001,
+        };
+        let (executor, chain) = ChainExecutor::new(chain_state);
+        let guard = AdoptionGuard::new(Duration::ZERO);
+        let key = staged_key();
+
+        let plan = drill(&chain, &executor, &guard, &key).await;
+        assert_eq!(plan, Plan::Idle);
+        assert_eq!(executor.steps().first(), Some(&"adopt"));
+        assert_eq!(executor.steps(), vec!["adopt", "retire"]);
+        assert!(chain.lock().unwrap().settlement.prev.is_none());
+    }
+
+    #[tokio::test]
+    async fn drill_a_crash_between_adopt_and_retire_loses_nothing() {
+        // Chain at boot: adopt done in the crashed process (guard carries
+        // the marker). The only remaining step is the retire.
+        let chain_state = ChainState {
+            settlement: state(BOB, Some((ALICE, 1_000 + PREV_GRACE_MS)), None),
+            vault: state(BOB, Some((ALICE, 1_000 + PREV_GRACE_MS)), None),
+            now_ms: 1_001,
+        };
+        let (executor, chain) = ChainExecutor::new(chain_state);
+        let guard = AdoptionGuard::new(Duration::ZERO);
+        guard.mark_adopted();
+        let key = staged_key();
+
+        let plan = drill(&chain, &executor, &guard, &key).await;
+        assert_eq!(plan, Plan::Idle);
+        assert_eq!(executor.steps(), vec!["retire"]);
+    }
+
+    #[tokio::test]
+    async fn drill_a_half_claimed_chain_refuses_instead_of_half_adopting() {
+        // Adversarial chain state (a manual single-object claim): the
+        // Registry is on the staged key, the Vault still pre-authorized.
+        // The plan must refuse — swapping the signers would point the
+        // relayer at a key that cannot settle — and leave the chain as is.
+        let chain_state = ChainState {
+            settlement: state(BOB, Some((ALICE, 1_000 + PREV_GRACE_MS)), None),
+            vault: state(ALICE, None, Some((BOB, 1_000))),
+            now_ms: 1_001,
+        };
+        let (executor, chain) = ChainExecutor::new(chain_state);
+        let guard = AdoptionGuard::new(Duration::ZERO);
+        let key = staged_key();
+
+        let plan = drill(&chain, &executor, &guard, &key).await;
+        assert_eq!(plan, Plan::Misconfigured);
+        assert!(executor.steps().is_empty());
+        let end = chain.lock().unwrap();
+        assert_eq!(end.vault.authority, ALICE);
+        assert!(end.vault.pending.is_some());
+    }
+
+    #[tokio::test]
+    async fn drill_a_node_down_through_the_whole_grace_still_converges() {
+        // Chain at boot: the claim landed and the grace window already
+        // expired while the node was down. The plan is Retire (stale prev
+        // record), and apply must still swap the signers first.
+        let chain_state = ChainState {
+            settlement: state(BOB, Some((ALICE, 1_000)), None),
+            vault: state(BOB, Some((ALICE, 1_000)), None),
+            now_ms: 1_000 + PREV_GRACE_MS + 1,
+        };
+        let (executor, chain) = ChainExecutor::new(chain_state);
+        let guard = AdoptionGuard::new(Duration::ZERO);
+        let key = staged_key();
+
+        let plan = drill(&chain, &executor, &guard, &key).await;
+        assert_eq!(plan, Plan::Idle);
+        assert_eq!(executor.steps(), vec!["adopt", "retire"]);
+    }
+
+    // ---------- adopted-key holder ----------
+
+    #[test]
+    fn the_adopted_key_holder_starts_empty_and_keeps_the_latest() {
+        let holder = AdoptedKey::new();
+        assert!(holder.get().is_none());
+
+        let first = Ed25519PrivateKey::new([0x11; 32]);
+        let first_addr = first.public_key().derive_address();
+        holder.set(first);
+        assert_eq!(
+            holder.get().map(|k| k.public_key().derive_address()),
+            Some(first_addr)
+        );
+
+        // A re-adopt (rotation to a third key) overwrites.
+        let second = Ed25519PrivateKey::new([0x22; 32]);
+        let second_addr = second.public_key().derive_address();
+        holder.set(second);
+        assert_eq!(
+            holder.get().map(|k| k.public_key().derive_address()),
+            Some(second_addr)
+        );
     }
 }

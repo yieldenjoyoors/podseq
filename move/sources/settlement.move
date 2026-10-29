@@ -196,8 +196,10 @@ module podseq::settlement {
     }
 
     /// Destroys a registry after removing every commitment it recorded.
+    /// Public test-only: the bridge module's cross-object gate tests build
+    /// and tear down registries too.
     #[test_only]
-    fun destroy_registry(registry: Registry) {
+    public fun destroy_registry(registry: Registry) {
         let Registry { id, latest_height, mut commitments } = registry;
         let mut height = latest_height;
         while (height > 0) {
@@ -329,17 +331,18 @@ module podseq::settlement {
     }
 
     /// A registry whose cap is entombed, so `settle_as` is callable.
+    /// Public test-only: used by the bridge module's cross-object tests.
     #[test_only]
-    fun rotated_registry_for_testing(ctx: &mut TxContext): Registry {
+    public fun rotated_registry_for_testing(ctx: &mut TxContext): Registry {
         let mut registry = registry_for_testing(ctx);
         entomb_settler_cap(test_cap(ctx), &mut registry, ctx);
         registry
     }
 
     /// Removes the entombed cap and the rotation state so tests can destroy
-    /// the registry.
+    /// the registry. Public test-only (see [`rotated_registry_for_testing`]).
     #[test_only]
-    fun destroy_rotation_for_testing(registry: &mut Registry) {
+    public fun destroy_rotation_for_testing(registry: &mut Registry) {
         let _ = df::remove<rotation::StateKey, rotation::RotationState>(
             &mut registry.id,
             rotation::state_key(),
@@ -627,9 +630,80 @@ module podseq::settlement {
     }
 
     /// Drains pending entries so the inbox can be destroyed in these tests.
+    /// Public test-only (see [`rotated_registry_for_testing`]).
     #[test_only]
-    fun destroy_inbox_helper(mut inbox: inbox::Inbox) {
+    public fun destroy_inbox_helper(mut inbox: inbox::Inbox) {
         inbox::drain_for_testing(&mut inbox);
         inbox::destroy_inbox_for_testing(inbox);
+    }
+
+    // ---------- adversarial: settlement across the rotation window ----------
+
+    #[test]
+    fun settles_interleave_with_the_claim_and_retry_across_the_swap() {
+        let mut ctx_a = ctx_for(ALICE, 31);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        // Pre-authorization phase: the sitting authority settles.
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a);
+        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+
+        // Timelock wait: the old key keeps settling; heights stay sequential.
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms() / 2);
+        let ctx_a2 = ctx_for(ALICE, 32);
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-2", 2, 2_000, 0, &ctx_a2);
+
+        // Claim at the eligibility point, then both keys settle inside the
+        // grace window: either interleaving is a valid sequential history.
+        let ctx_b = ctx_for(BOB, 33);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut registry, &clock, &ctx_b);
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-3", 3, 3_000, 0, &ctx_b);
+
+        let ctx_a3 = ctx_for(ALICE, 34);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms() + rotation::prev_grace_ms());
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-4", 4, 4_000, 0, &ctx_a3);
+
+        // A crash-retry of the old key's block under the new key: same
+        // height, same blob — the idempotent branch, not a second apply.
+        let ctx_b2 = ctx_for(BOB, 35);
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-4", 4, 0, 0, &ctx_b2);
+
+        assert!(latest_height(&registry) == 4);
+        assert!(commitment(&registry, 4) == b"blob-4");
+        assert!(inbox::included_count(&inbox) == 0);
+
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_CONFLICTING_BLOB)]
+    fun the_previous_owner_cannot_rewrite_a_height_after_the_swap() {
+        let mut ctx_a = ctx_for(ALICE, 36);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a);
+        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ctx_b = ctx_for(BOB, 37);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut registry, &clock, &ctx_b);
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-2", 2, 2_000, 0, &ctx_b);
+
+        // Inside grace the old key still settles new heights, but re-signing
+        // an already-settled height with a different blob is equivocation,
+        // grace window or not.
+        let ctx_a2 = ctx_for(ALICE, 38);
+        settle_as(&mut registry, &mut inbox, &clock, b"blob-2-fork", 2, 2_000, 0, &ctx_a2);
+
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
     }
 }

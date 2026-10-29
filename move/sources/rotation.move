@@ -437,4 +437,93 @@ module podseq::rotation {
         destroy_parent(&mut parent);
         destroy(parent);
     }
+
+    // ---------- adversarial: acting around the rotation window ----------
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED)]
+    fun the_preauthorized_target_cannot_act_without_claiming() {
+        let mut ctx_a = ctx_for(ALICE, 11);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        // Even past the eligibility point, the staged key is nobody until the
+        // claim lands: a half-rotated sequencer signing with the new key
+        // fails closed instead of acting with one foot in each role.
+        clock::set_for_testing(&mut clock, MIN_DELAY_MS + 1);
+        let ctx_b = ctx_for(BOB, 12);
+        assert_can_act(&parent.id, &clock, &ctx_b);
+
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED)]
+    fun the_previous_owner_cannot_steer_during_grace() {
+        let mut ctx_a = ctx_for(ALICE, 13);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        let ctx_b = ctx_for(BOB, 14);
+        clock::set_for_testing(&mut clock, MIN_DELAY_MS);
+        claim_rotation(&mut parent.id, &clock, &ctx_b);
+
+        // Inside the grace window the previous authority may settle and
+        // withdraw, but steering (request) stays with the current authority
+        // alone — otherwise the old key could pre-authorize itself a way
+        // back in.
+        let ctx_a2 = ctx_for(ALICE, 15);
+        request_rotation(&mut parent.id, ALICE, MIN_DELAY_MS, &clock, &ctx_a2);
+
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED)]
+    fun the_previous_owner_cannot_retire_itself_during_grace() {
+        let mut ctx_a = ctx_for(ALICE, 16);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        let ctx_b = ctx_for(BOB, 17);
+        clock::set_for_testing(&mut clock, MIN_DELAY_MS);
+        claim_rotation(&mut parent.id, &clock, &ctx_b);
+
+        // Retiring is the authority's one-way kill switch; the previous
+        // authority cannot end its own window early to then blame the swap.
+        let ctx_a2 = ctx_for(ALICE, 18);
+        retire_previous(&mut parent.id, &ctx_a2);
+
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED)]
+    fun retiring_the_previous_kills_its_window_immediately() {
+        let mut ctx_a = ctx_for(ALICE, 19);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        let ctx_b = ctx_for(BOB, 20);
+        clock::set_for_testing(&mut clock, MIN_DELAY_MS);
+        claim_rotation(&mut parent.id, &clock, &ctx_b);
+
+        // The watcher retires as soon as it observes the adopt; the one-way
+        // retire — not the grace clock — is what stops the old key.
+        let ctx_b2 = ctx_for(BOB, 21);
+        retire_previous(&mut parent.id, &ctx_b2);
+        clock::set_for_testing(&mut clock, MIN_DELAY_MS + 1);
+        let ctx_a2 = ctx_for(ALICE, 22);
+        assert_can_act(&parent.id, &clock, &ctx_a2);
+
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
 }

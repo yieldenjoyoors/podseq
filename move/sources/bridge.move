@@ -17,6 +17,10 @@
 /// field object id. This mirrors `settlement::commitment_at`.
 module podseq::bridge {
     use podseq::rotation;
+    #[test_only]
+    use podseq::settlement;
+    #[test_only]
+    use podseq::inbox;
     use sui::coin::{Self, Coin};
     use sui::bag::{Self, Bag};
     use sui::object::{Self, UID};
@@ -604,5 +608,73 @@ module podseq::bridge {
         destroy_vault_empty(vault);
         let BridgeCap { id } = cap;
         id.delete();
+    }
+
+    // ---------- adversarial: gate independence across the two objects ----------
+
+    #[test]
+    fun the_vault_gate_rotates_independently_of_the_registry_gate() {
+        let mut ctx_a = ctx_for(ALICE, 41);
+        let mut registry = settlement::rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let mut vault = rotated_vault_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        let coin = coin::mint_for_testing<TestCoin>(100, &mut ctx_a);
+        deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, &mut ctx_a);
+
+        // Rotate the vault to BOB; the registry stays on ALICE. The two
+        // records are independent dynamic fields, so a partial rotation is a
+        // representable chain state.
+        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ctx_b = ctx_for(BOB, 42);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut vault, &clock, &ctx_b);
+
+        // The rotated key releases on the vault while the unrotated key
+        // settles the registry: each gate checks its own record only.
+        let mut ctx_b_mut = ctx_for(BOB, 43);
+        assert!(withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 10, 7, &mut ctx_b_mut), 0);
+        let ctx_a2 = ctx_for(ALICE, 44);
+        settlement::settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a2);
+        assert!(settlement::latest_height(&registry) == 1);
+
+        clock::destroy_for_testing(clock);
+        drain_test_reserve<TestCoin>(&mut vault);
+        let rec = table::remove(&mut vault.deposits, 0);
+        let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } = rec;
+        clear_withdrawal_for_testing<TestCoin>(&mut vault, 7);
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+        settlement::destroy_inbox_helper(inbox);
+        settlement::destroy_rotation_for_testing(&mut registry);
+        settlement::destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED_FOR_TEST, location = rotation)]
+    fun the_new_authority_cannot_settle_while_the_registry_is_unrotated() {
+        let mut ctx_a = ctx_for(ALICE, 45);
+        let mut registry = settlement::rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let mut vault = rotated_vault_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ctx_b = ctx_for(BOB, 46);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut vault, &clock, &ctx_b);
+
+        // Vault rotated, registry not: the staged key releases on the vault
+        // but cannot settle — fail-closed per object, which is exactly why
+        // the node adopts only when both objects agree.
+        let ctx_b2 = ctx_for(BOB, 47);
+        settlement::settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_b2);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut vault);
+        destroy_vault_empty(vault);
+        settlement::destroy_inbox_helper(inbox);
+        settlement::destroy_rotation_for_testing(&mut registry);
+        settlement::destroy_registry(registry);
     }
 }

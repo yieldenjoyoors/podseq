@@ -402,12 +402,16 @@ async fn start_sequencer(
     // deliberately NON-FATAL. The spawned task owns its own config copy and may
     // persist Sui object IDs to the config file independently of the runner.
     let sui_bridge_signer = Arc::new(tokio::sync::OnceCell::new());
+    // The rotation watcher records every adopt here, so a relayer that comes
+    // up after a swap initializes on the rotated key, not the stale key file.
+    let adopted_key = podseq_sui::rotation::AdoptedKey::default();
     let bridge_handle = bridge::spawn(
         config.clone(),
         config_path.clone(),
         signer_key_path.clone(),
         Arc::clone(&podseq_metrics),
         Arc::clone(&sui_bridge_signer),
+        adopted_key.clone(),
     );
 
     // Cap-rotation watcher: derives its role from chain state on every poll,
@@ -419,6 +423,7 @@ async fn start_sequencer(
         settlement_handle,
         sender_snapshot,
         sui_bridge_signer,
+        adopted_key,
         Arc::clone(&rotation_shutdown),
     )
     .await;

@@ -1,0 +1,36 @@
+[package]
+name = "podseq-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace: the fuzz targets build with a different toolchain
+# (nightly + libfuzzer) than the main workspace.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da9e032255cfdc371657f84d76d30c061", features = [
+    "hash",
+    "serde",
+] }
+
+[dependencies.podseq-sui]
+path = "../crates/sui"
+
+[[bin]]
+name = "rotation_state_machine"
+path = "fuzz_targets/rotation_state_machine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "settlement_deadline"
+path = "fuzz_targets/settlement_deadline.rs"
+test = false
+doc = false
+bench = false

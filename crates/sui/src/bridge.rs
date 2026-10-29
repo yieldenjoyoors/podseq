@@ -95,6 +95,42 @@ impl BridgeClient {
         rpc_url: &str,
     ) -> Result<Self, BridgeError> {
         let (key, sender) = load_signer(key_path).map_err(BridgeError::from)?;
+        Self::from_parts(key, sender, package_id, cap_id, vault_id, rpc_url)
+    }
+
+    /// Creates a bridge client like [`Self::new`], but prefers a key the
+    /// rotation watcher already adopted over the configured key file.
+    ///
+    /// A relayer that comes up after a swap (its setup was retrying while
+    /// the rotation completed) must initialize on the rotated key: the file
+    /// still holds the previous key, which the Vault's rotation gate rejects
+    /// once the grace window closes or the previous authority is retired.
+    pub fn new_or_adopted(
+        adopted: &crate::rotation::AdoptedKey,
+        key_path: &Path,
+        package_id: &str,
+        cap_id: &str,
+        vault_id: &str,
+        rpc_url: &str,
+    ) -> Result<Self, BridgeError> {
+        let (key, sender) = match adopted.get() {
+            Some(key) => {
+                let sender = key.public_key().derive_address();
+                (key, sender)
+            }
+            None => load_signer(key_path).map_err(BridgeError::from)?,
+        };
+        Self::from_parts(key, sender, package_id, cap_id, vault_id, rpc_url)
+    }
+
+    fn from_parts(
+        key: Ed25519PrivateKey,
+        sender: Address,
+        package_id: &str,
+        cap_id: &str,
+        vault_id: &str,
+        rpc_url: &str,
+    ) -> Result<Self, BridgeError> {
         let rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
         Ok(Self {
             key,
@@ -112,6 +148,11 @@ impl BridgeClient {
     /// cap); kept for the entombment ceremony tooling.
     pub fn cap(&self) -> Address {
         self.cap
+    }
+
+    /// Returns the address this client signs as.
+    pub fn sender(&self) -> Address {
+        self.sender
     }
 
     /// Replaces the signing key in place (rotation hot-swap).
@@ -187,7 +228,19 @@ impl BridgeClient {
         rpc_url: &str,
         package_id: &str,
     ) -> Result<DeployedBridge, BridgeError> {
-        let (key, sender) = load_signer(key_path).map_err(BridgeError::from)?;
+        let (key, _) = load_signer(key_path).map_err(BridgeError::from)?;
+        Self::initialize_with_key(key, rpc_url, package_id).await
+    }
+
+    /// Like [`Self::initialize`], but signs with an explicit key — the
+    /// rotation-aware path for a first start that races an already-adopted
+    /// swap.
+    pub async fn initialize_with_key(
+        key: Ed25519PrivateKey,
+        rpc_url: &str,
+        package_id: &str,
+    ) -> Result<DeployedBridge, BridgeError> {
+        let sender = key.public_key().derive_address();
         let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| BridgeError::Rpc(e.to_string()))?;
         let package = parse_address(package_id, "package id")?;
 
@@ -474,5 +527,73 @@ mod tests {
     #[test]
     fn parse_field_deposit_rejects_truncated_bcs() {
         assert!(parse_field_deposit(&[0u8; 40]).is_err());
+    }
+
+    // ---------- rotation-aware construction ----------
+
+    /// Writes a throwaway suiprivkey file with a fixed scalar.
+    fn temp_key_file(tag: &str, scalar: [u8; 32]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "podseq-bridge-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sui.key");
+        std::fs::write(
+            &path,
+            Ed25519PrivateKey::new(scalar)
+                .to_suiprivkey()
+                .expect("static key encoding"),
+        )
+        .unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn a_relayer_starting_after_an_adopt_signs_with_the_adopted_key() {
+        // The relayer's setup can lose the race with the rotation adopt
+        // (setup retries while the L2 predeploy is missing). Its
+        // BridgeClient must come up on the adopted key: the file still
+        // holds the previous key, which the Vault gate rejects after grace.
+        let file = temp_key_file("adopted", [0x5E; 32]);
+        let holder = crate::rotation::AdoptedKey::new();
+        let rotated = Ed25519PrivateKey::new([0x77; 32]);
+        let rotated_addr = rotated.public_key().derive_address();
+        holder.set(rotated);
+
+        let client = BridgeClient::new_or_adopted(
+            &holder,
+            &file,
+            "0x1",
+            "0x2",
+            "0x3",
+            "http://localhost:9000",
+        )
+        .unwrap();
+        assert_eq!(client.sender(), rotated_addr);
+    }
+
+    #[tokio::test]
+    async fn without_an_adopted_key_the_file_key_wins() {
+        let file = temp_key_file("plain", [0x5E; 32]);
+        let file_addr = Ed25519PrivateKey::new([0x5E; 32])
+            .public_key()
+            .derive_address();
+        let holder = crate::rotation::AdoptedKey::new();
+        assert!(holder.get().is_none());
+
+        let client = BridgeClient::new_or_adopted(
+            &holder,
+            &file,
+            "0x1",
+            "0x2",
+            "0x3",
+            "http://localhost:9000",
+        )
+        .unwrap();
+        assert_eq!(client.sender(), file_addr);
     }
 }
