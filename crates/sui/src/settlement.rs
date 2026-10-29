@@ -415,6 +415,44 @@ impl Settlement {
             "settlement contract initialized"
         );
 
+        // 2.5. Entomb the SettlerCap into the Registry. This seeds the
+        // rotation state that `settle_as`'s authority gate reads; without
+        // the ceremony every settle aborts in
+        // `dynamic_field::borrow_child_object` because
+        // `rotation::state` borrows a dynamic field only entombment
+        // creates — the failure mode the e2e log-dump fix exposed. The
+        // Move doc positions entombment as the migration step after an
+        // upgrade; for a fresh deploy it belongs to the deploy ceremony,
+        // signed by the cap owner (the deployer).
+        {
+            let mut builder = TransactionBuilder::new();
+            let cap_arg = builder.object(ObjectInput::new(parse_address(
+                &settler_cap_id,
+                "settler cap id",
+            )?));
+            let registry_arg = builder.object(ObjectInput::new(parse_address(
+                &registry_id,
+                "registry id",
+            )?));
+            builder.move_call(
+                Function::new(
+                    package_addr,
+                    Identifier::new("settlement")
+                        .map_err(|e| SettlementError::Parse(e.to_string()))?,
+                    Identifier::new("entomb_settler_cap")
+                        .map_err(|e| SettlementError::Parse(e.to_string()))?,
+                ),
+                vec![cap_arg, registry_arg],
+            );
+            builder.set_sender(sender);
+            let tx = builder
+                .build(&mut rpc)
+                .await
+                .map_err(|e| SettlementError::Build(format!("entomb settler cap: {e}")))?;
+            sign_and_execute(&mut rpc, &key, tx, "entomb settler cap", DEPLOY_TX_WAIT).await?;
+            info!("settler cap entombed; rotation state seeded");
+        }
+
         // 3. Initialize the force-inclusion inbox in its own transaction: the
         // only shared object it creates is the Inbox, so discovery by owner
         // kind stays unambiguous.

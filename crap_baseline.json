@@ -1483,7 +1483,7 @@
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "HaltGate::update",
-      "line": 493,
+      "line": 494,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0
@@ -3600,24 +3600,40 @@
     },
     {
       "file": "./crates/sui/src/deadline.rs",
+      "function": "DeadlineMonitor::confirm_unchanged",
+      "line": 238,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/sui/src/deadline.rs",
       "function": "DeadlineMonitor::new",
-      "line": 162,
+      "line": 187,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
     },
     {
       "file": "./crates/sui/src/deadline.rs",
-      "function": "DeadlineMonitor::status",
-      "line": 172,
+      "function": "DeadlineMonitor::read_snapshot",
+      "line": 218,
       "cyclomatic": 9.0,
       "coverage": 100.0,
       "crap": 9.0
     },
     {
       "file": "./crates/sui/src/deadline.rs",
+      "function": "DeadlineMonitor::status",
+      "line": 203,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0
+    },
+    {
+      "file": "./crates/sui/src/deadline.rs",
       "function": "DeadlineStatus::is_halted",
-      "line": 81,
+      "line": 95,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3625,7 +3641,7 @@
     {
       "file": "./crates/sui/src/deadline.rs",
       "function": "classify",
-      "line": 104,
+      "line": 123,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -3633,7 +3649,7 @@
     {
       "file": "./crates/sui/src/deadline.rs",
       "function": "monitor_from_config",
-      "line": 196,
+      "line": 250,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -3641,7 +3657,7 @@
     {
       "file": "./crates/sui/src/deadline.rs",
       "function": "parse_clock",
-      "line": 136,
+      "line": 155,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4258,13 +4274,13 @@
       "file": "./crates/sui/src/settlement.rs",
       "function": "Settlement::deploy",
       "line": 323,
-      "cyclomatic": 15.0,
+      "cyclomatic": 21.0,
       "coverage": 0.0,
-      "crap": 240.0,
+      "crap": 462.0,
       "uncovered": [
         {
           "start": 323,
-          "end": 436
+          "end": 474
         }
       ]
     },
@@ -4323,28 +4339,28 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "call_initialize",
-      "line": 441,
+      "line": 479,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 441,
-          "end": 469
+          "start": 479,
+          "end": 507
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "commitment_at",
-      "line": 680,
+      "line": 718,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 680,
-          "end": 689
+          "start": 718,
+          "end": 727
         }
       ]
     },
@@ -4365,35 +4381,35 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "find_created_object",
-      "line": 515,
+      "line": 553,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 515,
-          "end": 524
+          "start": 553,
+          "end": 562
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "into_checked",
-      "line": 500,
+      "line": 538,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 500,
-          "end": 512
+          "start": 538,
+          "end": 550
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "is_sui_coin_type",
-      "line": 534,
+      "line": 572,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4401,14 +4417,14 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "latest_height",
-      "line": 527,
+      "line": 565,
       "cyclomatic": 3.0,
       "coverage": 80.0,
       "crap": 3.072,
       "uncovered": [
         {
-          "start": 530,
-          "end": 530
+          "start": 568,
+          "end": 568
         }
       ]
     },
@@ -4445,7 +4461,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_blob_id",
-      "line": 692,
+      "line": 730,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4461,7 +4477,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_field_blob_id",
-      "line": 637,
+      "line": 675,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4469,7 +4485,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_inbox_cursor",
-      "line": 600,
+      "line": 638,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -4477,7 +4493,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_latest_height",
-      "line": 579,
+      "line": 617,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -4485,7 +4501,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_table_uid",
-      "line": 617,
+      "line": 655,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4493,21 +4509,21 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "ping_rpc",
-      "line": 565,
+      "line": 603,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 565,
-          "end": 574
+          "start": 603,
+          "end": 612
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "settle_block_ts",
-      "line": 658,
+      "line": 696,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4515,42 +4531,42 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "sign_and_execute",
-      "line": 478,
+      "line": 516,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 478,
-          "end": 496
+          "start": 516,
+          "end": 534
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "sui_balance",
-      "line": 544,
+      "line": 582,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 544,
-          "end": 559
+          "start": 582,
+          "end": 597
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "table_uid",
-      "line": 667,
+      "line": 705,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 667,
-          "end": 671
+          "start": 705,
+          "end": 709
         }
       ]
     },
@@ -5053,7 +5069,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "bootstrap_l2_bridge",
-      "line": 612,
+      "line": 625,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -5061,7 +5077,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_get_transaction_receipt",
-      "line": 368,
+      "line": 381,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -5069,7 +5085,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "fetch_blob_retrying",
-      "line": 341,
+      "line": 354,
       "cyclomatic": 8.0,
       "coverage": null,
       "crap": 72.0
@@ -5085,7 +5101,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "fund_relayer",
-      "line": 470,
+      "line": 483,
       "cyclomatic": 12.0,
       "coverage": null,
       "crap": 156.0
@@ -5093,7 +5109,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "initiate_withdrawal",
-      "line": 785,
+      "line": 798,
       "cyclomatic": 13.0,
       "coverage": null,
       "crap": 182.0
@@ -5101,7 +5117,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "load_relayer_signer",
-      "line": 456,
+      "line": 469,
       "cyclomatic": 4.0,
       "coverage": null,
       "crap": 20.0
@@ -5109,7 +5125,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "preflight_sui_balance",
-      "line": 256,
+      "line": 262,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -5117,7 +5133,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "send_contract_tx",
-      "line": 525,
+      "line": 538,
       "cyclomatic": 16.0,
       "coverage": null,
       "crap": 272.0
@@ -5125,7 +5141,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "send_self_transfer",
-      "line": 396,
+      "line": 409,
       "cyclomatic": 4.0,
       "coverage": null,
       "crap": 20.0
@@ -5133,7 +5149,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_deposit",
-      "line": 700,
+      "line": 713,
       "cyclomatic": 15.0,
       "coverage": null,
       "crap": 240.0
@@ -5141,7 +5157,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_query_retrying",
-      "line": 319,
+      "line": 332,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -5149,7 +5165,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_signer_key",
-      "line": 464,
+      "line": 477,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -5157,7 +5173,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_vault_withdraw_nonce",
-      "line": 888,
+      "line": 901,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -5165,7 +5181,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_config_id",
-      "line": 435,
+      "line": 448,
       "cyclomatic": 8.0,
       "coverage": null,
       "crap": 72.0
@@ -5173,7 +5189,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_height",
-      "line": 281,
+      "line": 287,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -5181,7 +5197,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_l2_balance",
-      "line": 847,
+      "line": 860,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
@@ -5189,7 +5205,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_relayer_ready",
-      "line": 673,
+      "line": 686,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -5197,7 +5213,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_settlement",
-      "line": 301,
+      "line": 309,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -5205,7 +5221,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_sui_release",
-      "line": 871,
+      "line": 884,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
