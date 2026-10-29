@@ -18,6 +18,9 @@ sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51e
     "serde",
 ] }
 
+[dependencies.podseq-core]
+path = "../crates/core"
+
 [dependencies.podseq-sui]
 path = "../crates/sui"
 
@@ -31,6 +34,13 @@ bench = false
 [[bin]]
 name = "settlement_deadline"
 path = "fuzz_targets/settlement_deadline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "da_wire"
+path = "fuzz_targets/da_wire.rs"
 test = false
 doc = false
 bench = false

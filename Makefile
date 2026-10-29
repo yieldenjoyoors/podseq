@@ -15,6 +15,11 @@ LCOV     := lcov.info
 BASELINE := crap_baseline.json
 E2E_FLAGS := --no-fail-fast -- --test-threads=1 --nocapture
 
+# lcov.info is phony: a stale coverage report would silently gate against old
+# results, so every coverage-dependent target regenerates it. Declared after
+# LCOV is defined — .PHONY prerequisites expand immediately.
+.PHONY: $(LCOV)
+
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
 

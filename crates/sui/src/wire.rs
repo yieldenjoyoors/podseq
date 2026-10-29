@@ -55,10 +55,32 @@ pub fn encode(blocks: &[Block]) -> Result<Vec<u8>, Error> {
 }
 
 /// Deserializes a batch of blocks from BCS bytes retrieved from Walrus.
+///
+/// These bytes cross the DA trust boundary, so the batch must be non-empty and
+/// every signature must be absent or exactly 64 bytes: a corrupted signature
+/// fails the decode instead of degrading into an unsigned block downstream.
+///
+/// # Errors
+///
+/// Returns [`Error::Serde`] when the bytes are not valid BCS, and
+/// [`Error::InvalidBatch`] when the batch is empty or a signature is present
+/// with a length other than 64.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Block>, Error> {
     let wire: Vec<WireBlock> = bcs::from_bytes(bytes)
         .map_err(|e| Error::Serde(serde::de::Error::custom(e.to_string())))?;
-    Ok(wire.into_iter().map(Block::from).collect())
+    if wire.is_empty() {
+        return Err(Error::InvalidBatch("batch is empty".into()));
+    }
+    wire.into_iter()
+        .map(|w| match w.signature {
+            Some(ref sig) if sig.len() != 64 => Err(Error::InvalidBatch(format!(
+                "block {} signature length {}, expected 64",
+                w.height,
+                sig.len()
+            ))),
+            _ => Ok(Block::from(w)),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -131,5 +153,41 @@ mod tests {
             bcs_size < json_size,
             "BCS ({bcs_size}) should be < JSON ({json_size})"
         );
+    }
+
+    fn wire_batch_bytes(signature: Option<Vec<u8>>) -> Vec<u8> {
+        let wire = WireBlock {
+            height: 1,
+            parent_hash: [7u8; 32],
+            state_root: [9u8; 32],
+            timestamp: 1_700_000_000,
+            data: vec![1, 2, 3],
+            signature,
+        };
+        bcs::to_bytes(&vec![wire]).unwrap()
+    }
+
+    #[test]
+    fn rejects_wrong_length_signature() {
+        for len in [0usize, 1, 63, 65, 128] {
+            let bytes = wire_batch_bytes(Some(vec![0u8; len]));
+            let err = decode(&bytes)
+                .expect_err("a corrupted signature must fail the decode, not drop the field");
+            assert!(matches!(err, Error::InvalidBatch(_)), "len {len}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn accepts_exact_signature_length() {
+        let bytes = wire_batch_bytes(Some(vec![3u8; 64]));
+        let blocks = decode(&bytes).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].signature, Some([3u8; 64]));
+    }
+
+    #[test]
+    fn rejects_empty_batch() {
+        let err = decode(&[0x00]).expect_err("an empty batch must fail the decode");
+        assert!(matches!(err, Error::InvalidBatch(_)));
     }
 }

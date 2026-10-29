@@ -2933,6 +2933,7 @@ name = "podseq-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "podseq-core",
  "podseq-sui",
  "sui-sdk-types",
 ]

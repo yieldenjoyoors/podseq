@@ -67,6 +67,8 @@ pub enum Error {
     MissingBlobId,
     #[error("invalid url: {0}")]
     Url(#[from] url::ParseError),
+    #[error("invalid blob batch: {0}")]
+    InvalidBatch(String),
     #[error("settlement error: {0}")]
     Settlement(String),
 }
@@ -81,6 +83,7 @@ impl Error {
             }
             Error::Serde(_)
             | Error::InvalidBlobId(_)
+            | Error::InvalidBatch(_)
             | Error::MissingBlobId
             | Error::Url(_)
             | Error::Settlement(_) => false,
