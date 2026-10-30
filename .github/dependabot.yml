@@ -18,6 +18,14 @@ updates:
       walrus:
         patterns:
           - walrus-*
+    ignore:
+      # sui-crypto (pinned sui rev) binds Ed25519PrivateKey::generate to
+      # rand_core 0.6 traits, which only rand 0.8 provides.
+      - dependency-name: rand
+      # the Engine-API JWT mint path lives in alloy-rpc-types-engine, built
+      # on jsonwebtoken 10 — bumping our manifest forks auth across two
+      # majors for zero benefit. Revisit when alloy adopts 11.
+      - dependency-name: jsonwebtoken
 
   # The fuzz harness has its own lockfile; without an explicit entry the
   # auto-discovered security job crashes trying to bump rsa past the
