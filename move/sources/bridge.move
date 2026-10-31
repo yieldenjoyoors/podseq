@@ -219,14 +219,27 @@ module podseq::bridge {
     }
 
     /// Entombs the BridgeCap inside the Vault and initializes rotation state
-    /// with the sender as authority. The migration step after a package
-    /// upgrade; ideally in the same programmable transaction block as the
-    /// upgrade, signed by the current cap owner.
+    /// with the sender as authority.
+    ///
+    /// Signature frozen by the published package; superseded by
+    /// [`entomb_bridge_cap_ops`], which also mints the Vault's `OpsCap`.
+    /// The body delegates to the tombstoned `rotation::entomb` and aborts.
     public fun entomb_bridge_cap(cap: BridgeCap, vault: &mut Vault, ctx: &TxContext) {
         rotation::entomb(&mut vault.id, cap, ctx)
     }
 
+    /// Entombs the BridgeCap inside the Vault, initializes rotation state
+    /// with the sender as authority, and mints the Vault's `OpsCap` to the
+    /// sender. The Vault-side twin of [`entomb_settler_cap_ops`].
+    public fun entomb_bridge_cap_ops(cap: BridgeCap, vault: &mut Vault, ctx: &mut TxContext) {
+        rotation::entomb_ops(&mut vault.id, cap, ctx)
+    }
+
     /// Pre-authorizes `to` to claim the bridge authority after `delay_ms`.
+    ///
+    /// Signature frozen by the published package; the body delegates to the
+    /// tombstoned `rotation::request_rotation` and aborts — steering
+    /// requires the Vault's `OpsCap` via [`request_rotation_ops`].
     public fun request_rotation(
         vault: &mut Vault,
         clock: &sui::clock::Clock,
@@ -235,6 +248,20 @@ module podseq::bridge {
         ctx: &TxContext,
     ) {
         rotation::request_rotation(&mut vault.id, to, delay_ms, clock, ctx)
+    }
+
+    /// Pre-authorizes `to` to claim the bridge authority after `delay_ms`,
+    /// authorized by holding the Vault's `OpsCap` — the steering authority —
+    /// rather than by being the rotation authority. Aborts with
+    /// `rotation::E_OPS_MISMATCH` for a cap minted for another object.
+    public fun request_rotation_ops(
+        vault: &mut Vault,
+        clock: &sui::clock::Clock,
+        to: address,
+        delay_ms: u64,
+        ops: &rotation::OpsCap,
+    ) {
+        rotation::request_rotation_ops(&mut vault.id, to, delay_ms, clock, ops)
     }
 
     /// Cancels the pending bridge rotation. Authority only.
@@ -347,17 +374,28 @@ module podseq::bridge {
     #[test_only]
     fun rotated_vault_for_testing(ctx: &mut TxContext): Vault {
         let mut vault = test_vault(ctx);
-        entomb_bridge_cap(test_cap(ctx), &mut vault, ctx);
+        entomb_bridge_cap_ops(test_cap(ctx), &mut vault, ctx);
         vault
     }
 
-    /// Removes the entombed cap and rotation state so tests can destroy the
-    /// vault.
+    /// An `OpsCap` bound to the vault, mirroring what the entombment mint
+    /// transferred to the sender.
+    #[test_only]
+    fun ops_cap_for_testing(vault: &Vault, ctx: &mut TxContext): rotation::OpsCap {
+        rotation::mint_ops_for_testing(&vault.id, ctx)
+    }
+
+    /// Removes the entombed cap, the mint marker, and the rotation state so
+    /// tests can destroy the vault.
     #[test_only]
     fun destroy_rotation_for_testing(vault: &mut Vault) {
         let _ = df::remove<rotation::StateKey, rotation::RotationState>(
             &mut vault.id,
             rotation::state_key(),
+        );
+        let _ = df::remove<rotation::OpsMintedKey, bool>(
+            &mut vault.id,
+            rotation::ops_minted_key(),
         );
         let cap = df::remove<rotation::TombKey, BridgeCap>(&mut vault.id, rotation::tomb_key());
         let BridgeCap { id } = cap;
@@ -508,7 +546,8 @@ module podseq::bridge {
         deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, &mut ctx_a);
         assert!(withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 10, 7, &mut ctx_a), 0);
 
-        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&vault, &mut ctx_a);
+        request_rotation_ops(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ops);
         let ctx_b = ctx_for(BOB, 2);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         claim_rotation(&mut vault, &clock, &ctx_b);
@@ -524,6 +563,7 @@ module podseq::bridge {
         let ctx_b2 = ctx_for(BOB, 4);
         retire_previous(&mut vault, &ctx_b2);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         drain_test_reserve<TestCoin>(&mut vault);
         let rec = table::remove(&mut vault.deposits, 0);
@@ -544,7 +584,8 @@ module podseq::bridge {
         let coin = coin::mint_for_testing<TestCoin>(100, &mut ctx_a);
         deposit<TestCoin>(&mut vault, coin, TEST_RECIPIENT, &mut ctx_a);
 
-        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&vault, &mut ctx_a);
+        request_rotation_ops(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ops);
         let ctx_b = ctx_for(BOB, 2);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         claim_rotation(&mut vault, &clock, &ctx_b);
@@ -557,6 +598,7 @@ module podseq::bridge {
         );
         withdraw_as<TestCoin>(&mut vault, &clock, @0x1, 10, 7, &mut ctx_a2);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         drain_test_reserve<TestCoin>(&mut vault);
         let rec = table::remove(&mut vault.deposits, 0);
@@ -571,11 +613,13 @@ module podseq::bridge {
         let mut vault = rotated_vault_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut vault, &clock, ALICE, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&vault, &mut ctx_a);
+        request_rotation_ops(&mut vault, &clock, ALICE, rotation::min_delay_ms(), &ops);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         let ctx_b = ctx_for(BOB, 2);
         claim_rotation(&mut vault, &clock, &ctx_b);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut vault);
         destroy_vault_empty(vault);
@@ -587,11 +631,13 @@ module podseq::bridge {
         let mut vault = rotated_vault_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&vault, &mut ctx_a);
+        request_rotation_ops(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ops);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms() - 1);
         let ctx_b = ctx_for(BOB, 2);
         claim_rotation(&mut vault, &clock, &ctx_b);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut vault);
         destroy_vault_empty(vault);
@@ -626,7 +672,8 @@ module podseq::bridge {
         // Rotate the vault to BOB; the registry stays on ALICE. The two
         // records are independent dynamic fields, so a partial rotation is a
         // representable chain state.
-        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&vault, &mut ctx_a);
+        request_rotation_ops(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ops);
         let ctx_b = ctx_for(BOB, 42);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         claim_rotation(&mut vault, &clock, &ctx_b);
@@ -639,6 +686,7 @@ module podseq::bridge {
         settlement::settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a2);
         assert!(settlement::latest_height(&registry) == 1);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         drain_test_reserve<TestCoin>(&mut vault);
         let rec = table::remove(&mut vault.deposits, 0);
@@ -659,7 +707,8 @@ module podseq::bridge {
         let mut vault = rotated_vault_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&vault, &mut ctx_a);
+        request_rotation_ops(&mut vault, &clock, BOB, rotation::min_delay_ms(), &ops);
         let ctx_b = ctx_for(BOB, 46);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         claim_rotation(&mut vault, &clock, &ctx_b);
@@ -670,6 +719,7 @@ module podseq::bridge {
         let ctx_b2 = ctx_for(BOB, 47);
         settlement::settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_b2);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut vault);
         destroy_vault_empty(vault);

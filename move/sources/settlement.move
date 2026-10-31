@@ -122,14 +122,36 @@ module podseq::settlement {
     }
 
     /// Entombs the SettlerCap inside the Registry and initializes rotation
-    /// state with the sender as authority. The migration step after a package
-    /// upgrade; ideally in the same programmable transaction block as the
-    /// upgrade, signed by the current cap owner.
+    /// state with the sender as authority.
+    ///
+    /// Signature frozen by the published package; superseded by
+    /// [`entomb_settler_cap_ops`], which also mints the Registry's `OpsCap`.
+    /// The body delegates to the tombstoned `rotation::entomb` and aborts —
+    /// entombment without an `OpsCap` would create a deployment nobody can
+    /// steer.
     public fun entomb_settler_cap(cap: SettlerCap, registry: &mut Registry, ctx: &TxContext) {
         rotation::entomb(&mut registry.id, cap, ctx)
     }
 
+    /// Entombs the SettlerCap inside the Registry, initializes rotation
+    /// state with the sender as authority, and mints the Registry's `OpsCap`
+    /// to the sender. The migration step after a package upgrade; ideally in
+    /// the same programmable transaction block as the upgrade, signed by the
+    /// current cap owner. Move the minted `OpsCap` to cold custody before
+    /// going live.
+    public fun entomb_settler_cap_ops(
+        cap: SettlerCap,
+        registry: &mut Registry,
+        ctx: &mut TxContext,
+    ) {
+        rotation::entomb_ops(&mut registry.id, cap, ctx)
+    }
+
     /// Pre-authorizes `to` to claim the settler authority after `delay_ms`.
+    ///
+    /// Signature frozen by the published package; the body delegates to the
+    /// tombstoned `rotation::request_rotation` and aborts — steering
+    /// requires the Registry's `OpsCap` via [`request_rotation_ops`].
     public fun request_rotation(
         registry: &mut Registry,
         clock: &sui::clock::Clock,
@@ -138,6 +160,20 @@ module podseq::settlement {
         ctx: &TxContext,
     ) {
         rotation::request_rotation(&mut registry.id, to, delay_ms, clock, ctx)
+    }
+
+    /// Pre-authorizes `to` to claim the settler authority after `delay_ms`,
+    /// authorized by holding the Registry's `OpsCap` — the steering
+    /// authority — rather than by being the rotation authority. Aborts with
+    /// `rotation::E_OPS_MISMATCH` for a cap minted for another object.
+    public fun request_rotation_ops(
+        registry: &mut Registry,
+        clock: &sui::clock::Clock,
+        to: address,
+        delay_ms: u64,
+        ops: &rotation::OpsCap,
+    ) {
+        rotation::request_rotation_ops(&mut registry.id, to, delay_ms, clock, ops)
     }
 
     /// Cancels the pending settler rotation. Authority only.
@@ -307,6 +343,8 @@ module podseq::settlement {
     const E_NO_PREVIOUS_FOR_TEST: u64 = 6;
     #[test_only]
     const E_ALREADY_ENTOMBED_FOR_TEST: u64 = 7;
+    #[test_only]
+    const E_OPS_REQUIRED_FOR_TEST: u64 = 8;
 
     #[test_only]
     use sui::dynamic_field as df;
@@ -335,17 +373,30 @@ module podseq::settlement {
     #[test_only]
     public fun rotated_registry_for_testing(ctx: &mut TxContext): Registry {
         let mut registry = registry_for_testing(ctx);
-        entomb_settler_cap(test_cap(ctx), &mut registry, ctx);
+        entomb_settler_cap_ops(test_cap(ctx), &mut registry, ctx);
         registry
     }
 
-    /// Removes the entombed cap and the rotation state so tests can destroy
-    /// the registry. Public test-only (see [`rotated_registry_for_testing`]).
+    /// An `OpsCap` bound to the registry, mirroring what the entombment
+    /// mint transferred to the sender. Public test-only: see
+    /// [`rotated_registry_for_testing`].
+    #[test_only]
+    public fun ops_cap_for_testing(registry: &Registry, ctx: &mut TxContext): rotation::OpsCap {
+        rotation::mint_ops_for_testing(&registry.id, ctx)
+    }
+
+    /// Removes the entombed cap, the mint marker, and the rotation state so
+    /// tests can destroy the registry. Public test-only (see
+    /// [`rotated_registry_for_testing`]).
     #[test_only]
     public fun destroy_rotation_for_testing(registry: &mut Registry) {
         let _ = df::remove<rotation::StateKey, rotation::RotationState>(
             &mut registry.id,
             rotation::state_key(),
+        );
+        let _ = df::remove<rotation::OpsMintedKey, bool>(
+            &mut registry.id,
+            rotation::ops_minted_key(),
         );
         let cap = df::remove<rotation::TombKey, SettlerCap>(&mut registry.id, rotation::tomb_key());
         destroy_cap(cap);
@@ -362,7 +413,8 @@ module podseq::settlement {
         settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a);
         assert!(latest_height(&registry) == 1);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         let target = rotation::pending_target(rotation_state(&registry));
         assert!(option::is_some(&target) && *option::borrow(&target) == BOB);
 
@@ -384,6 +436,7 @@ module podseq::settlement {
         let ctx_b2 = ctx_for(BOB, 4);
         retire_previous(&mut registry, &ctx_b2);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_inbox_helper(inbox);
         destroy_rotation_for_testing(&mut registry);
@@ -397,7 +450,8 @@ module podseq::settlement {
         let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         let ctx_b = ctx_for(BOB, 2);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         claim_rotation(&mut registry, &clock, &ctx_b);
@@ -410,6 +464,7 @@ module podseq::settlement {
         );
         settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a2);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_inbox_helper(inbox);
         destroy_rotation_for_testing(&mut registry);
@@ -438,11 +493,13 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms() - 1);
         let ctx_b = ctx_for(BOB, 2);
         claim_rotation(&mut registry, &clock, &ctx_b);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -454,11 +511,13 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         let ctx_c = ctx_for(CAROL, 2);
         claim_rotation(&mut registry, &clock, &ctx_c);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -470,13 +529,15 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         let ctx_b = ctx_for(BOB, 2);
         claim_rotation(&mut registry, &clock, &ctx_b);
         let ctx_b2 = ctx_for(BOB, 3);
         claim_rotation(&mut registry, &clock, &ctx_b2);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -488,7 +549,8 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         clock::set_for_testing(
             &mut clock,
             rotation::min_delay_ms() + rotation::claim_window_ms() + 1,
@@ -496,6 +558,7 @@ module podseq::settlement {
         let ctx_b = ctx_for(BOB, 2);
         claim_rotation(&mut registry, &clock, &ctx_b);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -507,8 +570,10 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(ctx_a);
         let clock = clock::create_for_testing(ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms() - 1, ctx_a);
+        let ops = ops_cap_for_testing(&registry, ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms() - 1, &ops);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -520,21 +585,25 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(ctx_a);
         let clock = clock::create_for_testing(ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::max_delay_ms() + 1, ctx_a);
+        let ops = ops_cap_for_testing(&registry, ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::max_delay_ms() + 1, &ops);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
     }
 
-    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED_FOR_TEST, location = rotation)]
-    fun request_by_a_non_authority_aborts() {
+    #[test, expected_failure(abort_code = E_OPS_REQUIRED_FOR_TEST, location = rotation)]
+    fun the_tombstoned_request_wrapper_aborts() {
         let mut ctx_a = ctx_for(ALICE, 1);
         let mut registry = rotated_registry_for_testing(&mut ctx_a);
         let clock = clock::create_for_testing(&mut ctx_a);
 
-        let ctx_b = ctx_for(BOB, 2);
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_b);
+        // Steering is never sender-checked, so there is no "non-authority
+        // request" anymore: the old wrapper is a tombstone that rejects the
+        // authority herself — only the `OpsCap` opens the ops entrypoint.
+        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
 
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
@@ -547,15 +616,17 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(ctx_a);
         let clock = clock::create_for_testing(ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), ctx_a);
+        let ops = ops_cap_for_testing(&registry, ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         cancel_rotation(&mut registry, ctx_a);
         assert!(option::is_none(&rotation::pending_target(rotation_state(&registry))));
 
         // A re-request overwrites cleanly after a cancel.
-        request_rotation(&mut registry, &clock, CAROL, rotation::min_delay_ms(), ctx_a);
+        request_rotation_ops(&mut registry, &clock, CAROL, rotation::min_delay_ms(), &ops);
         let target = rotation::pending_target(rotation_state(&registry));
         assert!(option::is_some(&target) && *option::borrow(&target) == CAROL);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -567,12 +638,14 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         cancel_rotation(&mut registry, &ctx_a);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         let ctx_b = ctx_for(BOB, 2);
         claim_rotation(&mut registry, &clock, &ctx_b);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -584,10 +657,12 @@ module podseq::settlement {
         let mut registry = rotated_registry_for_testing(&mut ctx_a);
         let clock = clock::create_for_testing(&mut ctx_a);
 
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         let ctx_b = ctx_for(BOB, 2);
         cancel_rotation(&mut registry, &ctx_b);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -598,7 +673,7 @@ module podseq::settlement {
         let ctx_a = &mut ctx_for(ALICE, 1);
         let mut registry = rotated_registry_for_testing(ctx_a);
 
-        entomb_settler_cap(test_cap(ctx_a), &mut registry, ctx_a);
+        entomb_settler_cap_ops(test_cap(ctx_a), &mut registry, ctx_a);
 
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
@@ -648,7 +723,8 @@ module podseq::settlement {
 
         // Pre-authorization phase: the sitting authority settles.
         settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a);
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
 
         // Timelock wait: the old key keeps settling; heights stay sequential.
         clock::set_for_testing(&mut clock, rotation::min_delay_ms() / 2);
@@ -675,6 +751,7 @@ module podseq::settlement {
         assert!(commitment(&registry, 4) == b"blob-4");
         assert!(inbox::included_count(&inbox) == 0);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_inbox_helper(inbox);
         destroy_rotation_for_testing(&mut registry);
@@ -689,7 +766,8 @@ module podseq::settlement {
         let mut clock = clock::create_for_testing(&mut ctx_a);
 
         settle_as(&mut registry, &mut inbox, &clock, b"blob-1", 1, 1_000, 0, &ctx_a);
-        request_rotation(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ctx_a);
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
         let ctx_b = ctx_for(BOB, 37);
         clock::set_for_testing(&mut clock, rotation::min_delay_ms());
         claim_rotation(&mut registry, &clock, &ctx_b);
@@ -701,6 +779,7 @@ module podseq::settlement {
         let ctx_a2 = ctx_for(ALICE, 38);
         settle_as(&mut registry, &mut inbox, &clock, b"blob-2-fork", 2, 2_000, 0, &ctx_a2);
 
+        rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_inbox_helper(inbox);
         destroy_rotation_for_testing(&mut registry);
