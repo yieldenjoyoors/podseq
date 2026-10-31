@@ -474,6 +474,28 @@ impl<T: InboxTransport> RotationWatcher<T> {
             &staged,
         ))
     }
+
+    /// Whether `parent` still needs the entombment ceremony: its
+    /// rotation-state dynamic field does not exist (a deployment upgraded
+    /// from a pre-rotation package).
+    ///
+    /// Transport errors propagate — an unreadable chain state must never be
+    /// read as "needs entombment", because the ceremony moves an owned
+    /// object.
+    pub async fn entombment_needed(
+        &self,
+        parent: Address,
+    ) -> Result<bool, crate::inbox::InboxError> {
+        match self
+            .transport
+            .object_contents(&rotation_state_field_id(parent, self.package))
+            .await
+        {
+            Err(crate::inbox::InboxError::NotFound(_)) => Ok(true),
+            Err(e) => Err(e),
+            Ok(_) => Ok(false),
+        }
+    }
 }
 
 /// Objects one rotation PTB touches.
@@ -608,6 +630,71 @@ pub async fn submit_request(
         builder.move_call(
             module_function(targets.package, "bridge", "request_rotation").expect("static name"),
             vec![vault, clock2, to_arg2, delay_arg2],
+        );
+    })
+    .await
+}
+
+/// Entombs the `SettlerCap` into the Registry: the migration ceremony for a
+/// deployment upgraded from a pre-rotation package (fresh deploys entomb in
+/// [`crate::settlement::Settlement::deploy`]).
+///
+/// Signed by the cap owner, who becomes the initial rotation authority.
+/// Aborts on-chain with `E_ALREADY_ENTOMBED` when a concurrent ceremony won
+/// the race — callers treat that as done.
+///
+/// # Errors
+///
+/// Rpc, Build, or Execution errors from the submit path; an on-chain abort
+/// (`E_ALREADY_ENTOMBED`) arrives as [`SettlementError::Execution`].
+///
+/// # Panics
+///
+/// Only if the hard-coded module/function names stop being valid Sui
+/// identifiers, which is a compile-time property.
+pub async fn submit_entomb_settler(
+    rpc_url: &str,
+    key: &Ed25519PrivateKey,
+    package: Address,
+    registry: Address,
+    settler_cap: Address,
+) -> Result<(), SettlementError> {
+    submit_rotation_tx(rpc_url, key, "entomb settler cap", |builder| {
+        let cap = builder.object(ObjectInput::new(settler_cap));
+        let registry = builder.object(ObjectInput::new(registry));
+        builder.move_call(
+            module_function(package, "settlement", "entomb_settler_cap").expect("static name"),
+            vec![cap, registry],
+        );
+    })
+    .await
+}
+
+/// Entombs the `BridgeCap` into the Vault — the Vault-side twin of
+/// [`submit_entomb_settler`].
+///
+/// # Errors
+///
+/// Rpc, Build, or Execution errors from the submit path; an on-chain abort
+/// (`E_ALREADY_ENTOMBED`) arrives as [`SettlementError::Execution`].
+///
+/// # Panics
+///
+/// Only if the hard-coded module/function names stop being valid Sui
+/// identifiers, which is a compile-time property.
+pub async fn submit_entomb_bridge(
+    rpc_url: &str,
+    key: &Ed25519PrivateKey,
+    package: Address,
+    vault: Address,
+    bridge_cap: Address,
+) -> Result<(), SettlementError> {
+    submit_rotation_tx(rpc_url, key, "entomb bridge cap", |builder| {
+        let cap = builder.object(ObjectInput::new(bridge_cap));
+        let vault = builder.object(ObjectInput::new(vault));
+        builder.move_call(
+            module_function(package, "bridge", "entomb_bridge_cap").expect("static name"),
+            vec![cap, vault],
         );
     })
     .await
@@ -1022,6 +1109,8 @@ mod tests {
     #[derive(Default)]
     struct MockTransport {
         objects: std::collections::BTreeMap<Address, Vec<u8>>,
+        /// Reads of these ids fail with a non-`NotFound` transport error.
+        rpc_error_for: Option<Address>,
     }
 
     impl InboxTransport for MockTransport {
@@ -1030,6 +1119,11 @@ mod tests {
             id: &'a Address,
         ) -> InboxFuture<'a, Result<Vec<u8>, crate::inbox::InboxError>> {
             Box::pin(async move {
+                if self.rpc_error_for == Some(*id) {
+                    return Err(crate::inbox::InboxError::Rpc(
+                        "injected transport failure".into(),
+                    ));
+                }
                 self.objects
                     .get(id)
                     .cloned()
@@ -1395,6 +1489,50 @@ mod tests {
         let plan = drill(&chain, &executor, &guard, &key).await;
         assert_eq!(plan, Plan::Idle);
         assert_eq!(executor.steps(), vec!["adopt", "retire"]);
+    }
+
+    // ---------- entombment detection (the pre-rotation migration) ----------
+
+    #[tokio::test]
+    async fn entombment_needed_when_the_state_field_is_absent() {
+        let watcher = RotationWatcher::new(
+            MockTransport::default(),
+            Address::new([0x21; 32]),
+            Address::new([0x22; 32]),
+            Address::new([0x23; 32]),
+            ALICE,
+            None,
+        );
+
+        assert!(watcher
+            .entombment_needed(Address::new([0x22; 32]))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn entombment_needed_is_false_once_the_state_exists() {
+        let (transport, package, registry, vault) =
+            mock_chain(&state(ALICE, None, None), &state(ALICE, None, None), 0);
+        let watcher = RotationWatcher::new(transport, package, registry, vault, ALICE, None);
+
+        assert!(!watcher.entombment_needed(registry).await.unwrap());
+        assert!(!watcher.entombment_needed(vault).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn entombment_needed_propagates_transport_errors() {
+        // A non-NotFound read failure must surface as an error: an unreadable
+        // chain state must never be read as "needs entombment".
+        let (mut transport, package, registry, vault) =
+            mock_chain(&state(ALICE, None, None), &state(ALICE, None, None), 0);
+        transport.rpc_error_for = Some(rotation_state_field_id(registry, package));
+        let watcher = RotationWatcher::new(transport, package, registry, vault, ALICE, None);
+
+        assert!(matches!(
+            watcher.entombment_needed(registry).await,
+            Err(crate::inbox::InboxError::Rpc(_))
+        ));
     }
 
     // ---------- adopted-key holder ----------

@@ -338,6 +338,15 @@ configuration. The old key file is archived and destroyed.
 Step 2 is deliberately a rotation of zero addresses: it proves the whole mechanism
 (including a later claim against it) while changing nothing an attacker could exploit.
 
+The node that performs the upgrade is also the cap owner and the settlement signer,
+so it now runs step 2 itself. When a poll finds a shared object with no rotation
+state and the matching cap id is configured (`sui.settler_cap_id`, `bridge.cap_id`),
+it submits that object's entombment PTB signed with the current settlement key and
+settles normally on the next poll. Without a configured cap id it fails closed with
+a loud error, and an unreadable chain state never entombs (the ceremony moves an
+owned object; a stale read must not move someone else's cap). Deployments whose
+caps live in some other wallet still run step 2 by hand.
+
 ## Residual risks and follow-ups
 
 - **Pre-claim compromise of the current key** can cancel a pending rotation and

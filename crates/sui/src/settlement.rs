@@ -197,6 +197,15 @@ impl Settlement {
         self.cap
     }
 
+    /// Returns the current signing key.
+    ///
+    /// Ceremony code that must sign with the rotation-aware signer (the
+    /// entombment auto-heal) reads the key here instead of caching its own
+    /// copy, which a rotation hot-swap would strand.
+    pub fn key(&self) -> &Ed25519PrivateKey {
+        &self.key
+    }
+
     /// Replaces the signing key in place (rotation hot-swap).
     ///
     /// The next commit signs with the new key; callers share this signer
