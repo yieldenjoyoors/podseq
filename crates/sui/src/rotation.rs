@@ -598,50 +598,88 @@ pub async fn submit_retire_previous(
     .await
 }
 
-/// Pre-authorizes `to` on both objects in one PTB, signed by the current
-/// authority. Both timelocks start at the same clock, so the two rotations
-/// cannot drift apart.
-pub async fn submit_request(
-    rpc_url: &str,
-    key: &Ed25519PrivateKey,
-    targets: &RotationTargets,
-    to: Address,
-    delay_ms: u64,
-) -> Result<(), SettlementError> {
+/// Steering authorization for one rotation request: the `OpsCap` object ids
+/// of both guarded objects, held by the signing wallet — the cold steering
+/// wallet, never the sequencer's hot key. On-chain, a cap minted for the
+/// other object aborts with `rotation::E_OPS_MISMATCH`.
+#[derive(Debug, Clone, Copy)]
+pub struct OpsCaps {
+    /// The Registry's `OpsCap` object id.
+    pub settler_cap: Address,
+    /// The Vault's `OpsCap` object id.
+    pub bridge_cap: Address,
+}
+
+/// Rejects delays outside the on-chain bounds before a PTB is built.
+fn validate_request_delay(delay_ms: u64) -> Result<(), SettlementError> {
     if !(MIN_DELAY_MS..=MAX_DELAY_MS).contains(&delay_ms) {
         return Err(SettlementError::Parse(format!(
             "rotation delay {delay_ms} ms outside [{MIN_DELAY_MS}, {MAX_DELAY_MS}]"
         )));
     }
+    Ok(())
+}
+
+/// Pre-authorizes `to` on both objects in one PTB, signed by the holder of
+/// both `OpsCap`s — the steering authority. Both timelocks start at the same
+/// clock, so the two rotations cannot drift apart.
+///
+/// The hot sequencer key must never sign this: steering is exactly what the
+/// `OpsCap` gate exists to keep from it.
+///
+/// # Errors
+///
+/// A delay outside the bounds without submitting; otherwise Rpc, Build, or
+/// Execution errors from the submit path (an unowned or mismatched cap
+/// aborts on-chain).
+///
+/// # Panics
+///
+/// Only if the hard-coded module/function names stop being valid Sui
+/// identifiers, which is a compile-time property.
+pub async fn submit_request(
+    rpc_url: &str,
+    key: &Ed25519PrivateKey,
+    targets: &RotationTargets,
+    ops: &OpsCaps,
+    to: Address,
+    delay_ms: u64,
+) -> Result<(), SettlementError> {
+    validate_request_delay(delay_ms)?;
     submit_rotation_tx(rpc_url, key, "rotation request", |builder| {
         let registry = builder.object(ObjectInput::new(targets.registry));
         let clock = builder.object(ObjectInput::new(SUI_CLOCK_ID));
         let to_arg = builder.pure(&to);
         let delay_arg = builder.pure(&delay_ms);
+        let ops_cap = builder.object(ObjectInput::new(ops.settler_cap));
+        builder.move_call(
+            module_function(targets.package, "settlement", "request_rotation_ops")
+                .expect("static name"),
+            vec![registry, clock, to_arg, delay_arg, ops_cap],
+        );
         let vault = builder.object(ObjectInput::new(targets.vault));
         let clock2 = builder.object(ObjectInput::new(SUI_CLOCK_ID));
         let to_arg2 = builder.pure(&to);
         let delay_arg2 = builder.pure(&delay_ms);
+        let ops_cap2 = builder.object(ObjectInput::new(ops.bridge_cap));
         builder.move_call(
-            module_function(targets.package, "settlement", "request_rotation")
+            module_function(targets.package, "bridge", "request_rotation_ops")
                 .expect("static name"),
-            vec![registry, clock, to_arg, delay_arg],
-        );
-        builder.move_call(
-            module_function(targets.package, "bridge", "request_rotation").expect("static name"),
-            vec![vault, clock2, to_arg2, delay_arg2],
+            vec![vault, clock2, to_arg2, delay_arg2, ops_cap2],
         );
     })
     .await
 }
 
-/// Entombs the `SettlerCap` into the Registry: the migration ceremony for a
-/// deployment upgraded from a pre-rotation package (fresh deploys entomb in
+/// Entombs the `SettlerCap` into the Registry and mints the Registry's
+/// `OpsCap` to the signer: the migration ceremony for a deployment upgraded
+/// from a pre-rotation package (fresh deploys entomb in
 /// [`crate::settlement::Settlement::deploy`]).
 ///
-/// Signed by the cap owner, who becomes the initial rotation authority.
-/// Aborts on-chain with `E_ALREADY_ENTOMBED` when a concurrent ceremony won
-/// the race — callers treat that as done.
+/// Signed by the cap owner, who becomes the initial rotation authority and
+/// the first steering authority — transfer the minted `OpsCap` to cold
+/// custody before going live. Aborts on-chain with `E_ALREADY_ENTOMBED`
+/// when a concurrent ceremony won the race — callers treat that as done.
 ///
 /// # Errors
 ///
@@ -663,15 +701,15 @@ pub async fn submit_entomb_settler(
         let cap = builder.object(ObjectInput::new(settler_cap));
         let registry = builder.object(ObjectInput::new(registry));
         builder.move_call(
-            module_function(package, "settlement", "entomb_settler_cap").expect("static name"),
+            module_function(package, "settlement", "entomb_settler_cap_ops").expect("static name"),
             vec![cap, registry],
         );
     })
     .await
 }
 
-/// Entombs the `BridgeCap` into the Vault — the Vault-side twin of
-/// [`submit_entomb_settler`].
+/// Entombs the `BridgeCap` into the Vault and mints the Vault's `OpsCap` to
+/// the signer — the Vault-side twin of [`submit_entomb_settler`].
 ///
 /// # Errors
 ///
@@ -693,7 +731,7 @@ pub async fn submit_entomb_bridge(
         let cap = builder.object(ObjectInput::new(bridge_cap));
         let vault = builder.object(ObjectInput::new(vault));
         builder.move_call(
-            module_function(package, "bridge", "entomb_bridge_cap").expect("static name"),
+            module_function(package, "bridge", "entomb_bridge_cap_ops").expect("static name"),
             vec![cap, vault],
         );
     })
@@ -707,6 +745,19 @@ mod tests {
     const ALICE: Address = Address::new([0xAA; 32]);
     const BOB: Address = Address::new([0xBB; 32]);
     const CAROL: Address = Address::new([0xCC; 32]);
+
+    /// `submit_request`'s delay guard.
+    #[test]
+    fn request_delay_at_the_bounds_is_accepted() {
+        assert!(validate_request_delay(MIN_DELAY_MS).is_ok());
+        assert!(validate_request_delay(MAX_DELAY_MS).is_ok());
+    }
+
+    #[test]
+    fn request_delay_outside_the_bounds_is_rejected() {
+        assert!(validate_request_delay(MIN_DELAY_MS - 1).is_err());
+        assert!(validate_request_delay(MAX_DELAY_MS + 1).is_err());
+    }
 
     /// Mirrors `sui::clock::Clock { id: UID, timestamp_ms: u64 }`.
     #[derive(serde::Serialize)]

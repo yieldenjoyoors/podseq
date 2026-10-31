@@ -279,7 +279,7 @@ impl BridgeClient {
                 builder.object(ObjectInput::new(parse_address(&cap_id, "bridge cap id")?));
             let vault_arg = builder.object(ObjectInput::new(parse_address(&vault_id, "vault id")?));
             builder.move_call(
-                bridge_function(package, "entomb_bridge_cap"),
+                bridge_function(package, "entomb_bridge_cap_ops"),
                 vec![cap_arg, vault_arg],
             );
             builder.set_sender(sender);
@@ -288,7 +288,7 @@ impl BridgeClient {
                 .await
                 .map_err(|e| BridgeError::Build(format!("entomb bridge cap: {e}")))?;
             sign_and_execute(&mut rpc, &key, tx, "entomb bridge cap", DEPLOY_TX_WAIT).await?;
-            info!(%vault_id, "bridge cap entombed; vault rotation state seeded");
+            info!(%vault_id, "bridge cap entombed; vault rotation state seeded, ops cap minted");
         }
 
         Ok(DeployedBridge { vault_id, cap_id })

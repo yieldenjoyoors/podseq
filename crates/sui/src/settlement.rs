@@ -448,7 +448,7 @@ impl Settlement {
                     package_addr,
                     Identifier::new("settlement")
                         .map_err(|e| SettlementError::Parse(e.to_string()))?,
-                    Identifier::new("entomb_settler_cap")
+                    Identifier::new("entomb_settler_cap_ops")
                         .map_err(|e| SettlementError::Parse(e.to_string()))?,
                 ),
                 vec![cap_arg, registry_arg],
@@ -459,7 +459,7 @@ impl Settlement {
                 .await
                 .map_err(|e| SettlementError::Build(format!("entomb settler cap: {e}")))?;
             sign_and_execute(&mut rpc, &key, tx, "entomb settler cap", DEPLOY_TX_WAIT).await?;
-            info!("settler cap entombed; rotation state seeded");
+            info!("settler cap entombed; rotation state seeded, ops cap minted");
         }
 
         // 3. Initialize the force-inclusion inbox in its own transaction: the

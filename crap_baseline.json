@@ -2376,99 +2376,183 @@
     },
     {
       "file": "./crates/node/src/rotation.rs",
+      "function": "MigrationReport::blocked",
+      "line": 86,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
+      "function": "MigrationReport::healed",
+      "line": 81,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
       "function": "SwapSinks::adopt",
-      "line": 94,
+      "line": 240,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 94,
-          "end": 102
+          "start": 240,
+          "end": 248
         }
       ]
     },
     {
       "file": "./crates/node/src/rotation.rs",
       "function": "SwapSinks::claim",
-      "line": 85,
+      "line": 231,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 85,
-          "end": 92
+          "start": 231,
+          "end": 238
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
+      "function": "SwapSinks::entomb_bridge",
+      "line": 280,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 280,
+          "end": 295
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
+      "function": "SwapSinks::entomb_settler",
+      "line": 261,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 261,
+          "end": 278
         }
       ]
     },
     {
       "file": "./crates/node/src/rotation.rs",
       "function": "SwapSinks::retire_previous",
-      "line": 104,
+      "line": 250,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 104,
-          "end": 111
+          "start": 250,
+          "end": 257
         }
       ]
     },
     {
       "file": "./crates/node/src/rotation.rs",
       "function": "SwapSinks::swap_signers",
-      "line": 72,
+      "line": 218,
       "cyclomatic": 2.0,
       "coverage": 90.0,
       "crap": 2.004,
       "uncovered": [
         {
-          "start": 78,
-          "end": 78
+          "start": 224,
+          "end": 224
         }
       ]
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
+      "function": "ensure_entombed",
+      "line": 114,
+      "cyclomatic": 11.0,
+      "coverage": 100.0,
+      "crap": 11.0
     },
     {
       "file": "./crates/node/src/rotation.rs",
       "function": "load_staged_key",
-      "line": 249,
+      "line": 465,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
+      "coverage": 100.0,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
+      "function": "log_migration",
+      "line": 156,
+      "cyclomatic": 6.0,
+      "coverage": 92.85714285714286,
+      "crap": 6.013119533527696,
       "uncovered": [
         {
-          "start": 249,
-          "end": 254
+          "start": 176,
+          "end": 176
         }
       ]
     },
     {
       "file": "./crates/node/src/rotation.rs",
+      "function": "parse_optional_id",
+      "line": 181,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
       "function": "parse_targets",
-      "line": 234,
+      "line": 452,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 234,
-          "end": 247
+          "start": 452,
+          "end": 463
         }
       ]
     },
     {
       "file": "./crates/node/src/rotation.rs",
+      "function": "resolve_contract_ids",
+      "line": 299,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
+      "function": "resolve_staged_key",
+      "line": 318,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/node/src/rotation.rs",
       "function": "spawn",
-      "line": 120,
-      "cyclomatic": 15.0,
+      "line": 341,
+      "cyclomatic": 14.0,
       "coverage": 0.0,
-      "crap": 240.0,
+      "crap": 210.0,
       "uncovered": [
         {
-          "start": 120,
-          "end": 232
+          "start": 341,
+          "end": 450
         }
       ]
     },
@@ -3247,7 +3331,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "GasRow::append_csv",
-      "line": 66,
+      "line": 70,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -3255,7 +3339,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "GasRow::net",
-      "line": 62,
+      "line": 66,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -3263,31 +3347,39 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "claim",
-      "line": 317,
+      "line": 368,
       "cyclomatic": 10.0,
       "coverage": null,
       "crap": 110.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
-      "function": "fresh",
-      "line": 196,
-      "cyclomatic": 22.0,
+      "function": "execute_measured",
+      "line": 103,
+      "cyclomatic": 5.0,
       "coverage": null,
-      "crap": 506.0
+      "crap": 30.0
+    },
+    {
+      "file": "./crates/sui/examples/rotation_gas_bench.rs",
+      "function": "fresh",
+      "line": 239,
+      "cyclomatic": 24.0,
+      "coverage": null,
+      "crap": 600.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "handoff",
-      "line": 462,
-      "cyclomatic": 11.0,
+      "line": 522,
+      "cyclomatic": 13.0,
       "coverage": null,
-      "crap": 132.0
+      "crap": 182.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "load_key",
-      "line": 187,
+      "line": 230,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -3295,7 +3387,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "main",
-      "line": 143,
+      "line": 186,
       "cyclomatic": 12.0,
       "coverage": null,
       "crap": 156.0
@@ -3303,15 +3395,23 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "measure",
-      "line": 98,
-      "cyclomatic": 5.0,
+      "line": 141,
+      "cyclomatic": 1.0,
       "coverage": null,
-      "crap": 30.0
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/sui/examples/rotation_gas_bench.rs",
+      "function": "minted_ops_cap",
+      "line": 156,
+      "cyclomatic": 2.0,
+      "coverage": null,
+      "crap": 6.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "module_fn",
-      "line": 450,
+      "line": 510,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -3319,7 +3419,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "post",
-      "line": 366,
+      "line": 417,
       "cyclomatic": 12.0,
       "coverage": null,
       "crap": 156.0
@@ -3327,7 +3427,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "request_ptb",
-      "line": 430,
+      "line": 482,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -4032,6 +4132,14 @@
     },
     {
       "file": "./crates/sui/src/rotation.rs",
+      "function": "RotationWatcher::entombment_needed",
+      "line": 485,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/sui/src/rotation.rs",
       "function": "RotationWatcher::new",
       "line": 411,
       "cyclomatic": 1.0,
@@ -4101,14 +4209,14 @@
     {
       "file": "./crates/sui/src/rotation.rs",
       "function": "module_function",
-      "line": 491,
+      "line": 513,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 491,
-          "end": 501
+          "start": 513,
+          "end": 523
         }
       ]
     },
@@ -4161,70 +4269,106 @@
     {
       "file": "./crates/sui/src/rotation.rs",
       "function": "submit_claim",
-      "line": 535,
+      "line": 557,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 535,
-          "end": 555
-        }
-      ]
-    },
-    {
-      "file": "./crates/sui/src/rotation.rs",
-      "function": "submit_request",
-      "line": 582,
-      "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "uncovered": [
-        {
-          "start": 582,
-          "end": 614
-        }
-      ]
-    },
-    {
-      "file": "./crates/sui/src/rotation.rs",
-      "function": "submit_retire_previous",
-      "line": 559,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 559,
+          "start": 557,
           "end": 577
         }
       ]
     },
     {
       "file": "./crates/sui/src/rotation.rs",
+      "function": "submit_entomb_bridge",
+      "line": 723,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 723,
+          "end": 739
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/rotation.rs",
+      "function": "submit_entomb_settler",
+      "line": 693,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 693,
+          "end": 709
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/rotation.rs",
+      "function": "submit_request",
+      "line": 640,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "uncovered": [
+        {
+          "start": 640,
+          "end": 672
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/rotation.rs",
+      "function": "submit_retire_previous",
+      "line": 581,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 581,
+          "end": 599
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/rotation.rs",
       "function": "submit_rotation_tx",
-      "line": 504,
+      "line": 526,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 504,
-          "end": 530
+          "start": 526,
+          "end": 552
         }
       ]
     },
     {
+      "file": "./crates/sui/src/rotation.rs",
+      "function": "validate_request_delay",
+      "line": 614,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0
+    },
+    {
       "file": "./crates/sui/src/settlement.rs",
       "function": "Settlement::build_settle_tx",
-      "line": 281,
+      "line": 290,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 281,
-          "end": 320
+          "start": 290,
+          "end": 329
         }
       ]
     },
@@ -4245,42 +4389,42 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "Settlement::commit",
-      "line": 238,
+      "line": 247,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 238,
-          "end": 241
+          "start": 247,
+          "end": 250
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "Settlement::commit_with_cursor",
-      "line": 252,
+      "line": 261,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 252,
-          "end": 273
+          "start": 261,
+          "end": 282
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "Settlement::deploy",
-      "line": 323,
+      "line": 332,
       "cyclomatic": 21.0,
       "coverage": 0.0,
       "crap": 462.0,
       "uncovered": [
         {
-          "start": 323,
-          "end": 474
+          "start": 332,
+          "end": 483
         }
       ]
     },
@@ -4301,14 +4445,28 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "Settlement::inbox_cursor",
-      "line": 211,
+      "line": 220,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 211,
-          "end": 230
+          "start": 220,
+          "end": 239
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/settlement.rs",
+      "function": "Settlement::key",
+      "line": 205,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 205,
+          "end": 207
         }
       ]
     },
@@ -4331,7 +4489,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "Settlement::swap_key",
-      "line": 204,
+      "line": 213,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4339,28 +4497,28 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "call_initialize",
-      "line": 479,
+      "line": 488,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 479,
-          "end": 507
+          "start": 488,
+          "end": 516
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "commitment_at",
-      "line": 718,
+      "line": 727,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 718,
-          "end": 727
+          "start": 727,
+          "end": 736
         }
       ]
     },
@@ -4381,35 +4539,35 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "find_created_object",
-      "line": 553,
+      "line": 562,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 553,
-          "end": 562
+          "start": 562,
+          "end": 571
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "into_checked",
-      "line": 538,
+      "line": 547,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 538,
-          "end": 550
+          "start": 547,
+          "end": 559
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "is_sui_coin_type",
-      "line": 572,
+      "line": 581,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4417,14 +4575,14 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "latest_height",
-      "line": 565,
+      "line": 574,
       "cyclomatic": 3.0,
       "coverage": 80.0,
       "crap": 3.072,
       "uncovered": [
         {
-          "start": 568,
-          "end": 568
+          "start": 577,
+          "end": 577
         }
       ]
     },
@@ -4461,7 +4619,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_blob_id",
-      "line": 730,
+      "line": 739,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4477,7 +4635,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_field_blob_id",
-      "line": 675,
+      "line": 684,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4485,7 +4643,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_inbox_cursor",
-      "line": 638,
+      "line": 647,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -4493,7 +4651,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_latest_height",
-      "line": 617,
+      "line": 626,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -4501,7 +4659,7 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "parse_table_uid",
-      "line": 655,
+      "line": 664,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4509,21 +4667,21 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "ping_rpc",
-      "line": 603,
+      "line": 612,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 603,
-          "end": 612
+          "start": 612,
+          "end": 621
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "settle_block_ts",
-      "line": 696,
+      "line": 705,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4531,42 +4689,42 @@
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "sign_and_execute",
-      "line": 516,
+      "line": 525,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 516,
-          "end": 534
+          "start": 525,
+          "end": 543
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "sui_balance",
-      "line": 582,
+      "line": 591,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 582,
-          "end": 597
+          "start": 591,
+          "end": 606
         }
       ]
     },
     {
       "file": "./crates/sui/src/settlement.rs",
       "function": "table_uid",
-      "line": 705,
+      "line": 714,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 705,
-          "end": 709
+          "start": 714,
+          "end": 718
         }
       ]
     },
@@ -5270,7 +5428,7 @@
     "lcov_only": {
       "count": 1,
       "examples": [
-        "/opt/data/projects/podseq/crates/core/src/runtime.rs"
+        "/opt/data/projects/podseq/wt/k4-ops-cap/crates/core/src/runtime.rs"
       ]
     }
   }
