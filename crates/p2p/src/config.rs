@@ -9,11 +9,16 @@ pub struct P2pConfig {
     pub key_path: Option<String>,
     /// Socket address the node listens on.
     pub listen_addr: SocketAddr,
-    /// Advertised to peers for dial-back; defaults to listen_addr when unset, may differ behind NAT.
+    /// Advertised to peers for dial-back; defaults to `listen_addr` when unset, may differ behind NAT.
     pub dialable_addr: Option<SocketAddr>,
     /// Prevents replay of authenticated traffic across different applications.
     pub application_namespace: Vec<u8>,
     /// Bootstrap peers as (64-char hex pubkey, socket addr).
+    ///
+    /// These are both dialed on startup and admitted as peers: the discovery
+    /// tracker bounces any connection from a key outside
+    /// `bootstrap_peers ∪ {self}`. Every node in a deployment must therefore
+    /// list all of its peers here.
     pub bootstrap_peers: Vec<(String, SocketAddr)>,
     /// Maximum message size in bytes.
     pub max_message_size: u32,
@@ -21,6 +26,10 @@ pub struct P2pConfig {
     pub broadcast_cache_size: usize,
     /// Pending subscribe/get requests buffered by the broadcast engine.
     pub broadcast_mailbox_size: usize,
+    /// Mailbox capacity for the discovery network's internal actors.
+    pub mailbox_size: usize,
+    /// Maximum distinct identities per peer-set index, including the local identity.
+    pub max_peers_per_set: usize,
 }
 
 impl Default for P2pConfig {
@@ -34,6 +43,8 @@ impl Default for P2pConfig {
             max_message_size: 2 * 1024 * 1024,
             broadcast_cache_size: 128,
             broadcast_mailbox_size: 1024,
+            mailbox_size: 1024,
+            max_peers_per_set: 32,
         }
     }
 }

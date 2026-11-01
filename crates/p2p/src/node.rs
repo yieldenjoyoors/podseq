@@ -3,12 +3,17 @@
 //! Uses two p2p channels: block broadcast (ch. 0) and block announce (ch. 1).
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use commonware_broadcast::Broadcaster as _;
-use commonware_cryptography::{sha256::Digest, Digestible, Signer as _};
+use commonware_cryptography::{
+    sha256::Digest, ChaCha20Poly1305, Digested, Digestible, Signer as _,
+};
 use commonware_p2p::{authenticated::discovery, Ingress, Manager, Recipients, Sender as RawSender};
+use commonware_parallel::Sequential;
 use commonware_runtime::{IoBuf, Quota, Supervisor as _};
+use commonware_stream::{cups, sake, SakeCups};
 use commonware_utils::{ordered::Set, NZUsize};
 use tracing::{debug, info, warn};
 
@@ -22,6 +27,20 @@ type Pk = commonware_cryptography::ed25519::PublicKey;
 type AnnounceSender =
     commonware_p2p::authenticated::discovery::Sender<Pk, commonware_runtime::tokio::Context>;
 type AnnounceReceiver = commonware_p2p::authenticated::discovery::Receiver<Pk>;
+
+/// Handshake parameters shared by every podseq peer: the SAKE authenticated
+/// key exchange over CUPS, encrypted with `ChaCha20Poly1305`.
+fn handshake(signer: crate::IdentityKey) -> SakeCups<crate::IdentityKey, ChaCha20Poly1305> {
+    cups::Cups::<_, ChaCha20Poly1305>::new(
+        sake::Sake {
+            signer,
+            synchrony_bound: Duration::from_secs(5),
+            max_handshake_age: Duration::from_secs(10),
+            version: sake::Version::V1,
+        },
+        cups::Version::V1,
+    )
+}
 
 /// Holds the background task handles for the network and broadcast engine.
 pub struct P2pHandles {
@@ -74,7 +93,8 @@ impl BlockBroadcaster {
         let msg = BlockMessage::from(block);
         let height = msg.0.header.height;
         let digest = msg.digest();
-        let accepted = self.mailbox.broadcast(Recipients::All, msg).accepted();
+        let digested = Digested::precomputed(msg, digest);
+        let accepted = self.mailbox.broadcast(Recipients::All, digested).accepted();
         if accepted {
             debug!(height, ?digest, "block broadcast accepted");
         } else {
@@ -84,6 +104,11 @@ impl BlockBroadcaster {
     }
 
     /// Lets full nodes pull a block from the broadcast cache by its digest.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the announce sender's mutex is poisoned (a prior send panicked
+    /// while holding the lock).
     pub fn announce(&self, height: u64, digest: &Digest) {
         let announce = BlockAnnounce {
             height,
@@ -92,7 +117,7 @@ impl BlockBroadcaster {
         let data = IoBuf::from(announce.encode());
         let mut sender = self.announce_tx.lock().unwrap();
         let _ = sender.send(Recipients::All, data, false);
-        debug!(height, ?digest, "block announce sent");
+        debug!(height, ?digest, "block announce submitted");
     }
 }
 
@@ -112,17 +137,14 @@ impl BlockReceiver {
         receiver
             .await
             .ok()
-            .map(|msg: Arc<BlockMessage>| podseq_core::Block::from((*msg).clone()))
+            .map(|msg| podseq_core::Block::from(Arc::unwrap_or_clone(msg.inner_shared())))
     }
 
     /// Polls for the next block announce with a short timeout; returns None if none arrives.
     pub async fn poll_next(&self) -> Option<BlockAnnounce> {
         use commonware_p2p::Receiver;
         let mut rx_guard = self.announce_rx.lock().await;
-        let rx = match rx_guard.as_mut() {
-            Some(r) => r,
-            None => return None,
-        };
+        let rx = rx_guard.as_mut()?;
         // Short timeout so the caller's loop isn't blocked.
         let recv_fut = rx.recv();
         match tokio::time::timeout(std::time::Duration::from_millis(100), recv_fut).await {
@@ -150,10 +172,16 @@ pub struct P2pNode {
 impl P2pNode {
     /// Builds the network, broadcast engine, and announce channel, then starts background tasks.
     /// `context` is consumed via `context.child()`; obtain it inside `Runner::start()`.
-    pub async fn new(
-        context: commonware_runtime::tokio::Context,
-        config: &P2pConfig,
-    ) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the p2p key is missing from the config, cannot be
+    /// read or written, or a bootstrap peer pubkey is malformed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a channel rate limit or the derived mailbox bound overflows.
+    pub fn new(context: &commonware_runtime::tokio::Context, config: &P2pConfig) -> Result<Self> {
         let key_path = config.key_path.as_ref().map(std::path::PathBuf::from);
         let key_path = key_path.as_deref();
         let signer = if let Some(path) = key_path {
@@ -185,29 +213,38 @@ impl P2pNode {
 
         let dialable_addr = config.dialable_addr.unwrap_or(config.listen_addr);
 
+        // Track the local identity plus every configured bootstrap peer:
+        // the discovery tracker refuses connections from peers outside the
+        // tracked set (`directory.eligible`), so tracking only self — the
+        // old wiring — made every remote peer ineligible and block
+        // dissemination unreachable. The configured bootstrappers are the
+        // committee the node intends to talk to.
+        let mut tracked = vec![our_pk.clone()];
+        tracked.extend(bootstrappers.iter().map(|(pk, _)| pk.clone()));
+
         let p2p_cfg = discovery::Config::local(
-            signer.clone(),
+            handshake(signer.clone()),
             &config.application_namespace,
             config.listen_addr,
             dialable_addr,
             bootstrappers,
+            NZUsize!(config.max_peers_per_set),
             config.max_message_size,
+            NZUsize!(config.mailbox_size),
         );
 
         let (mut network, mut oracle) = discovery::Network::new(context.child("network"), p2p_cfg);
 
-        oracle.track(0, Set::try_from([our_pk.clone()]).unwrap_or_default());
+        oracle.track(0, Set::try_from(tracked).unwrap_or_default());
         info!("p2p network initialized");
 
         let (bc_sender, bc_receiver) = network.register(
             BLOCK_CHANNEL,
             Quota::per_second(std::num::NonZeroU32::new(256).unwrap()),
-            config.broadcast_mailbox_size,
         );
         let (announce_sender, announce_receiver) = network.register(
             ANNOUNCE_CHANNEL,
             Quota::per_second(std::num::NonZeroU32::new(512).unwrap()),
-            256,
         );
 
         let bc_cfg = commonware_broadcast::buffered::Config {
@@ -217,11 +254,13 @@ impl P2pNode {
             priority: false,
             codec_config: commonware_codec::RangeCfg::from(..),
             peer_provider: oracle.clone(),
+            strategy: Sequential,
         };
         let (engine, mailbox) = commonware_broadcast::buffered::Engine::<
             commonware_runtime::tokio::Context,
             commonware_cryptography::ed25519::PublicKey,
             BlockMessage,
+            _,
             _,
         >::new(context.child("broadcast"), bc_cfg);
 
@@ -255,11 +294,13 @@ impl P2pNode {
     }
 
     /// Returns a cloneable handle for broadcasting blocks and announces.
+    #[must_use]
     pub fn broadcaster(&self) -> BlockBroadcaster {
         self.broadcaster.clone()
     }
 
     /// Returns the block receiver.
+    #[must_use]
     pub fn receiver(&self) -> BlockReceiver {
         BlockReceiver {
             mailbox: self.receiver.mailbox.clone(),
@@ -270,7 +311,7 @@ impl P2pNode {
 
 fn load_pubkey(bytes: [u8; 32]) -> Result<commonware_cryptography::ed25519::PublicKey> {
     use commonware_codec::Read;
-    let mut buf: &[u8] = &bytes;
+    let mut buf = bytes::Bytes::copy_from_slice(&bytes);
     commonware_cryptography::ed25519::PublicKey::read_cfg(&mut buf, &())
         .context("decoding 32-byte ed25519 public key")
 }

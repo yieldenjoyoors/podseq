@@ -282,7 +282,7 @@ async fn build_p2p(
         ..podseq_p2p::P2pConfig::default()
     };
 
-    let node = podseq_p2p::P2pNode::new(context.child("p2p"), &p2p_config).await?;
+    let node = podseq_p2p::P2pNode::new(&context.child("p2p"), &p2p_config)?;
     let bc = node.broadcaster();
     let rx = node.receiver();
     Ok(Some((bc, rx, node)))

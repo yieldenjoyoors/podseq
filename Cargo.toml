@@ -68,14 +68,16 @@ sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da
 prometheus-client = "0.25"
 
 # Commonware (p2p, storage, runtime)
-commonware-runtime = "2026.7"
-commonware-storage = "2026.7"
-commonware-p2p = "2026.7"
-commonware-broadcast = "2026.7"
-commonware-cryptography = "2026.7"
-commonware-codec = "2026.7"
-commonware-math = "2026.7"
-commonware-utils = "2026.7"
+commonware-runtime = "2026.9"
+commonware-storage = "2026.9"
+commonware-p2p = "2026.9"
+commonware-broadcast = "2026.9"
+commonware-cryptography = "2026.9"
+commonware-codec = "2026.9"
+commonware-math = "2026.9"
+commonware-parallel = "2026.9"
+commonware-stream = "2026.9"
+commonware-utils = "2026.9"
 
 [profile.release]
 opt-level = 3

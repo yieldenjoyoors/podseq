@@ -4,8 +4,10 @@
 
 #![forbid(unsafe_code)]
 
-use bytes::{Buf, BufMut};
-use commonware_codec::{EncodeSize, Error as CodecError, RangeCfg, Read, ReadRangeExt as _, Write};
+use bytes::BufMut;
+use commonware_codec::{
+    Buf, EncodeSize, Error as CodecError, RangeCfg, Read, ReadRangeExt as _, Write,
+};
 use commonware_cryptography::{sha256::Digest, Digestible, Hasher, Sha256};
 use podseq_core::Block;
 
@@ -24,9 +26,8 @@ impl Digestible for BlockMessage {
     type Digest = Digest;
     fn digest(&self) -> Digest {
         let header_bytes = self.0.header.signing_message();
-        let mut payload = Sha256::hash(&self.0.data).to_vec();
-        payload.extend_from_slice(&header_bytes);
-        Sha256::hash(&payload)
+        let data_digest = Sha256::hash(&[self.0.data.as_slice()]);
+        Sha256::hash(&[data_digest.as_ref(), header_bytes.as_ref()])
     }
 }
 
@@ -66,6 +67,7 @@ impl Read for BlockMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use commonware_codec::Copying;
     use podseq_core::Header;
 
     fn sample_block(height: u64) -> Block {
@@ -103,7 +105,7 @@ mod tests {
         msg.write(&mut buf);
 
         let cfg = RangeCfg::from(..);
-        let mut reader: &[u8] = &buf;
+        let mut reader = Copying(&buf[..]);
         let decoded = BlockMessage::read_cfg(&mut reader, &cfg).unwrap();
         assert_eq!(decoded.0.header.height, 7);
         assert_eq!(decoded.0.data, msg.0.data);

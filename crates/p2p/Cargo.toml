@@ -14,6 +14,8 @@ commonware-p2p.workspace = true
 commonware-broadcast.workspace = true
 commonware-codec.workspace = true
 commonware-math.workspace = true
+commonware-parallel.workspace = true
+commonware-stream.workspace = true
 commonware-utils.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
@@ -27,3 +29,4 @@ tokio = { version = "1", features = ["sync", "time"] }
 
 [dev-dependencies]
 tokio.workspace = true
+tracing-subscriber.workspace = true
