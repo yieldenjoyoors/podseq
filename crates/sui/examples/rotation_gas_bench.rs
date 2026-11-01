@@ -1,10 +1,11 @@
 //! Gas benchmark for the cap-rotation entrypoints against a live Sui network.
 //!
 //! Deploys the current package (or resumes a half-run bench state), then
-//! measures the exact PTBs the node watcher submits — `request_rotation`,
-//! `claim_rotation`, and `retire_previous`, each covering the Registry and
-//! the Vault in one transaction — against the `settle_as` baseline. Gas is
-//! read from the executed effects and appended to `<state>.gas.csv`.
+//! measures the exact PTBs the rotation flow submits — `request_rotation_ops`
+//! (steered by the `OpsCap` minted at entombment), `claim_rotation`, and
+//! `retire_previous`, each covering the Registry and the Vault in one
+//! transaction — against the `settle_as` baseline. Gas is read from the
+//! executed effects and appended to `<state>.gas.csv`.
 //!
 //! Two signers are needed: the funded deployer key and the staged key,
 //! which must claim as its own transaction sender. The staged key is funded
@@ -32,7 +33,10 @@ use podseq_sui::rotation::MIN_DELAY_MS;
 use podseq_sui::settlement::Settlement;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
+use sui_rpc::proto::sui::rpc::v2::changed_object;
+use sui_rpc::proto::sui::rpc::v2::owner;
 use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest;
+use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionResponse;
 use sui_rpc::Client as RpcClient;
 use sui_sdk_types::{Address, Identifier};
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
@@ -94,13 +98,14 @@ impl GasRow {
     }
 }
 
-/// Builds, signs, executes, and measures one transaction.
-async fn measure(
+/// Builds, signs, executes, and measures one transaction, returning the full
+/// response so callers can read created objects from the effects.
+async fn execute_measured(
     label: &'static str,
     rpc_url: &str,
     key: &Ed25519PrivateKey,
     build: impl FnOnce(&mut TransactionBuilder),
-) -> Result<GasRow> {
+) -> Result<(GasRow, ExecuteTransactionResponse)> {
     let sender = key.public_key().derive_address();
     let mut builder = TransactionBuilder::new();
     builder.set_sender(sender);
@@ -121,14 +126,52 @@ async fn measure(
     let inner = response.into_inner();
     let effects = inner.transaction().effects();
     let summary = effects.gas_used();
-    Ok(GasRow {
+    let row = GasRow {
         label,
         digest,
         computation: summary.computation_cost(),
         storage: summary.storage_cost(),
         rebate: summary.storage_rebate(),
         non_refundable: summary.non_refundable_storage_fee(),
-    })
+    };
+    Ok((row, inner))
+}
+
+/// Builds, signs, executes, and measures one transaction.
+async fn measure(
+    label: &'static str,
+    rpc_url: &str,
+    key: &Ed25519PrivateKey,
+    build: impl FnOnce(&mut TransactionBuilder),
+) -> Result<GasRow> {
+    execute_measured(label, rpc_url, key, build)
+        .await
+        .map(|(row, _)| row)
+}
+
+/// The object id the entombment minted to the signer: the only changed
+/// object that did not exist before the transaction and is address-owned
+/// afterwards (the entombed cap and the dynamic-field children are
+/// object-owned; the gas coin predates the transaction).
+fn minted_ops_cap(response: &ExecuteTransactionResponse) -> Result<Address> {
+    let effects = response.transaction().effects();
+    let created: Vec<&str> = effects
+        .changed_objects()
+        .iter()
+        .filter(|c| {
+            c.input_state() == changed_object::InputObjectState::DoesNotExist
+                && c.output_state() == changed_object::OutputObjectState::ObjectWrite
+                && c.output_owner().kind() == owner::OwnerKind::Address
+        })
+        .filter_map(|c| c.object_id.as_deref())
+        .collect();
+    if created.len() != 1 {
+        bail!(
+            "expected exactly one minted ops cap in the entombment effects, found {}",
+            created.len()
+        );
+    }
+    created[0].parse().context("parsing minted ops cap id")
 }
 
 /// The shared-object arguments every rotation PTB touches.
@@ -239,27 +282,31 @@ async fn fresh(
         inbox,
     };
 
-    // Entombment: the caps move into the shared objects' dynamic fields.
-    measure("entomb_settler", rpc_url, deployer, |b| {
+    // Entombment: the caps move into the shared objects' dynamic fields and
+    // each object's OpsCap is minted to the deployer — the ids land in the
+    // state file for the later request phase.
+    let (row, response) = execute_measured("entomb_settler", rpc_url, deployer, |b| {
         let cap = b.object(ObjectInput::new(settler_cap));
         let registry = b.object(ObjectInput::new(targets.registry));
         b.move_call(
-            module_fn(targets.package, "settlement", "entomb_settler_cap"),
+            module_fn(targets.package, "settlement", "entomb_settler_cap_ops"),
             vec![cap, registry],
         );
     })
-    .await?
-    .append_csv(gas_csv)?;
-    measure("entomb_bridge", rpc_url, deployer, |b| {
+    .await?;
+    row.append_csv(gas_csv)?;
+    let settler_ops_cap: Address = minted_ops_cap(&response)?;
+    let (row, response) = execute_measured("entomb_bridge", rpc_url, deployer, |b| {
         let cap = b.object(ObjectInput::new(bridge_cap));
         let vault = b.object(ObjectInput::new(targets.vault));
         b.move_call(
-            module_fn(targets.package, "bridge", "entomb_bridge_cap"),
+            module_fn(targets.package, "bridge", "entomb_bridge_cap_ops"),
             vec![cap, vault],
         );
     })
-    .await?
-    .append_csv(gas_csv)?;
+    .await?;
+    row.append_csv(gas_csv)?;
+    let bridge_ops_cap: Address = minted_ops_cap(&response)?;
 
     // The settle baseline: one anchor through the settle gate.
     measure("settle_baseline", rpc_url, deployer, |b| {
@@ -292,16 +339,20 @@ async fn fresh(
         "fund_staged", staged_addr, funding.digest
     );
 
-    // Pre-authorize the staged key on both objects (the watcher's PTB).
+    // Pre-authorize the staged key on both objects (steered by the minted
+    // ops caps; the operator's PTB).
     measure("request_both", rpc_url, deployer, |b| {
-        request_ptb(b, &targets, staged_addr);
+        request_ptb(b, &targets, settler_ops_cap, bridge_ops_cap, staged_addr);
     })
     .await?
     .append_csv(gas_csv)?;
 
     fs::write(
         state_path,
-        format!("package={package}\nregistry={registry}\nvault={vault}\ninbox={inbox}\n"),
+        format!(
+            "package={package}\nregistry={registry}\nvault={vault}\ninbox={inbox}\n\
+             settler_ops_cap={settler_ops_cap}\nbridge_ops_cap={bridge_ops_cap}\n"
+        ),
     )
     .with_context(|| format!("writing {}", state_path.display()))?;
     println!(
@@ -426,23 +477,32 @@ async fn post(
     Ok(())
 }
 
-/// Mirrors `podseq_sui::rotation::submit_request`'s PTB (both objects).
-fn request_ptb(b: &mut TransactionBuilder, targets: &BenchTargets, to: Address) {
+/// Mirrors `podseq_sui::rotation::submit_request`'s PTB (both objects),
+/// steering through the `OpsCap` minted at entombment.
+fn request_ptb(
+    b: &mut TransactionBuilder,
+    targets: &BenchTargets,
+    settler_ops_cap: Address,
+    bridge_ops_cap: Address,
+    to: Address,
+) {
     let registry = b.object(ObjectInput::new(targets.registry));
     let clock = b.object(ObjectInput::new(SUI_CLOCK_ID));
     let to_arg = b.pure(&to);
     let delay = b.pure(&MIN_DELAY_MS);
+    let ops_cap = b.object(ObjectInput::new(settler_ops_cap));
     b.move_call(
-        module_fn(targets.package, "settlement", "request_rotation"),
-        vec![registry, clock, to_arg, delay],
+        module_fn(targets.package, "settlement", "request_rotation_ops"),
+        vec![registry, clock, to_arg, delay, ops_cap],
     );
     let vault = b.object(ObjectInput::new(targets.vault));
     let clock2 = b.object(ObjectInput::new(SUI_CLOCK_ID));
     let to_arg2 = b.pure(&to);
     let delay2 = b.pure(&MIN_DELAY_MS);
+    let ops_cap2 = b.object(ObjectInput::new(bridge_ops_cap));
     b.move_call(
-        module_fn(targets.package, "bridge", "request_rotation"),
-        vec![vault, clock2, to_arg2, delay2],
+        module_fn(targets.package, "bridge", "request_rotation_ops"),
+        vec![vault, clock2, to_arg2, delay2, ops_cap2],
     );
 }
 
@@ -495,8 +555,10 @@ async fn handoff(
     .await?;
     println!("funded next key {next_addr}");
 
+    let settler_ops_cap = parse("settler_ops_cap")?;
+    let bridge_ops_cap = parse("bridge_ops_cap")?;
     measure("request_both", rpc_url, authority, |b| {
-        request_ptb(b, &targets, next_addr);
+        request_ptb(b, &targets, settler_ops_cap, bridge_ops_cap, next_addr);
     })
     .await?
     .append_csv(&state_path.with_extension("gas.csv"))?;

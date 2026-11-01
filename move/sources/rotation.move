@@ -6,13 +6,16 @@
 /// `RotationState` record stored next to them and checked against the
 /// transaction sender. Rotation is a two-step, timelocked transition claimable
 /// only by the pre-authorized target, and a claim starts a grace window during
-/// which the previous authority's in-flight calls stay valid. Design record:
-/// docs/src/cap-rotation.md.
+/// which the previous authority's in-flight calls stay valid. Steering
+/// (requesting a rotation) requires the object's `OpsCap`, minted at
+/// entombment and held in operator custody — the hot sequencer key settles
+/// but cannot steer. Design record: docs/src/cap-rotation.md.
 module podseq::rotation {
     use sui::clock::{Self, Clock};
     use sui::dynamic_field as df;
     use sui::event;
-    use sui::object::UID;
+    use sui::object::{Self, ID, UID};
+    use sui::transfer;
     use std::option::{Self, Option};
     use sui::tx_context::{Self, TxContext};
 
@@ -32,6 +35,13 @@ module podseq::rotation {
     const E_NO_PREVIOUS: u64 = 6;
     /// The parent already carries rotation state.
     const E_ALREADY_ENTOMBED: u64 = 7;
+    /// The tombstoned `request_rotation` was called; steering requires the
+    /// object's `OpsCap` via `request_rotation_ops`.
+    const E_OPS_REQUIRED: u64 = 8;
+    /// The `OpsCap` was minted for a different guarded object.
+    const E_OPS_MISMATCH: u64 = 9;
+    /// An `OpsCap` was already minted for this object; the mint is one-shot.
+    const E_OPS_MINTED: u64 = 10;
 
     /// Lower bound for the requested timelock: still catches a mis-typed
     /// target before anything irreversible happens.
@@ -84,12 +94,37 @@ module podseq::rotation {
         TombKey {}
     }
 
+    /// Returns the guarded object the cap steers.
+    public fun ops_bound_object(ops: &OpsCap): ID {
+        ops.for_id
+    }
+
+    /// Destroys the cap, one-way. Steering for its object is gone for good —
+    /// no further rotation can be requested for it. Settlement is unaffected.
+    public fun retire_ops_cap(ops: OpsCap) {
+        let OpsCap { id, for_id } = ops;
+        event::emit(OpsCapRetired { cap_id: for_id });
+        id.delete();
+    }
+
     /// Dynamic-field key under which the authority record is stored on the
     /// guarded object.
     public struct StateKey has copy, drop, store {}
 
     /// Dynamic-field key under which the entombed capability is stored.
     public struct TombKey has copy, drop, store {}
+
+    /// Steering capability for one guarded object, minted by [`entomb`] and
+    /// bound to that object forever. Holding it — not being the rotation
+    /// authority — authorizes [`request_rotation_ops`], so the hot sequencer
+    /// key can settle but cannot steer rotation. `store` lets the operator
+    /// move it to cold custody with a plain transfer; [`retire_ops_cap`]
+    /// destroys it one-way.
+    public struct OpsCap has key, store {
+        id: UID,
+        /// The guarded object this cap steers (`E_OPS_MISMATCH` elsewhere).
+        for_id: ID,
+    }
 
     /// Authority record for one guarded object, stored under `StateKey`.
     public struct RotationState has copy, drop, store {
@@ -119,6 +154,8 @@ module podseq::rotation {
     }
 
     /// A rotation was pre-authorized (or re-authorized over a prior request).
+    /// `authority` is the rotation authority the request applies to — the
+    /// requester is the `OpsCap` holder, who need not be that authority.
     public struct RotationRequested has copy, drop {
         authority: address,
         to: address,
@@ -143,13 +180,45 @@ module podseq::rotation {
         authority: address,
     }
 
+    /// An `OpsCap` was destroyed. Steering for its object is permanently
+    /// gone: no further rotation can be requested for it.
+    public struct OpsCapRetired has copy, drop {
+        cap_id: ID,
+    }
+
+    /// An `OpsCap` was minted: by [`entomb_ops`] to the entombing sender, or
+    /// by the one-shot [`mint_ops_cap`] custody ceremony to `recipient`.
+    public struct OpsCapMinted has copy, drop {
+        for_id: ID,
+        recipient: address,
+    }
+
     /// Entombs `cap` on `parent` and initializes authority to the sender.
     ///
+    /// Signature frozen by the published package; superseded by
+    /// [`entomb_ops`], which also mints the object's `OpsCap`. The body is a
+    /// tombstone — entombment without an `OpsCap` would create a deployment
+    /// nobody can steer, so every call aborts.
+    public fun entomb<CAP: key + store>(
+        _parent: &mut UID,
+        _cap: CAP,
+        _ctx: &TxContext,
+    ) {
+        abort E_OPS_REQUIRED
+    }
+
+    /// Entombs `cap` on `parent`, initializes authority to the sender, and
+    /// mints the object's `OpsCap` to the sender.
+    ///
     /// The last transaction ever gated by object ownership of the cap: from
-    /// here on, calls are checked against `RotationState`. `initialize` still
-    /// transfers the caps to the operator; entombment is the migration step.
-    public fun entomb<CAP: key + store>(parent: &mut UID, cap: CAP, ctx: &TxContext) {
+    /// here on, calls are checked against `RotationState` and steering
+    /// against the freshly minted `OpsCap`. `initialize` still transfers the
+    /// caps to the operator; entombment is the migration step, and the mint
+    /// makes the operator the first steering authority. The sender should
+    /// move the `OpsCap` to cold custody before going live.
+    public fun entomb_ops<CAP: key + store>(parent: &mut UID, cap: CAP, ctx: &mut TxContext) {
         assert!(!df::exists(parent, StateKey {}), E_ALREADY_ENTOMBED);
+        assert!(!df::exists(parent, OpsMintedKey {}), E_OPS_MINTED);
         let authority = tx_context::sender(ctx);
         df::add(parent, TombKey {}, cap);
         df::add(
@@ -161,7 +230,47 @@ module podseq::rotation {
                 pending: option::none(),
             },
         );
+        df::add(parent, OpsMintedKey {}, true);
+        mint_and_transfer(parent, authority, ctx);
         event::emit(CapEntombed { authority });
+    }
+
+    /// One-shot custody ceremony for deployments entombed before the
+    /// `OpsCap` existed (their `RotationState` is live but no cap was ever
+    /// minted): mints the object's `OpsCap` straight to `recipient` — the
+    /// cold steering address — without the hot key ever holding it.
+    ///
+    /// Authority only (the same key that settles), and once per object: the
+    /// mint marker dynamic field makes a later re-mint impossible, so a
+    /// key compromised after the ceremony cannot produce itself a cap.
+    /// Deployments whose caps live in a foreign wallet settle fail-closed
+    /// until their operator runs this or the `entomb_ops` ceremony.
+    public fun mint_ops_cap(parent: &mut UID, recipient: address, ctx: &mut TxContext) {
+        assert_is_authority(parent, ctx);
+        assert!(!df::exists(parent, OpsMintedKey {}), E_OPS_MINTED);
+        df::add(parent, OpsMintedKey {}, true);
+        mint_and_transfer(parent, recipient, ctx);
+    }
+
+    /// Returns the `OpsMintedKey` singleton for indexers and tests.
+    public fun ops_minted_key(): OpsMintedKey {
+        OpsMintedKey {}
+    }
+
+    /// Dynamic-field key marking that an `OpsCap` was already minted for the
+    /// guarded object.
+    public struct OpsMintedKey has copy, drop, store {}
+
+    /// Mints the `OpsCap` for `parent` and transfers it to `recipient`.
+    fun mint_and_transfer(parent: &UID, recipient: address, ctx: &mut TxContext) {
+        transfer::public_transfer(
+            OpsCap { id: object::new(ctx), for_id: object::uid_to_inner(parent) },
+            recipient,
+        );
+        event::emit(OpsCapMinted {
+            for_id: object::uid_to_inner(parent),
+            recipient,
+        });
     }
 
     /// Borrows the authority record. Aborts when the parent was never
@@ -201,23 +310,46 @@ module podseq::rotation {
         abort E_NOT_AUTHORIZED
     }
 
-    /// Pre-authorizes `to` to claim after `delay_ms`, replacing any pending
-    /// request. Authority only — the previous authority in its grace window
-    /// can settle but cannot steer rotation.
+    /// Pre-authorizes `to` to claim after `delay_ms`.
+    ///
+    /// Signature frozen by the published package; steering moved to
+    /// [`request_rotation_ops`], which requires the object's `OpsCap`. The
+    /// body is a tombstone: every call aborts, so no key can steer rotation
+    /// through this entrypoint.
     public fun request_rotation(
+        _parent: &mut UID,
+        _to: address,
+        _delay_ms: u64,
+        _clock: &Clock,
+        _ctx: &TxContext,
+    ) {
+        abort E_OPS_REQUIRED
+    }
+
+    /// Pre-authorizes `to` to claim after `delay_ms`, replacing any pending
+    /// request. Authorized by holding the object's `OpsCap` — the steering
+    /// authority — not by being the rotation authority, so the hot sequencer
+    /// key can settle but cannot steer. The previous authority in its grace
+    /// window can settle but can steer only if it also holds the cap. The
+    /// sender is never read: the capability is the whole check.
+    ///
+    /// Aborts with `E_OPS_MISMATCH` when the cap was minted for another
+    /// guarded object.
+    public fun request_rotation_ops(
         parent: &mut UID,
         to: address,
         delay_ms: u64,
         clock: &Clock,
-        ctx: &TxContext,
+        ops: &OpsCap,
     ) {
-        assert_is_authority(parent, ctx);
+        assert!(ops.for_id == object::uid_to_inner(parent), E_OPS_MISMATCH);
         assert!(MIN_DELAY_MS <= delay_ms && delay_ms <= MAX_DELAY_MS, E_DELAY_OUT_OF_BOUNDS);
         let eligible_at_ms = clock::timestamp_ms(clock) + delay_ms;
+        let authority = state(parent).authority;
         df::borrow_mut<StateKey, RotationState>(parent, StateKey {}).pending =
             option::some(PendingRotation { to, eligible_at_ms });
         event::emit(RotationRequested {
-            authority: tx_context::sender(ctx),
+            authority,
             to,
             eligible_at_ms,
         });
@@ -296,6 +428,9 @@ module podseq::rotation {
     const BOB: address = @0xB;
     #[test_only]
     const CAROL: address = @0xC;
+    /// The cold steering holder; deliberately never the rotation authority.
+    #[test_only]
+    const OPS: address = @0xD;
 
     /// Sender-switching test context; `dummy` pins the sender to @0x0.
     ///
@@ -312,8 +447,45 @@ module podseq::rotation {
     #[test_only]
     fun parent_for_testing(ctx: &mut TxContext): TestParent {
         let mut parent = TestParent { id: object::new(ctx) };
-        entomb(&mut parent.id, TestCap { id: object::new(ctx) }, ctx);
+        entomb_ops(&mut parent.id, TestCap { id: object::new(ctx) }, ctx);
         parent
+    }
+
+    /// A parent in the pre-`OpsCap` shape: rotation state live, no mint
+    /// marker — what `mint_ops_cap` exists to migrate.
+    #[test_only]
+    fun legacy_parent_for_testing(ctx: &mut TxContext): TestParent {
+        let mut parent = TestParent { id: object::new(ctx) };
+        let authority = tx_context::sender(ctx);
+        df::add(&mut parent.id, TombKey {}, TestCap { id: object::new(ctx) });
+        df::add(
+            &mut parent.id,
+            StateKey {},
+            RotationState {
+                authority,
+                prev: option::none(),
+                pending: option::none(),
+            },
+        );
+        parent
+    }
+
+    #[test_only]
+    fun destroy_legacy_parent(parent: &mut TestParent) {
+        let _ = df::remove<StateKey, RotationState>(&mut parent.id, StateKey {});
+        let _ = df::remove<OpsMintedKey, bool>(&mut parent.id, OpsMintedKey {});
+        let TestCap { id } = df::remove<TombKey, TestCap>(&mut parent.id, TombKey {});
+        id.delete();
+    }
+
+    /// Test-only mint. Production caps come only from [`entomb_ops`] and
+    /// [`mint_ops_cap`], which transfer them to a wallet — an owned object
+    /// no unit test can reach — so steering tests mint an equivalent cap
+    /// bound to the same parent id. Public test-only: the settlement and
+    /// bridge modules' tests bind caps to their shared objects through it.
+    #[test_only]
+    public fun mint_ops_for_testing(parent: &UID, ctx: &mut TxContext): OpsCap {
+        OpsCap { id: object::new(ctx), for_id: object::uid_to_inner(parent) }
     }
 
     #[test_only]
@@ -334,8 +506,9 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 1);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         let ctx_b = ctx_for(BOB, 2);
         clock::set_for_testing(&mut clock, MIN_DELAY_MS);
         claim_rotation(&mut parent.id, &clock, &ctx_b);
@@ -347,6 +520,7 @@ module podseq::rotation {
         let ctx_a2 = ctx_for(ALICE, 4);
         assert_can_act(&parent.id, &clock, &ctx_a2);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);
@@ -357,8 +531,9 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 1);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         let ctx_b = ctx_for(BOB, 2);
         clock::set_for_testing(&mut clock, MIN_DELAY_MS);
         claim_rotation(&mut parent.id, &clock, &ctx_b);
@@ -367,6 +542,7 @@ module podseq::rotation {
         let ctx_a2 = ctx_for(ALICE, 3);
         assert_can_act(&parent.id, &clock, &ctx_a2);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);
@@ -377,10 +553,11 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 1);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         clock::set_for_testing(&mut clock, 1_000);
-        request_rotation(&mut parent.id, CAROL, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, CAROL, MIN_DELAY_MS, &clock, &ops);
         let target = pending_target(state(&parent.id));
         assert!(option::is_some(&target) && *option::borrow(&target) == CAROL);
 
@@ -390,6 +567,7 @@ module podseq::rotation {
         claim_rotation(&mut parent.id, &clock, &ctx_c);
         assert!(authority(state(&parent.id)) == CAROL);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);
@@ -400,23 +578,25 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 1);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         let ctx_b = ctx_for(BOB, 2);
         clock::set_for_testing(&mut clock, MIN_DELAY_MS);
         claim_rotation(&mut parent.id, &clock, &ctx_b);
 
-        // Bob (now authority) re-requests to Carol; the claim replaces the
-        // grace record, so Alice loses access immediately.
-        let ctx_b2 = ctx_for(BOB, 3);
+        // Bob (now authority) re-requests to Carol through the ops holder;
+        // the claim replaces the grace record, so Alice loses access
+        // immediately.
         clock::set_for_testing(&mut clock, 2 * MIN_DELAY_MS);
-        request_rotation(&mut parent.id, CAROL, MIN_DELAY_MS, &clock, &ctx_b2);
+        request_rotation_ops(&mut parent.id, CAROL, MIN_DELAY_MS, &clock, &ops);
         let ctx_c = ctx_for(CAROL, 4);
         clock::set_for_testing(&mut clock, 3 * MIN_DELAY_MS);
         claim_rotation(&mut parent.id, &clock, &ctx_c);
         let ctx_a2 = ctx_for(ALICE, 5);
         assert_can_act(&parent.id, &clock, &ctx_a2);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);
@@ -427,12 +607,16 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 1);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        // The ops holder steers to a new key; the current authority claiming
+        // a request staged for someone else is still rejected.
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         clock::set_for_testing(&mut clock, MIN_DELAY_MS);
         let ctx_a2 = ctx_for(ALICE, 2);
         claim_rotation(&mut parent.id, &clock, &ctx_a2);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);
@@ -445,8 +629,9 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 11);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         // Even past the eligibility point, the staged key is nobody until the
         // claim lands: a half-rotated sequencer signing with the new key
         // fails closed instead of acting with one foot in each role.
@@ -454,31 +639,199 @@ module podseq::rotation {
         let ctx_b = ctx_for(BOB, 12);
         assert_can_act(&parent.id, &clock, &ctx_b);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);
     }
 
-    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED)]
+    #[test, expected_failure(abort_code = E_OPS_REQUIRED)]
     fun the_previous_owner_cannot_steer_during_grace() {
         let mut ctx_a = ctx_for(ALICE, 13);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         let ctx_b = ctx_for(BOB, 14);
         clock::set_for_testing(&mut clock, MIN_DELAY_MS);
         claim_rotation(&mut parent.id, &clock, &ctx_b);
 
         // Inside the grace window the previous authority may settle and
-        // withdraw, but steering (request) stays with the current authority
-        // alone — otherwise the old key could pre-authorize itself a way
-        // back in.
+        // withdraw, but steering goes through `request_rotation_ops` and the
+        // `OpsCap` she does not hold — the tombstoned entrypoint rejects her
+        // (and everyone else) outright.
         let ctx_a2 = ctx_for(ALICE, 15);
         request_rotation(&mut parent.id, ALICE, MIN_DELAY_MS, &clock, &ctx_a2);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test, expected_failure(abort_code = E_OPS_REQUIRED)]
+    fun the_tombstoned_request_aborts_even_for_the_authority() {
+        let mut ctx_a = ctx_for(ALICE, 29);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let clock = clock::create_for_testing(&mut ctx_a);
+
+        // The hot sequencer key IS the authority here; steering still goes
+        // through the cap, which it does not hold.
+        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test]
+    fun the_ops_holder_can_request_without_being_the_authority() {
+        let mut ctx_a = ctx_for(ALICE, 23);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
+
+        // Steering never reads the sender — the bound cap is the whole
+        // check — so a cold holder Alice never authorized as authority can
+        // stage the rotation, and only the target can complete it.
+        let ctx_ops = ctx_for(OPS, 24);
+        clock::set_for_testing(&mut clock, 1_000);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
+        let target = pending_target(state(&parent.id));
+        assert!(option::is_some(&target) && *option::borrow(&target) == BOB);
+
+        clock::set_for_testing(&mut clock, 1_000 + MIN_DELAY_MS);
+        let ctx_b = ctx_for(BOB, 25);
+        claim_rotation(&mut parent.id, &clock, &ctx_b);
+        assert!(authority(state(&parent.id)) == BOB);
+
+        retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent);
+        destroy(parent);
+        let _ = ctx_ops;
+    }
+
+    #[test, expected_failure(abort_code = E_OPS_MISMATCH)]
+    fun an_ops_cap_bound_to_another_object_cannot_steer() {
+        let mut ctx_a = ctx_for(ALICE, 26);
+        let mut parent_a = parent_for_testing(&mut ctx_a);
+        let mut ctx_b = ctx_for(BOB, 27);
+        let mut parent_b = parent_for_testing(&mut ctx_b);
+        let clock = clock::create_for_testing(&mut ctx_a);
+        let ops_a = mint_ops_for_testing(&parent_a.id, &mut ctx_a);
+
+        // Caps are bound at mint; parent B rejects A's cap even though the
+        // holder is a legitimate steering authority elsewhere.
+        request_rotation_ops(&mut parent_b.id, CAROL, MIN_DELAY_MS, &clock, &ops_a);
+
+        retire_ops_cap(ops_a);
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent_a);
+        destroy(parent_a);
+        destroy_parent(&mut parent_b);
+        destroy(parent_b);
+    }
+
+    #[test]
+    fun the_ops_holder_can_steer_during_grace() {
+        let mut ctx_a = ctx_for(ALICE, 30);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
+
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
+        let ctx_b = ctx_for(BOB, 31);
+        clock::set_for_testing(&mut clock, MIN_DELAY_MS);
+        claim_rotation(&mut parent.id, &clock, &ctx_b);
+
+        // Steering is the ops holder's power at all times, grace included:
+        // the grace window only protects the previous authority's in-flight
+        // settle/withdraw calls, and a claim staged now still waits out its
+        // own timelock.
+        clock::set_for_testing(&mut clock, MIN_DELAY_MS + 1);
+        request_rotation_ops(&mut parent.id, CAROL, MIN_DELAY_MS, &clock, &ops);
+        let target = pending_target(state(&parent.id));
+        assert!(option::is_some(&target) && *option::borrow(&target) == CAROL);
+
+        retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test]
+    fun retiring_the_ops_cap_is_one_way() {
+        let mut ctx_a = ctx_for(ALICE, 32);
+        let mut parent = parent_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
+
+        assert!(ops_bound_object(&ops) == object::uid_to_inner(&parent.id));
+        // Provable retirement: after this the cap cannot even be named by a
+        // transaction, so steering is structurally unreachable.
+        retire_ops_cap(ops);
+
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test, expected_failure(abort_code = E_OPS_REQUIRED)]
+    fun the_tombstoned_entomb_aborts() {
+        let mut ctx_a = ctx_for(ALICE, 33);
+        let mut parent = TestParent { id: object::new(&mut ctx_a) };
+
+        entomb(&mut parent.id, TestCap { id: object::new(&mut ctx_a) }, &ctx_a);
+
+        destroy(parent);
+    }
+
+    #[test]
+    fun the_legacy_mint_marks_the_object_and_reaches_the_recipient() {
+        let mut ctx_a = ctx_for(ALICE, 34);
+        let mut parent = legacy_parent_for_testing(&mut ctx_a);
+        let clock = clock::create_for_testing(&mut ctx_a);
+
+        // The authority runs the one-shot ceremony straight to the cold
+        // steering address; the marker blocks any later re-mint.
+        assert!(!df::exists(&parent.id, OpsMintedKey {}));
+        mint_ops_cap(&mut parent.id, OPS, &mut ctx_a);
+        assert!(df::exists(&parent.id, OpsMintedKey {}));
+
+        // Steering works from the recipient side through the same bound-cap
+        // check the entombment mint produces.
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
+        let target = pending_target(state(&parent.id));
+        assert!(option::is_some(&target) && *option::borrow(&target) == BOB);
+
+        retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_legacy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED)]
+    fun the_legacy_mint_is_authority_only() {
+        let mut ctx_a = ctx_for(ALICE, 35);
+        let mut parent = parent_for_testing(&mut ctx_a);
+
+        let mut ctx_b = ctx_for(BOB, 36);
+        mint_ops_cap(&mut parent.id, BOB, &mut ctx_b);
+
+        destroy_parent(&mut parent);
+        destroy(parent);
+    }
+
+    #[test, expected_failure(abort_code = E_OPS_MINTED)]
+    fun the_legacy_mint_is_one_shot() {
+        let mut ctx_a = ctx_for(ALICE, 37);
+        let mut parent = legacy_parent_for_testing(&mut ctx_a);
+
+        mint_ops_cap(&mut parent.id, OPS, &mut ctx_a);
+        mint_ops_cap(&mut parent.id, OPS, &mut ctx_a);
+
+        destroy_legacy_parent(&mut parent);
         destroy(parent);
     }
 
@@ -487,8 +840,9 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 16);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         let ctx_b = ctx_for(BOB, 17);
         clock::set_for_testing(&mut clock, MIN_DELAY_MS);
         claim_rotation(&mut parent.id, &clock, &ctx_b);
@@ -498,6 +852,7 @@ module podseq::rotation {
         let ctx_a2 = ctx_for(ALICE, 18);
         retire_previous(&mut parent.id, &ctx_a2);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);
@@ -508,8 +863,9 @@ module podseq::rotation {
         let mut ctx_a = ctx_for(ALICE, 19);
         let mut parent = parent_for_testing(&mut ctx_a);
         let mut clock = clock::create_for_testing(&mut ctx_a);
+        let ops = mint_ops_for_testing(&parent.id, &mut ctx_a);
 
-        request_rotation(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ctx_a);
+        request_rotation_ops(&mut parent.id, BOB, MIN_DELAY_MS, &clock, &ops);
         let ctx_b = ctx_for(BOB, 20);
         clock::set_for_testing(&mut clock, MIN_DELAY_MS);
         claim_rotation(&mut parent.id, &clock, &ctx_b);
@@ -522,6 +878,7 @@ module podseq::rotation {
         let ctx_a2 = ctx_for(ALICE, 22);
         assert_can_act(&parent.id, &clock, &ctx_a2);
 
+        retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_parent(&mut parent);
         destroy(parent);

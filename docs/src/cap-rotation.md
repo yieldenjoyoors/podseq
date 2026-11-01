@@ -221,12 +221,18 @@ programmable transaction block, so the two rotations cannot drift apart.
 
 | Function (on `settlement` / `bridge`)  | Caller          | Checks                                                        |
 | -------------------------------------- | --------------- | ------------------------------------------------------------- |
-| `entomb_settler_cap(cap, registry, ctx)` / `entomb_bridge_cap(cap, vault, ctx)` | current cap owner | input ownership (last object-auth check ever); stores cap in a dynamic field, initializes `authority = sender` |
+| `entomb_settler_cap_ops(cap, registry, ctx)` / `entomb_bridge_cap_ops(cap, vault, ctx)` | current cap owner | input ownership (last object-auth check ever); stores cap in a dynamic field, initializes `authority = sender`, mints the object's `OpsCap` to the sender |
 | `settle_as(registry, inbox, clock, …)` / `withdraw_as<T>(vault, clock, …)`      | authority (or prev, in grace) | `sender == authority`, else `prev` and `now <= prev_until_ms`; then the existing gate logic |
-| `request_rotation(registry, to, delay_ms, ctx)` / same on `vault`               | authority       | `MIN_DELAY_MS <= delay_ms <= MAX_DELAY_MS`; overwrites any pending |
+| `request_rotation_ops(registry, clock, to, delay_ms, ops)` / same on `vault`    | `OpsCap` holder | the cap is bound to this object (`E_OPS_MISMATCH` otherwise); `MIN_DELAY_MS <= delay_ms <= MAX_DELAY_MS`; overwrites any pending; the sender is never read |
 | `cancel_rotation(…)`                   | authority       | clears `pending`                                              |
 | `claim_rotation(…)`                    | **pending target** | `sender == pending.to` and `eligible_at_ms <= now <= eligible_at_ms + CLAIM_WINDOW_MS` |
 | `retire_previous(…)`                   | authority       | clears `prev` (one-way, after the swap is verified)           |
+| `mint_ops_cap(parent, recipient, ctx)` / `retire_ops_cap(ops)`                  | authority / holder | one-shot legacy mint straight to the cold address; one-way destroy (see ops custody) |
+
+The pre-ops entrypoints `entomb_settler_cap`, `entomb_bridge_cap`, and
+`request_rotation` keep their published signatures but their bodies are
+tombstones: every call aborts with `rotation::E_OPS_REQUIRED`. Steering
+without the cap is unreachable, for the authority included.
 
 `claim_rotation` flips `authority` to the caller and sets
 `prev = (old, now + PREV_GRACE_MS)` in the same transaction — the atomic cut-over. All
@@ -267,14 +273,16 @@ time, not a race. The failure mode this eliminates is Alternative A's: there is 
 single transaction after which previously-valid signatures stop working.
 
 **(b) No race with the old owner.** After `claim_rotation` there is exactly one
-authority, and only it can request, cancel, or replace a pending rotation. The old
-owner cannot redirect a rotation to itself, cannot accelerate the timelock (the Sui
-`Clock` anchors `eligible_at_ms` at request time, and claims before it abort), and
-cannot revive an expired claim. The one dangerous power it keeps is cancellation —
-which is the safe direction: a compromised old key can at worst stall rotation, visibly
-and on-chain, until the operator re-requests. That residual risk is the same one
-`Ownable2Step` accepts (the current owner can always replace the pending owner), and it
-shuts with the hardening item below.
+authority, and only it can cancel a pending rotation. Steering — requesting or
+replacing a rotation — belongs to the `OpsCap` holder, not to whichever key is
+the authority (see ops custody below). The old owner cannot redirect a rotation
+to itself, cannot accelerate the timelock (the Sui `Clock` anchors
+`eligible_at_ms` at request time, and claims before it abort), and cannot revive
+an expired claim. The one dangerous power the authority key keeps is
+cancellation — which is the safe direction: a compromised authority key can at
+worst stall rotation, visibly and on-chain, until the operator re-requests with
+the cap. It cannot steer the rotation anywhere, which is the escalation
+`Ownable2Step` still allows and this design does not.
 
 **(c) Settlement continuity.** Entombment initializes `authority = sender`, so from the
 first rotation-state transaction onward there is no moment without a valid authority:
@@ -347,12 +355,46 @@ a loud error, and an unreadable chain state never entombs (the ceremony moves an
 owned object; a stale read must not move someone else's cap). Deployments whose
 caps live in some other wallet still run step 2 by hand.
 
+## Ops custody (steering is separate from settling)
+
+Entombment mints an `OpsCap` per guarded object — bound to that object's id
+forever — and transfers it to whoever signed the ceremony. Holding an object's
+`OpsCap`, not being its rotation authority, is what authorizes
+`request_rotation_ops`; the sender of the request is never read. That split is
+the point: the hot sequencer key settles and withdraws, and cannot stage a
+rotation to a key it controls, because it does not hold the cap.
+
+- **Custody.** After the ceremony, move both caps to a cold wallet with a plain
+  transfer (`OpsCap` has `store`; `sui client transfer` works). A hot key that
+  is compromised afterwards can settle — that risk is unchanged and unchangeable
+  while it holds the authority — but it cannot redirect future authority.
+- **One mint per object.** `entomb_ops` records a mint marker as a dynamic
+  field; `mint_ops_cap` refuses once the marker exists. A key compromised after
+  the ceremony cannot mint itself a second cap.
+- **The legacy ceremony.** Deployments entombed before the `OpsCap` existed
+  have live rotation state but no cap and no marker. `mint_ops_cap(parent,
+  recipient, ctx)` — authority-signed, one-shot — mints straight to the cold
+  address, so the hot key never holds steering even once.
+- **Retirement.** `retire_ops_cap` destroys a cap one-way (event on chain).
+  Steering for that object is gone for good; settlement is unaffected. Losing a
+  cap without retiring it bricks steering the same way — settlement keeps
+  running, but no further rotation can be requested for that object.
+- **Wrong-object caps fail closed.** A cap bound to the Registry cannot steer
+  the Vault (`E_OPS_MISMATCH`), so one leaked cap is one leaked object's
+  steering, not both.
+- **Cancellation stays with the authority.** A compromised authority key can
+  clear a pending request, stalling rotation until the operator re-requests.
+  That is a visible livelock, not an escalation: cancel grants no power to
+  stage a claim.
+
 ## Residual risks and follow-ups
 
-- **Pre-claim compromise of the current key** can cancel a pending rotation and
-  re-request one to an attacker address, claimable after its own timelock. The window
-  is observable on chain. Hardening: a separate cold `OpsCap` required for
-  `request_rotation`, so the hot sequencer key can never steer rotation.
+- **Pre-claim compromise of the current key** can cancel a pending rotation but
+  can no longer steer one: requesting requires the object's `OpsCap` (see ops
+  custody above), which the sequencer key does not hold. The remaining power —
+  repeatedly cancelling the operator's requests — is a visible denial of
+  rotation, not a takeover. A lost or unretired `OpsCap` is the mirror risk:
+  steering for that object is gone while settlement continues.
 - **`UpgradeCap` custody** is the true backstop above all of this (an upgrade can
   repoint anything); its custody and aging policy is its own hardening item.
 - Fuzzing and gas measurement landed; see [Verification](#verification).
@@ -367,6 +409,7 @@ caps live in some other wallet still run step 2 by hand.
 | Node-runtime wallet switch without stopping production or relayer  | in-place signer swap under the existing lock; watcher drives it        |
 | Crash mid-window resumes in the correct role                       | role derived from chain state; idempotent on-chain steps               |
 | Independent verification without trusting the sequencer            | `RotationState` + events are plain shared-object state, readable like the inbox |
+| The hot key cannot steer rotation                                   | steering requires the object's bound `OpsCap`; `request_rotation` is a tombstone; the mint is one-shot and marked |
 
 ## Verification
 
@@ -386,7 +429,13 @@ calls bind a fresh tx context (see the Move test helper pattern).
 | Case | Where pinned | Result |
 | --- | --- | --- |
 | The pre-authorized target acts before its claim | `rotation::the_preauthorized_target_cannot_act_without_claiming` | aborts `E_NOT_AUTHORIZED` — the staged key is nobody until the claim lands, so a half-rotated sequencer fails closed |
-| The previous authority steers during its grace window | `rotation::the_previous_owner_cannot_steer_during_grace` | aborts — grace authorizes settle/withdraw, never `request_rotation`/`cancel_rotation`/`retire_previous`; the old key cannot pre-authorize itself a way back in |
+| The previous authority steers during its grace window | `rotation::the_previous_owner_cannot_steer_during_grace` | aborts `E_OPS_REQUIRED` — grace authorizes settle/withdraw, never steering; the tombstoned `request_rotation` rejects everyone, and the old key holds no `OpsCap` |
+| The authority itself tries the tombstoned request | `rotation::the_tombstoned_request_aborts_even_for_the_authority` | aborts `E_OPS_REQUIRED` — steering is unreachable without the cap, for the authority included |
+| A stranger steers with a bound cap | `rotation::the_ops_holder_can_request_without_being_the_authority` | succeeds — the cap is the whole check; only the pre-authorized target can then claim |
+| A Registry cap steers the Vault | `rotation::an_ops_cap_bound_to_another_object_cannot_steer` | aborts `E_OPS_MISMATCH` — caps are bound at mint, per object |
+| Steering during grace | `rotation::the_ops_holder_can_steer_during_grace` | succeeds for the cap holder; the claim still waits out its own timelock |
+| A second ops mint | `rotation::the_legacy_mint_is_one_shot` | aborts `E_OPS_MINTED` — the marker makes the mint one-shot per object |
+| A non-authority runs the legacy mint | `rotation::the_legacy_mint_is_authority_only` | aborts `E_NOT_AUTHORIZED` — the custody ceremony is authority-signed |
 | The previous authority retires itself mid-grace | `rotation::the_previous_owner_cannot_retire_itself_during_grace` | aborts — retiring is the current authority's one-way act |
 | Retire vs. the grace clock | `rotation::retiring_the_previous_kills_its_window_immediately` | the old key is rejected immediately after the one-way retire; the window is not kept open by the clock |
 | Settlement interleaved with the full rotation window | `settlement::settles_interleave_with_the_claim_and_retry_across_the_swap` | old-key settles run through pre-authorization and the timelock wait, both keys settle inside grace, a duplicate submission is an idempotent no-op across the swap, heights stay sequential, no settlement failure |
@@ -430,12 +479,14 @@ the rotation target read past short inputs), fixed before the recorded runs.
 Measured by executing the node's real PTBs against testnet
 (`crates/sui/examples/rotation_gas_bench.rs`; digests in
 `bench_state.gas.csv` next to the run state). MIST, 1 SUI = 10⁹ MIST;
-net = computation + storage − rebate.
+net = computation + storage − rebate. The numbers predate the ops gate; the
+request PTB now carries one extra object input per move-call (the two
+`OpsCap`s), a cost inside the noise for this table.
 
 | Transaction | Computation | Storage | Rebate | Net |
 | --- | --- | --- | --- | --- |
 | `settle_as` (baseline, one block anchor) | 1,000,000 | 4,902,000 | 3,450,055 | **2,451,945** |
-| `request_rotation` (both objects, one PTB) | 1,000,000 | 9,462,000 | 8,853,115 | **1,608,885** |
+| `request_rotation_ops` (both objects, one PTB) | 1,000,000 | 9,462,000 | 8,853,115 | **1,608,885** |
 | `claim_rotation` (both objects, one PTB) | 1,000,000 | 9,462,000 | 10,068,993 | **393,007** |
 | `retire_previous` (both objects, one PTB) | 1,000,000 | 8,854,000 | 9,461,054 | **392,946** |
 | `settle_as` on the new authority (post-swap) | 1,000,000 | 4,902,000 | 3,450,055 | **2,451,945** |
