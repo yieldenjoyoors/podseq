@@ -15,11 +15,24 @@ pub struct P2pConfig {
     pub application_namespace: Vec<u8>,
     /// Bootstrap peers as (64-char hex pubkey, socket addr).
     ///
-    /// These are both dialed on startup and admitted as peers: the discovery
-    /// tracker bounces any connection from a key outside
-    /// `bootstrap_peers ∪ {self}`. Every node in a deployment must therefore
-    /// list all of its peers here.
+    /// These are dialed on startup and persistently admitted: the tracker
+    /// always accepts connections from a bootstrapper, and holds its
+    /// dialable address. With [`P2pConfig::registry_admission`] disabled
+    /// they also define the tracked peer set, so every node in a static
+    /// deployment must list all of its peers here.
     pub bootstrap_peers: Vec<(String, SocketAddr)>,
+    /// Admit peers from registry-published peer sets
+    /// ([`crate::AdmissionHandle`]) instead of the static
+    /// `bootstrap_peers ∪ {self}` set.
+    ///
+    /// Chain-derived sets are registered under the on-chain book version,
+    /// so every node deriving its set from the same chain state produces
+    /// identical content per index — the invariant the discovery gossip
+    /// enforces by killing peers whose set content disagrees. When true,
+    /// no initial peer set is registered at startup; admission begins
+    /// with the first registry read. `bootstrap_peers` still provides
+    /// dial addresses (tracked peer sets carry identities only).
+    pub registry_admission: bool,
     /// Maximum message size in bytes.
     pub max_message_size: u32,
     /// Messages cached per peer by the broadcast engine.
@@ -28,7 +41,11 @@ pub struct P2pConfig {
     pub broadcast_mailbox_size: usize,
     /// Mailbox capacity for the discovery network's internal actors.
     pub mailbox_size: usize,
-    /// Maximum distinct identities per peer-set index, including the local identity.
+    /// Maximum distinct identities per peer-set index.
+    ///
+    /// Must exceed the on-chain committee cap (100), or registry admission
+    /// truncates sets differently per node and the gossip kills the
+    /// connections it was meant to enable.
     pub max_peers_per_set: usize,
 }
 
@@ -40,11 +57,12 @@ impl Default for P2pConfig {
             dialable_addr: None,
             application_namespace: b"podseq-v1".to_vec(),
             bootstrap_peers: Vec::new(),
+            registry_admission: false,
             max_message_size: 2 * 1024 * 1024,
             broadcast_cache_size: 128,
             broadcast_mailbox_size: 1024,
             mailbox_size: 1024,
-            max_peers_per_set: 32,
+            max_peers_per_set: 128,
         }
     }
 }

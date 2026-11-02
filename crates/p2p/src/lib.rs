@@ -14,7 +14,7 @@ mod node;
 pub use config::P2pConfig;
 pub use key::{load_or_generate_key, read_pubkey_hex};
 pub use message::BlockMessage;
-pub use node::{BlockBroadcaster, BlockReceiver, P2pNode};
+pub use node::{AdmissionHandle, BlockBroadcaster, BlockReceiver, P2pNode};
 
 /// The p2p identity keypair type used by Commonware.
 pub type IdentityKey = commonware_cryptography::ed25519::PrivateKey;

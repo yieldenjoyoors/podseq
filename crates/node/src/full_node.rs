@@ -10,9 +10,13 @@ use alloy_rpc_types_engine::ForkchoiceState;
 use anyhow::{Context, Result};
 use podseq_core::DataAvailability;
 use podseq_engine::{Engine, PARENT_BEACON_BLOCK_ROOT};
-use podseq_p2p::BlockReceiver;
-use podseq_sui::deadline::{DeadlineError, DeadlineStatus};
-use podseq_sui::Client as SuiClient;
+use podseq_p2p::{AdmissionHandle, BlockReceiver};
+use podseq_sui::inbox::{InboxError, InboxTransport, SuiInboxTransport};
+use podseq_sui::peers::PeerBookReader;
+use podseq_sui::{
+    deadline::{DeadlineError, DeadlineStatus},
+    Client as SuiClient,
+};
 
 use crate::store::StateStore;
 use std::str::FromStr;
@@ -47,6 +51,10 @@ pub struct FullNode {
     /// `sui.inbox_id` is configured (deadline verification disabled).
     deadline: Option<podseq_sui::deadline::DeadlineMonitor<podseq_sui::inbox::SuiInboxTransport>>,
     halt_gate: HaltGate,
+    /// Registry-committee admission: the p2p handle plus the peer-book
+    /// reader it is fed from. `None` when `p2p.registry_admission` is off
+    /// or the package/registry ids are not configured.
+    admission: Option<(AdmissionHandle, PeerBookReader<SuiInboxTransport>)>,
 }
 
 impl FullNode {
@@ -56,6 +64,7 @@ impl FullNode {
         sui: SuiClient,
         config: &Config,
         p2p_receiver: Option<BlockReceiver>,
+        admission_handle: Option<AdmissionHandle>,
     ) -> Result<Self> {
         crate::store::init(&config.data_dir)
             .with_context(|| format!("initializing storage under {}", config.data_dir.display()))?;
@@ -115,6 +124,11 @@ impl FullNode {
         // node cannot detect a halt on its own.
         let deadline = build_deadline_monitor(config);
 
+        // Committee admission: register the chain-derived peer book under
+        // its on-chain version, so peering is a property of the chain, not
+        // of operator configuration.
+        let admission = build_admission(config, admission_handle);
+
         Ok(Self {
             engine,
             sui,
@@ -133,6 +147,7 @@ impl FullNode {
             table_uid: None,
             deadline,
             halt_gate: HaltGate::default(),
+            admission,
         })
     }
 
@@ -169,6 +184,11 @@ impl FullNode {
         }
 
         let mut ticker = tokio::time::interval(self.poll_interval);
+
+        // Committee admission poll: runs beside the sync loop, registers
+        // new book versions under their on-chain index. Aborted on drop,
+        // i.e. on any run() exit path.
+        let _admission_task = AbortOnDrop(spawn_admission_poll(self.admission.take()));
 
         loop {
             tokio::select! {
@@ -477,6 +497,109 @@ fn build_deadline_monitor(
     }
 }
 
+/// Cadence for registry-committee admission polls. The book changes at
+/// human/operational speed; one read every 10s is cheap and fresh.
+const ADMISSION_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Spawns the committee admission poll task, if configured.
+fn spawn_admission_poll(
+    admission: Option<(AdmissionHandle, PeerBookReader<SuiInboxTransport>)>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    admission.map(|(handle, reader)| {
+        tokio::spawn(async move {
+            let mut applied: Option<u64> = None;
+            let mut ticker = tokio::time::interval(ADMISSION_POLL_INTERVAL);
+            loop {
+                ticker.tick().await;
+                match poll_admission(&reader, &handle, &mut applied).await {
+                    Ok(version) => {
+                        debug!(version, "full node: committee admission synced");
+                    }
+                    Err(e) => warn!(
+                        error = %e,
+                        "full node: committee admission poll failed; keeping previous set"
+                    ),
+                }
+            }
+        })
+    })
+}
+
+/// Aborts the admission poll task when the sync loop exits, on any path.
+struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+        }
+    }
+}
+
+/// Registers a chain-derived peer set under its version — the p2p seam,
+/// so the poll is unit-testable without a live discovery network.
+trait CommitteeAdmission {
+    /// Registers `peers` under peer-set index `epoch`.
+    fn admit(&self, epoch: u64, peers: impl IntoIterator<Item = [u8; 32]>);
+}
+
+impl CommitteeAdmission for AdmissionHandle {
+    fn admit(&self, epoch: u64, peers: impl IntoIterator<Item = [u8; 32]>) {
+        AdmissionHandle::admit(self, epoch, peers);
+    }
+}
+
+/// Reads the peer book once and registers new versions under their
+/// on-chain index. Unchanged versions are a no-op; transport errors
+/// propagate so the caller keeps the previously applied set.
+async fn poll_admission<T: InboxTransport, A: CommitteeAdmission>(
+    reader: &PeerBookReader<T>,
+    admission: &A,
+    applied: &mut Option<u64>,
+) -> Result<u64, InboxError> {
+    let snapshot = reader.snapshot().await?;
+    if *applied != Some(snapshot.version) {
+        admission.admit(snapshot.version, snapshot.peers.iter().map(|p| p.pubkey));
+        *applied = Some(snapshot.version);
+    }
+    Ok(snapshot.version)
+}
+
+/// Builds the committee admission pair from node config.
+///
+/// `None` disables admission: no p2p handle (static `bootstrap_peers`
+/// mode), no configured package id, or an id that does not parse.
+fn build_admission(
+    config: &Config,
+    handle: Option<AdmissionHandle>,
+) -> Option<(AdmissionHandle, PeerBookReader<SuiInboxTransport>)> {
+    let handle = handle?;
+    let registry = config
+        .sui
+        .registry_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| podseq_sui::settlement::parse_address(s, "sui.registry_id").ok());
+    let package = config
+        .sui
+        .settlement_package_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| podseq_sui::settlement::parse_address(s, "sui.settlement_package_id").ok());
+    let (Some(registry), Some(package)) = (registry, package) else {
+        warn!(
+            "full node: p2p.registry_admission requires sui.registry_id and sui.settlement_package_id — disabled"
+        );
+        return None;
+    };
+    let reader = PeerBookReader::new(
+        SuiInboxTransport::new(config.sui.rpc_url.clone()),
+        registry,
+        package,
+    );
+    Some((handle, reader))
+}
+
 /// Turns deadline-status reads into a pause decision for the sync loop.
 ///
 /// A confirmed halt or a violated gate pauses block application; a transport
@@ -514,6 +637,208 @@ impl HaltGate {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod admission_poll_tests {
+    use super::*;
+    use podseq_sui::peers::{PeerBookSnapshot, PublishedPeer};
+    use std::cell::RefCell;
+    use sui_sdk_types::Address;
+
+    /// Always-failing transport: admission polls must never fake a version.
+    struct DownTransport;
+
+    impl InboxTransport for DownTransport {
+        fn object_contents<'a>(
+            &'a self,
+            _id: &'a Address,
+        ) -> podseq_sui::inbox::InboxFuture<'a, Result<Vec<u8>, InboxError>> {
+            Box::pin(async move { Err(InboxError::Rpc("transport down".into())) })
+        }
+
+        fn field_contents<'a>(
+            &'a self,
+            _table: &'a Address,
+            _key: u64,
+        ) -> podseq_sui::inbox::InboxFuture<'a, Result<Option<Vec<u8>>, InboxError>> {
+            Box::pin(async move { Ok(None) })
+        }
+    }
+
+    /// Transport serving one fixed snapshot (id ignored).
+    struct FixedTransport {
+        snapshot: PeerBookSnapshot,
+    }
+
+    impl InboxTransport for FixedTransport {
+        fn object_contents<'a>(
+            &'a self,
+            _id: &'a Address,
+        ) -> podseq_sui::inbox::InboxFuture<'a, Result<Vec<u8>, InboxError>> {
+            let snapshot = self.snapshot.clone();
+            Box::pin(async move {
+                let peers = snapshot
+                    .peers
+                    .iter()
+                    .map(|p| Entry {
+                        key: p.pubkey.to_vec(),
+                        value: p.addr.clone(),
+                    })
+                    .collect();
+                let field = Field {
+                    id: Address::new([0; 32]),
+                    value: Book {
+                        version: snapshot.version,
+                        peers,
+                    },
+                };
+                Ok(bcs::to_bytes(&field).unwrap())
+            })
+        }
+
+        fn field_contents<'a>(
+            &'a self,
+            _table: &'a Address,
+            _key: u64,
+        ) -> podseq_sui::inbox::InboxFuture<'a, Result<Option<Vec<u8>>, InboxError>> {
+            Box::pin(async move { Ok(None) })
+        }
+    }
+
+    #[derive(serde::Serialize)]
+    struct Entry {
+        key: Vec<u8>,
+        value: String,
+    }
+
+    #[derive(serde::Serialize)]
+    struct Book {
+        version: u64,
+        peers: Vec<Entry>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct Field {
+        id: Address,
+        value: Book,
+    }
+
+    use podseq_sui::peers::parse_peer_book;
+
+    /// Records admitted (version, peers) pairs.
+    #[derive(Default)]
+    struct MockAdmission {
+        calls: RefCell<Vec<(u64, Vec<[u8; 32]>)>>,
+    }
+
+    impl CommitteeAdmission for MockAdmission {
+        fn admit(&self, epoch: u64, peers: impl IntoIterator<Item = [u8; 32]>) {
+            self.calls
+                .borrow_mut()
+                .push((epoch, peers.into_iter().collect()));
+        }
+    }
+
+    fn reader_for(snapshot: PeerBookSnapshot) -> PeerBookReader<FixedTransport> {
+        PeerBookReader::new(
+            FixedTransport { snapshot },
+            Address::new([1; 32]),
+            Address::new([2; 32]),
+        )
+    }
+
+    fn snapshot(version: u64, pubkeys: &[[u8; 32]]) -> PeerBookSnapshot {
+        PeerBookSnapshot {
+            version,
+            peers: pubkeys
+                .iter()
+                .map(|k| PublishedPeer {
+                    pubkey: *k,
+                    addr: "seq:7000".into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_version_is_admitted_under_its_index() {
+        let reader = reader_for(snapshot(3, &[[0xaa; 32]]));
+        let admission = MockAdmission::default();
+        let mut applied = None;
+
+        let version = poll_admission(&reader, &admission, &mut applied)
+            .await
+            .unwrap();
+
+        assert_eq!(version, 3);
+        assert_eq!(applied, Some(3));
+        assert_eq!(*admission.calls.borrow(), vec![(3, vec![[0xaa; 32]])]);
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_version_is_a_no_op() {
+        let reader = reader_for(snapshot(3, &[[0xaa; 32]]));
+        let admission = MockAdmission::default();
+        let mut applied = Some(3);
+
+        poll_admission(&reader, &admission, &mut applied)
+            .await
+            .unwrap();
+
+        assert!(admission.calls.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_version_change_re_admits() {
+        let reader = reader_for(snapshot(4, &[[0xaa; 32], [0xbb; 32]]));
+        let admission = MockAdmission::default();
+        let mut applied = Some(3);
+
+        poll_admission(&reader, &admission, &mut applied)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *admission.calls.borrow(),
+            vec![(4, vec![[0xaa; 32], [0xbb; 32]])]
+        );
+        assert_eq!(applied, Some(4));
+    }
+
+    #[tokio::test]
+    async fn a_transport_error_propagates_and_keeps_the_applied_version() {
+        let reader =
+            PeerBookReader::new(DownTransport, Address::new([1; 32]), Address::new([2; 32]));
+        let admission = MockAdmission::default();
+        let mut applied = Some(3);
+
+        let result = poll_admission(&reader, &admission, &mut applied).await;
+
+        assert!(matches!(result, Err(InboxError::Rpc(_))));
+        assert_eq!(applied, Some(3));
+        assert!(admission.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn parse_peer_book_still_roundtrips_against_the_mirror() {
+        let bytes = bcs::to_bytes(&Field {
+            id: Address::new([0; 32]),
+            value: Book {
+                version: 9,
+                peers: vec![Entry {
+                    key: vec![0xcc; 32],
+                    value: "a:1".into(),
+                }],
+            },
+        })
+        .unwrap();
+
+        let snapshot = parse_peer_book(&bytes).unwrap();
+
+        assert_eq!(snapshot.version, 9);
+        assert_eq!(snapshot.peers[0].pubkey, [0xcc; 32]);
     }
 }
 

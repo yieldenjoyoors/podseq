@@ -218,6 +218,22 @@ pub struct P2pConfig {
     /// Disable p2p networking.
     #[serde(default)]
     pub no_p2p: bool,
+    /// Admit peers from the registry-published committee book (chain state)
+    /// instead of the static `bootstrap_peers` list. Requires
+    /// `sui.settlement_package_id` and `sui.registry_id`.
+    #[serde(default)]
+    pub registry_admission: bool,
+    /// Publish this node's p2p identity and dialable address to the
+    /// registry committee book at startup (sequencer mode). Requires
+    /// `p2p.dialable_addr`, `sui.settlement_package_id` and
+    /// `sui.registry_id`; failures are retried a bounded number of times
+    /// and then logged (the publish is an idempotent upsert).
+    #[serde(default = "default_p2p_advertise")]
+    pub advertise: bool,
+}
+
+fn default_p2p_advertise() -> bool {
+    true
 }
 
 /// Enshrined bridge configuration.
@@ -279,6 +295,8 @@ impl Default for P2pConfig {
             dialable_addr: None,
             bootstrap_peers: Vec::new(),
             no_p2p: false,
+            registry_admission: false,
+            advertise: true,
         }
     }
 }

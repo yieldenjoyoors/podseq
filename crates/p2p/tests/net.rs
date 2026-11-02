@@ -53,7 +53,7 @@ fn temp_key(label: &str) -> PathBuf {
 }
 
 fn config(
-    key: &PathBuf,
+    key: &std::path::Path,
     listen: SocketAddr,
     bootstrappers: Vec<(String, SocketAddr)>,
 ) -> P2pConfig {
@@ -65,6 +65,107 @@ fn config(
         bootstrap_peers: bootstrappers,
         ..Default::default()
     }
+}
+
+#[test]
+fn dynamically_admitted_peer_receives_broadcasts() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init()
+        .ok();
+    let outcome =
+        Runner::default().start(|context| async move { run_dynamic_admission(context).await });
+    outcome.expect("dynamic admission failed");
+}
+
+async fn run_dynamic_admission(context: podseq_core::runtime::Context) -> Result<(), String> {
+    let key_a = temp_key("dyn-a");
+    let key_b = temp_key("dyn-b");
+    load_or_generate_key(&key_a).expect("key a");
+    load_or_generate_key(&key_b).expect("key b");
+    let pk_a_hex = read_pubkey_hex(&key_a).expect("pubkey a");
+    let pk_b_hex = read_pubkey_hex(&key_b).expect("pubkey b");
+    let sequencer_identity = decode_identity(&pk_a_hex)?;
+    let fullnode_identity = decode_identity(&pk_b_hex)?;
+
+    let addr_a: SocketAddr = format!("127.0.0.1:{}", free_port())
+        .parse()
+        .expect("addr a");
+    let addr_b: SocketAddr = format!("127.0.0.1:{}", free_port())
+        .parse()
+        .expect("addr b");
+
+    // The registry-committee topology: tracked sets come from the chain, so
+    // neither node registers a startup set. The full node (B) keeps the
+    // sequencer (A) as a bootstrapper for its dial address — tracked sets
+    // carry identities only — while A needs no configuration at all.
+    let mut cfg_a = config(&key_a, addr_a, vec![]);
+    cfg_a.registry_admission = true;
+    let mut cfg_b = config(&key_b, addr_b, vec![(pk_a_hex, addr_a)]);
+    cfg_b.registry_admission = true;
+    let node_a = P2pNode::new(&context.child("a"), &cfg_a).map_err(|e| format!("node a: {e}"))?;
+    let node_b = P2pNode::new(&context.child("b"), &cfg_b).map_err(|e| format!("node b: {e}"))?;
+
+    let broadcaster = node_a.broadcaster();
+    let receiver = node_b.receiver();
+
+    // Phase 1: book version 0 (empty, or unread) — nobody is admitted and
+    // A bounces B before any handshake.
+    let block = sample_block(7, 0x01);
+    let digest = BlockMessage::from(block.clone()).digest();
+    let unadmitted_until = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < unadmitted_until {
+        broadcaster.announce(7, &digest);
+        if receiver.poll_next().await.is_some() {
+            return Err("announce reached a peer that was never admitted".into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Phase 2: the registry book lands at version 1 listing both committee
+    // members; each node registers the identical chain-derived content
+    // under the identical peer-set index.
+    node_a
+        .admission()
+        .admit(1, [sequencer_identity, fullnode_identity]);
+    node_b
+        .admission()
+        .admit(1, [sequencer_identity, fullnode_identity]);
+
+    // Phase 3: with both sides tracked, the announce side-channel delivers.
+    let deadline = Instant::now() + Duration::from_secs(75);
+    loop {
+        if Instant::now() >= deadline {
+            return Err("timed out waiting for peering after admission".into());
+        }
+        broadcaster.announce(7, &digest);
+        if receiver.poll_next().await.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    // Phase 4: admission stability. Peer-set gossip compares tracked-set
+    // content per index and KILLS peers on disagreement; a divergent
+    // admission scheme shows up as a connect/kill loop here. Surviving one
+    // full gossip cycle (5s in Config::local) and re-delivering proves the
+    // sets agree.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    broadcaster.broadcast(block.clone());
+    let delivered = tokio::time::timeout(Duration::from_secs(30), receiver.receive(&digest))
+        .await
+        .map_err(|_| "connection did not survive the gossip cycle".to_string())?
+        .ok_or("subscribe canceled")?;
+    assert_eq!(delivered.header.height, 7);
+    Ok(())
+}
+
+/// Decodes a 64-char hex p2p identity into its 32 bytes.
+fn decode_identity(hex: &str) -> Result<[u8; 32], String> {
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(hex, &mut out).map_err(|e| format!("identity hex: {e}"))?;
+    Ok(out)
 }
 
 #[test]

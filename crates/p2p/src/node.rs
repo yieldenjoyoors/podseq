@@ -2,6 +2,7 @@
 //!
 //! Uses two p2p channels: block broadcast (ch. 0) and block announce (ch. 1).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -46,6 +47,72 @@ fn handshake(signer: crate::IdentityKey) -> SakeCups<crate::IdentityKey, ChaCha2
 pub struct P2pHandles {
     _network_handle: commonware_runtime::Handle<()>,
     _engine_handle: commonware_runtime::Handle<()>,
+}
+
+/// A runtime-updatable admission set: which peer identities the discovery
+/// tracker admits (and dials).
+///
+/// With [`P2pConfig::registry_admission`], the full-node sync loop registers
+/// the chain-derived peer book under its on-chain version on every poll, so
+/// admission is derived from chain state instead of operator-side
+/// configuration. Content for a given version must be identical on every
+/// node — the discovery gossip kills connections whose peers disagree.
+#[derive(Clone)]
+pub struct AdmissionHandle {
+    oracle: Arc<Mutex<discovery::Oracle<Pk>>>,
+    max_peers: usize,
+    epoch: Arc<AtomicU64>,
+}
+
+impl AdmissionHandle {
+    /// Registers `peers` under peer-set index `epoch` (the on-chain book
+    /// version), replacing older sets as the gossip source of truth.
+    ///
+    /// The set is exactly the chain-derived list, deduplicated and truncated
+    /// to the tracker's `max_peers_per_set` bound (the tracker asserts and
+    /// would panic above it). Truncation is a config-error guard: divergent
+    /// truncation across nodes re-introduces the gossip disagreement the
+    /// versioned content exists to prevent, so keep the bound above the
+    /// on-chain committee cap.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the discovery oracle's mailbox mutex is poisoned (a prior
+    /// holder panicked mid-`track`).
+    pub fn admit(&self, epoch: u64, peers: impl IntoIterator<Item = [u8; 32]>) {
+        let set = admission_set(peers.into_iter().collect(), self.max_peers);
+        let tracked: Result<Vec<Pk>, _> = set.iter().copied().map(load_pubkey).collect();
+        let tracked = match tracked {
+            Ok(tracked) => tracked,
+            Err(e) => {
+                warn!(error = %e, "p2p admission update skipped: undecodable identity");
+                return;
+            }
+        };
+        let count = tracked.len();
+        self.oracle
+            .lock()
+            .expect("p2p admission oracle mutex")
+            .track(epoch, Set::from_iter_dedup(tracked));
+        self.epoch.store(epoch, Ordering::SeqCst);
+        info!(epoch, peers = count, "p2p admission set updated");
+    }
+
+    /// The last peer-set index this handle registered.
+    #[must_use]
+    pub fn applied_epoch(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
+    }
+}
+
+/// Normalizes one tracked set: deduplicated, sorted, truncated to
+/// `max_peers` entries so the tracker's size assert cannot fire.
+fn admission_set(peers: Vec<[u8; 32]>, max_peers: usize) -> Vec<[u8; 32]> {
+    let mut set: Vec<[u8; 32]> = peers;
+    set.sort_unstable();
+    set.dedup();
+    set.truncate(max_peers);
+    set
 }
 
 /// A lightweight block announcement: height + SHA-256 digest.
@@ -166,6 +233,7 @@ impl BlockReceiver {
 pub struct P2pNode {
     broadcaster: BlockBroadcaster,
     receiver: BlockReceiver,
+    admission: AdmissionHandle,
     _handles: P2pHandles,
 }
 
@@ -196,32 +264,48 @@ impl P2pNode {
             hex::encode(our_pk.encode())
         };
         info!(pubkey = %pk_hex, "p2p identity");
+        let own: [u8; 32] = {
+            use commonware_codec::Encode;
+            let encoded = our_pk.encode();
+            encoded
+                .as_ref()
+                .try_into()
+                .expect("ed25519 public key is 32 bytes")
+        };
 
-        let bootstrappers: Vec<_> = config
+        let bootstrapper_keys: Vec<[u8; 32]> = config
             .bootstrap_peers
             .iter()
-            .map(|(hex_key, addr)| {
+            .map(|(hex_key, _)| {
                 let mut bytes = [0u8; 32];
                 hex::decode_to_slice(hex_key, &mut bytes).with_context(|| {
                     format!("bootstrap peer pubkey must be valid 64-char hex, got {hex_key}")
                 })?;
-                let pk = load_pubkey(bytes)
-                    .with_context(|| format!("decoding bootstrap peer pubkey {hex_key}"))?;
-                Ok::<_, anyhow::Error>((pk, Ingress::from(*addr)))
+                Ok::<_, anyhow::Error>(bytes)
+            })
+            .collect::<Result<_>>()?;
+        let bootstrappers: Vec<_> = bootstrapper_keys
+            .iter()
+            .copied()
+            .zip(config.bootstrap_peers.iter().map(|(_, addr)| *addr))
+            .map(|(bytes, addr)| {
+                let pk = load_pubkey(bytes)?;
+                Ok::<_, anyhow::Error>((pk, Ingress::from(addr)))
             })
             .collect::<Result<_>>()?;
 
         let dialable_addr = config.dialable_addr.unwrap_or(config.listen_addr);
 
-        // Track the local identity plus every configured bootstrap peer:
-        // the discovery tracker refuses connections from peers outside the
+        // Static mode registers `self ∪ bootstrap_peers` at startup: the
+        // discovery tracker refuses connections from peers outside the
         // tracked set (`directory.eligible`), so tracking only self — the
-        // old wiring — made every remote peer ineligible and block
-        // dissemination unreachable. The configured bootstrappers are the
-        // committee the node intends to talk to.
-        let mut tracked = vec![our_pk.clone()];
-        tracked.extend(bootstrappers.iter().map(|(pk, _)| pk.clone()));
-
+        // original wiring — made every remote peer ineligible and block
+        // dissemination unreachable. Registry mode instead registers no
+        // startup set: tracked-set content must be identical per index on
+        // every node (the gossip kills peers whose content disagrees), so
+        // sets are only ever registered from the chain-derived book under
+        // its on-chain version.
+        let initial_set = initial_tracked_set(config, own, &bootstrapper_keys)?;
         let p2p_cfg = discovery::Config::local(
             handshake(signer.clone()),
             &config.application_namespace,
@@ -235,7 +319,9 @@ impl P2pNode {
 
         let (mut network, mut oracle) = discovery::Network::new(context.child("network"), p2p_cfg);
 
-        oracle.track(0, Set::try_from(tracked).unwrap_or_default());
+        if let Some(set) = initial_set {
+            oracle.track(0, set);
+        }
         info!("p2p network initialized");
 
         let (bc_sender, bc_receiver) = network.register(
@@ -284,13 +370,25 @@ impl P2pNode {
             mailbox: (*mailbox).clone(),
             announce_rx,
         };
+        let admission = AdmissionHandle {
+            oracle: Arc::new(Mutex::new(oracle.clone())),
+            max_peers: config.max_peers_per_set,
+            epoch: Arc::new(AtomicU64::new(0)),
+        };
 
         info!("p2p node started");
         Ok(Self {
             broadcaster,
             receiver,
+            admission,
             _handles: handles,
         })
+    }
+
+    /// Returns the runtime admission handle for updating the tracked set.
+    #[must_use]
+    pub fn admission(&self) -> AdmissionHandle {
+        self.admission.clone()
     }
 
     /// Returns a cloneable handle for broadcasting blocks and announces.
@@ -314,4 +412,67 @@ fn load_pubkey(bytes: [u8; 32]) -> Result<commonware_cryptography::ed25519::Publ
     let mut buf = bytes::Bytes::copy_from_slice(&bytes);
     commonware_cryptography::ed25519::PublicKey::read_cfg(&mut buf, &())
         .context("decoding 32-byte ed25519 public key")
+}
+
+/// The static-mode startup set: `self ∪ bootstrap_peers` under index 0.
+///
+/// `None` in registry mode — see [`P2pConfig::registry_admission`] for why
+/// the startup set must not exist there.
+fn initial_tracked_set(
+    config: &P2pConfig,
+    own: [u8; 32],
+    bootstrapper_keys: &[[u8; 32]],
+) -> Result<Option<Set<Pk>>> {
+    if config.registry_admission {
+        return Ok(None);
+    }
+    let tracked = admission_set(
+        std::iter::once(own)
+            .chain(bootstrapper_keys.iter().copied())
+            .collect(),
+        config.max_peers_per_set,
+    );
+    let tracked: Vec<Pk> = tracked
+        .iter()
+        .copied()
+        .map(load_pubkey)
+        .collect::<Result<_>>()?;
+    Ok(Some(Set::from_iter_dedup(tracked)))
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::admission_set;
+
+    #[test]
+    fn dedupes_and_sorts_identities() {
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+
+        assert_eq!(admission_set(vec![b, a, b], 8), vec![a, b]);
+    }
+
+    #[test]
+    fn truncates_to_the_tracker_bound() {
+        let set: Vec<[u8; 32]> = (0u8..10).map(|i| [i; 32]).collect();
+
+        let truncated = admission_set(set, 4);
+
+        assert_eq!(truncated.len(), 4);
+        // Lowest-sorted identities survive truncation, deterministically.
+        assert_eq!(truncated[0], [0u8; 32]);
+        assert_eq!(truncated[3], [3u8; 32]);
+    }
+
+    #[test]
+    fn an_empty_book_admits_nobody() {
+        assert_eq!(admission_set(Vec::new(), 8), Vec::<[u8; 32]>::new());
+    }
+
+    #[test]
+    fn a_zero_bound_admits_nobody() {
+        let a = [1u8; 32];
+
+        assert_eq!(admission_set(vec![a], 0), Vec::<[u8; 32]>::new());
+    }
 }

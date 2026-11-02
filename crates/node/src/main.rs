@@ -240,6 +240,122 @@ async fn refresh_sui_gas_balance(
     }
 }
 
+/// Resolves the advertise target set from config, or explains why it is
+/// disabled.
+fn advertise_targets(
+    config: &Config,
+) -> Option<(podseq_sui::peers::PeerTargets, [u8; 32], String)> {
+    let require = |label: &str, value: Option<&String>| match value {
+        Some(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+        _ => {
+            info!(field = label, "p2p advertise disabled (missing config)");
+            None
+        }
+    };
+    let (Some(package), Some(registry), Some(dialable)) = (
+        require(
+            "sui.settlement_package_id",
+            config.sui.settlement_package_id.as_ref(),
+        ),
+        require("sui.registry_id", config.sui.registry_id.as_ref()),
+        require("p2p.dialable_addr", config.p2p.dialable_addr.as_ref()),
+    ) else {
+        return None;
+    };
+
+    let (package, registry) = match (
+        podseq_sui::settlement::parse_address(&package, "sui.settlement_package_id"),
+        podseq_sui::settlement::parse_address(&registry, "sui.registry_id"),
+    ) {
+        (Ok(package), Ok(registry)) => (package, registry),
+        (Err(e), _) | (_, Err(e)) => {
+            warn!(error = %e, "p2p advertise disabled (unparseable object id)");
+            return None;
+        }
+    };
+
+    let p2p_key_path = config.p2p.key_path.clone().unwrap_or_default();
+    let pubkey = match podseq_p2p::read_pubkey_hex(std::path::Path::new(&p2p_key_path)) {
+        Ok(hex) => {
+            let mut pubkey = [0u8; 32];
+            match hex::decode_to_slice(&hex, &mut pubkey) {
+                Ok(()) => pubkey,
+                Err(e) => {
+                    warn!(error = %e, "p2p advertise disabled (malformed p2p identity)");
+                    return None;
+                }
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "p2p advertise disabled (no p2p identity)");
+            return None;
+        }
+    };
+
+    Some((
+        podseq_sui::peers::PeerTargets { package, registry },
+        pubkey,
+        dialable,
+    ))
+}
+
+/// Spawns the bounded-retry task publishing this node's p2p identity and
+/// dialable address into the registry committee book. The key is read from
+/// the settlement handle at publish time, so a rotation hot-swap never
+/// strands the publish on the old authority.
+fn spawn_advertise(
+    rpc_url: String,
+    settlement: std::sync::Arc<tokio::sync::Mutex<podseq_sui::SettlementSigner>>,
+    targets: podseq_sui::peers::PeerTargets,
+    pubkey: [u8; 32],
+    addr: String,
+) {
+    tokio::spawn(async move {
+        for attempt in 1..=5 {
+            let key = settlement.lock().await.key().clone();
+            match podseq_sui::peers::submit_publish_peer(&rpc_url, &key, &targets, pubkey, &addr)
+                .await
+            {
+                Ok(()) => {
+                    info!(
+                        %addr,
+                        "p2p identity published to the registry committee book"
+                    );
+                    return;
+                }
+                Err(e) => {
+                    warn!(error = %e, attempt, "registry peer publish failed");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        }
+        warn!(
+            "registry peer publish failed after 5 attempts; registry-admitting full nodes will not learn this node until it restarts"
+        );
+    });
+}
+
+/// Resolves the advertise target and spawns the bounded-retry publish task,
+/// unless advertising is disabled or unresolvable from config.
+fn maybe_spawn_advertise(
+    config: &Config,
+    settlement: &std::sync::Arc<tokio::sync::Mutex<podseq_sui::SettlementSigner>>,
+) {
+    if !config.p2p.advertise {
+        return;
+    }
+    let Some((targets, pubkey, addr)) = advertise_targets(config) else {
+        return;
+    };
+    spawn_advertise(
+        config.sui.rpc_url.clone(),
+        std::sync::Arc::clone(settlement),
+        targets,
+        pubkey,
+        addr,
+    );
+}
+
 /// Returns `None` when p2p is disabled (`no_p2p`).
 async fn build_p2p(
     context: &podseq_core::runtime::Context,
@@ -279,6 +395,7 @@ async fn build_p2p(
                 Ok((hex.to_string(), addr))
             })
             .collect::<Result<_>>()?,
+        registry_admission: cfg.registry_admission,
         ..podseq_p2p::P2pConfig::default()
     };
 
@@ -420,13 +537,20 @@ async fn start_sequencer(
     // disabled without deployed contract IDs or a staged key.
     let rotation_handle = rotation::spawn(
         &config,
-        settlement_handle,
+        std::sync::Arc::clone(&settlement_handle),
         sender_snapshot,
         sui_bridge_signer,
         adopted_key,
         Arc::clone(&rotation_shutdown),
     )
     .await;
+
+    // Registry committee advertisement: publish this node's p2p identity
+    // and dialable address into the on-chain peer book, so full nodes with
+    // `registry_admission` learn the sequencer from chain state. The
+    // publish is an idempotent upsert (K2 crash-safety); failures are
+    // bounded-retried and then logged, never fatal to block production.
+    maybe_spawn_advertise(&config, &settlement_handle);
 
     info!("starting sequencer loop (Ctrl+C to stop)");
     let result = runner.run().await;
@@ -457,6 +581,24 @@ async fn start_sequencer(
     result
 }
 
+/// Splits the p2p handles into the sync receiver and, when registry
+/// admission is on, the runtime admission handle.
+async fn full_node_p2p_parts(
+    context: &podseq_core::runtime::Context,
+    config: &Config,
+) -> Result<(
+    Option<podseq_p2p::BlockReceiver>,
+    Option<podseq_p2p::AdmissionHandle>,
+)> {
+    Ok(match build_p2p(context, &config.p2p).await? {
+        Some((_bc, rx, node)) => {
+            let admission = config.p2p.registry_admission.then(|| node.admission());
+            (Some(rx), admission)
+        }
+        None => (None, None),
+    })
+}
+
 async fn start_full_node(config: Config, context: podseq_core::runtime::Context) -> Result<()> {
     info!(mode = "full", "starting podseq node");
 
@@ -464,9 +606,7 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
     let podseq_metrics = Arc::new(metrics::PodseqMetrics::new());
     let (metrics_handle, metrics_shutdown) = start_metrics_endpoint(&config, &podseq_metrics)?;
 
-    let receiver = build_p2p(&context, &config.p2p)
-        .await?
-        .map(|(_bc, rx, _n)| rx);
+    let (receiver, admission_handle) = full_node_p2p_parts(&context, &config).await?;
 
     let auth = podseq_engine::Auth::from_file(&config.reth.jwt_path)
         .with_context(|| format!("loading JWT from {}", config.reth.jwt_path.display()))?;
@@ -482,11 +622,74 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
     })
     .context("building Sui-layer client")?;
 
-    let node = full_node::FullNode::new(engine, sui_client, &config, receiver)?;
+    let node = full_node::FullNode::new(engine, sui_client, &config, receiver, admission_handle)?;
     info!("starting full node sync (Ctrl+C to stop)");
     let result = node.run().await;
 
     shutdown_metrics(metrics_handle, metrics_shutdown).await;
 
     result
+}
+
+#[cfg(test)]
+mod advertise_tests {
+    use super::*;
+
+    fn base_config() -> Config {
+        Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap()
+    }
+
+    fn with_key_file(config: &mut Config) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "podseq-advertise-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("p2p.key");
+        podseq_p2p::load_or_generate_key(&key).unwrap();
+        config.p2p.key_path = Some(key.display().to_string());
+        key
+    }
+
+    #[test]
+    fn resolves_targets_from_a_complete_config() {
+        let mut config = base_config();
+        config.sui.settlement_package_id =
+            Some("0x0000000000000000000000000000000000000000000000000000000000000001".into());
+        config.sui.registry_id =
+            Some("0x0000000000000000000000000000000000000000000000000000000000000002".into());
+        config.p2p.dialable_addr = Some("127.0.0.1:9000".into());
+        with_key_file(&mut config);
+
+        let (_targets, pubkey, addr) = advertise_targets(&config).unwrap();
+
+        assert_eq!(addr, "127.0.0.1:9000");
+        assert_eq!(pubkey.len(), 32);
+    }
+
+    #[test]
+    fn a_missing_registry_id_disables_advertising() {
+        let mut config = base_config();
+        config.sui.settlement_package_id =
+            Some("0x0000000000000000000000000000000000000000000000000000000000000001".into());
+        config.p2p.dialable_addr = Some("127.0.0.1:9000".into());
+        with_key_file(&mut config);
+
+        assert!(advertise_targets(&config).is_none());
+    }
+
+    #[test]
+    fn a_missing_dialable_addr_disables_advertising() {
+        let mut config = base_config();
+        config.sui.settlement_package_id =
+            Some("0x0000000000000000000000000000000000000000000000000000000000000001".into());
+        config.sui.registry_id =
+            Some("0x0000000000000000000000000000000000000000000000000000000000000002".into());
+        with_key_file(&mut config);
+
+        assert!(advertise_targets(&config).is_none());
+    }
 }

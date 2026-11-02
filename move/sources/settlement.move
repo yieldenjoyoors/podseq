@@ -4,12 +4,15 @@
 /// has data available on Walrus. The sequencer calls `settle` after posting each block
 /// to Walrus; the contract records `(height, blob_id)` in an append-only registry.
 module podseq::settlement {
+    use std::string::{Self, String};
     use podseq::inbox::{Self, Inbox};
     use podseq::rotation;
+    use sui::dynamic_field as df;
     use sui::object::{Self, UID};
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
     use sui::table::{Self, Table};
+    use sui::vec_map::{Self, VecMap};
     use sui::event;
 
     /// Height must be exactly latest + 1 (no gaps, no duplicates).
@@ -212,6 +215,147 @@ module podseq::settlement {
         registry.latest_height
     }
 
+    /// A peer identity must be exactly `PEER_KEY_BYTES` long.
+    const E_INVALID_PEER_KEY: u64 = 3;
+    /// An advertised dial address must be non-empty and bounded.
+    const E_INVALID_PEER_ADDR: u64 = 4;
+    /// The peer book does not contain the identity.
+    const E_PEER_MISSING: u64 = 5;
+    /// The committee peer book is full.
+    const E_PEER_FULL: u64 = 6;
+
+    /// Length of an ed25519 p2p identity in bytes.
+    const PEER_KEY_BYTES: u64 = 32;
+    /// Upper bound for an advertised dial address in bytes.
+    const MAX_PEER_ADDR_BYTES: u64 = 256;
+    /// Committee peer cap; publish is authority-gated, the bound keeps the
+    /// book and its BCS snapshot small.
+    const MAX_PEERS: u64 = 100;
+
+    /// Dynamic-field key under which the [`PeerBook`] lives on a Registry.
+    public struct PeerKey has copy, drop, store {}
+
+    /// Published p2p endpoints of the settlement committee: ed25519 p2p
+    /// identity → dialable address, plus a mutation counter.
+    ///
+    /// Held as a dynamic field because the `Registry` struct layout is
+    /// frozen at package publish; existing deployments adopt the book
+    /// lazily on the first publish. Full nodes read its BCS over the Sui
+    /// ledger API and admit exactly these peers — discovery from chain
+    /// data, no operator-side bootstrap configuration.
+    ///
+    /// `version` increments on every mutation and is the peer-set index
+    /// nodes register under, so every node derives identical tracked-set
+    /// content for a given index from chain state alone (the discovery
+    /// gossip kills peers whose set content disagrees per index).
+    public struct PeerBook has store {
+        version: u64,
+        peers: VecMap<vector<u8>, String>,
+    }
+
+    /// Emitted when a committee peer is published or its address updated.
+    public struct PeerPublished has copy, drop {
+        pubkey: vector<u8>,
+        addr: String,
+    }
+
+    /// Emitted when a committee peer is removed.
+    public struct PeerRemoved has copy, drop {
+        pubkey: vector<u8>,
+    }
+
+    /// Publishes (or updates) the committee peer for `pubkey`.
+    ///
+    /// Authorized like [`settle_as`]: the rotation authority, or the
+    /// previous authority inside its grace window, so a cap rotation can
+    /// repoint the committee address atomically with the key swap.
+    public fun publish_peer(
+        registry: &mut Registry,
+        clock: &sui::clock::Clock,
+        pubkey: vector<u8>,
+        addr: String,
+        ctx: &TxContext,
+    ) {
+        rotation::assert_can_act(&registry.id, clock, ctx);
+        assert!(vector::length(&pubkey) == PEER_KEY_BYTES, E_INVALID_PEER_KEY);
+        let addr_len = string::length(&addr);
+        assert!(addr_len > 0 && addr_len <= MAX_PEER_ADDR_BYTES, E_INVALID_PEER_ADDR);
+
+        let key_copy = pubkey;
+        let addr_copy = addr;
+        let book = peer_book_mut(registry);
+        book.version = book.version + 1;
+        if (vec_map::contains(&book.peers, &pubkey)) {
+            *vec_map::get_mut(&mut book.peers, &pubkey) = addr;
+        } else {
+            assert!(vec_map::length(&book.peers) < MAX_PEERS, E_PEER_FULL);
+            vec_map::insert(&mut book.peers, pubkey, addr);
+        };
+        event::emit(PeerPublished { pubkey: key_copy, addr: addr_copy });
+    }
+
+    /// Removes a committee peer. Aborts when the identity is absent.
+    public fun remove_peer(
+        registry: &mut Registry,
+        clock: &sui::clock::Clock,
+        pubkey: vector<u8>,
+        ctx: &TxContext,
+    ) {
+        rotation::assert_can_act(&registry.id, clock, ctx);
+        assert!(vector::length(&pubkey) == PEER_KEY_BYTES, E_INVALID_PEER_KEY);
+        assert!(
+            df::exists_with_type<PeerKey, PeerBook>(&registry.id, PeerKey {}),
+            E_PEER_MISSING,
+        );
+        let book = df::borrow_mut<PeerKey, PeerBook>(&mut registry.id, PeerKey {});
+        assert!(vec_map::contains(&book.peers, &pubkey), E_PEER_MISSING);
+        book.version = book.version + 1;
+        let (key, _addr) = vec_map::remove(&mut book.peers, &pubkey);
+        event::emit(PeerRemoved { pubkey: key });
+    }
+
+    /// Number of published committee peers (0 before the first publish).
+    public fun peer_count(registry: &Registry): u64 {
+        if (!df::exists_with_type<PeerKey, PeerBook>(&registry.id, PeerKey {})) return 0;
+        let book = df::borrow<PeerKey, PeerBook>(&registry.id, PeerKey {});
+        vec_map::length(&book.peers)
+    }
+
+    /// Whether `pubkey` is in the peer book.
+    public fun has_peer(registry: &Registry, pubkey: &vector<u8>): bool {
+        if (!df::exists_with_type<PeerKey, PeerBook>(&registry.id, PeerKey {})) return false;
+        let book = df::borrow<PeerKey, PeerBook>(&registry.id, PeerKey {});
+        vec_map::contains(&book.peers, pubkey)
+    }
+
+    /// The advertised dial address for `pubkey`.
+    public fun peer_addr(registry: &Registry, pubkey: &vector<u8>): String {
+        assert!(vector::length(pubkey) == PEER_KEY_BYTES, E_INVALID_PEER_KEY);
+        assert!(
+            df::exists_with_type<PeerKey, PeerBook>(&registry.id, PeerKey {}),
+            E_PEER_MISSING,
+        );
+        let book = df::borrow<PeerKey, PeerBook>(&registry.id, PeerKey {});
+        *vec_map::get(&book.peers, pubkey)
+    }
+
+    /// The book's mutation counter (the peer-set index nodes register
+    /// under); 0 before the first publish.
+    public fun peer_book_version(registry: &Registry): u64 {
+        if (!df::exists_with_type<PeerKey, PeerBook>(&registry.id, PeerKey {})) return 0;
+        let book = df::borrow<PeerKey, PeerBook>(&registry.id, PeerKey {});
+        book.version
+    }
+
+    /// Borrow the peer book, creating it on first use so pre-existing
+    /// `Registry` objects adopt the book lazily (frozen struct layout).
+    fun peer_book_mut(registry: &mut Registry): &mut PeerBook {
+        if (!df::exists_with_type<PeerKey, PeerBook>(&registry.id, PeerKey {})) {
+            df::add(&mut registry.id, PeerKey {}, PeerBook { version: 0, peers: vec_map::empty() });
+        };
+        df::borrow_mut<PeerKey, PeerBook>(&mut registry.id, PeerKey {})
+    }
+
     // ---------- tests ----------
 
     /// Mirrors `inbox::E_DEADLINE_EXCEEDED`; constants are module-private.
@@ -347,10 +491,7 @@ module podseq::settlement {
     const E_OPS_REQUIRED_FOR_TEST: u64 = 8;
 
     #[test_only]
-    use sui::dynamic_field as df;
-    #[test_only]
     use std::option;
-
     #[test_only]
     const ALICE: address = @0xA;
     #[test_only]
@@ -383,6 +524,20 @@ module podseq::settlement {
     #[test_only]
     public fun ops_cap_for_testing(registry: &Registry, ctx: &mut TxContext): rotation::OpsCap {
         rotation::mint_ops_for_testing(&registry.id, ctx)
+    }
+
+    /// Removes the peer book so tests can destroy the registry. Public
+    /// test-only (see [`rotated_registry_for_testing`]).
+    #[test_only]
+    public fun destroy_peer_book_for_testing(registry: &mut Registry) {
+        if (df::exists_with_type<PeerKey, PeerBook>(&registry.id, PeerKey {})) {
+            let PeerBook { version: _, mut peers } =
+                df::remove<PeerKey, PeerBook>(&mut registry.id, PeerKey {});
+            while (!peers.is_empty()) {
+                peers.pop();
+            };
+            peers.destroy_empty();
+        };
     }
 
     /// Removes the entombed cap, the mint marker, and the rotation state so
@@ -710,6 +865,276 @@ module podseq::settlement {
     public fun destroy_inbox_helper(mut inbox: inbox::Inbox) {
         inbox::drain_for_testing(&mut inbox);
         inbox::destroy_inbox_for_testing(inbox);
+    }
+
+    // ---------- peer book tests (registry-published committee) ----------
+
+    /// Mirrors `settlement::E_INVALID_PEER_KEY`; own constants are private.
+    #[test_only]
+    const E_INVALID_PEER_KEY_SELF: u64 = 3;
+    #[test_only]
+    const E_INVALID_PEER_ADDR_SELF: u64 = 4;
+    #[test_only]
+    const E_PEER_MISSING_SELF: u64 = 5;
+    #[test_only]
+    const E_PEER_FULL_SELF: u64 = 6;
+
+    #[test_only]
+    const PEER_KEY_LEN: u64 = 32;
+
+    /// A `len`-byte all-zero vector (this stdlib has no `vector::repeat`).
+    #[test_only]
+    fun zeros(len: u64): vector<u8> {
+        let mut v = vector[];
+        let mut i = 0;
+        while (i < len) {
+            vector::push_back(&mut v, 0);
+            i = i + 1;
+        };
+        v
+    }
+
+    /// A deterministic 32-byte test peer identity.
+    #[test_only]
+    fun peer_key_for(n: u64): vector<u8> {
+        let mut key = zeros(PEER_KEY_LEN);
+        let mut i = 0;
+        let mut v = n;
+        while (i < 8) {
+            *vector::borrow_mut(&mut key, PEER_KEY_LEN - 8 + i) = (v & 0xff) as u8;
+            v = v / 256;
+            i = i + 1;
+        };
+        key
+    }
+
+    #[test]
+    fun peer_book_is_empty_before_the_first_publish() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+
+        assert!(peer_count(&registry) == 0);
+        assert!(!has_peer(&registry, &peer_key_for(1)));
+
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun publish_peer_upserts_and_remove_deletes() {
+        let ctx_a = &mut ctx_for(ALICE, 41);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        let key_a = peer_key_for(1);
+        let key_b = peer_key_for(2);
+        publish_peer(&mut registry, &clock, key_a, string::utf8(b"seq.example:7000"), ctx_a);
+        publish_peer(&mut registry, &clock, key_b, string::utf8(b"fn.example:7000"), ctx_a);
+        assert!(peer_count(&registry) == 2);
+        assert!(has_peer(&registry, &key_a));
+        assert!(peer_addr(&registry, &key_a) == string::utf8(b"seq.example:7000"));
+
+        // Upsert: same identity, new dial address, count unchanged.
+        publish_peer(&mut registry, &clock, key_a, string::utf8(b"seq2.example:7000"), ctx_a);
+        assert!(peer_count(&registry) == 2);
+        assert!(peer_addr(&registry, &key_a) == string::utf8(b"seq2.example:7000"));
+
+        remove_peer(&mut registry, &clock, key_b, ctx_a);
+        assert!(peer_count(&registry) == 1);
+        assert!(!has_peer(&registry, &key_b));
+
+        clock::destroy_for_testing(clock);
+        destroy_peer_book_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun the_book_version_advances_on_every_mutation() {
+        let ctx_a = &mut ctx_for(ALICE, 60);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        assert!(peer_book_version(&registry) == 0);
+        publish_peer(&mut registry, &clock, peer_key_for(1), string::utf8(b"a:1"), ctx_a);
+        assert!(peer_book_version(&registry) == 1);
+        // An upsert is also a mutation: the version is the gossip epoch.
+        publish_peer(&mut registry, &clock, peer_key_for(1), string::utf8(b"a:2"), ctx_a);
+        assert!(peer_book_version(&registry) == 2);
+        remove_peer(&mut registry, &clock, peer_key_for(1), ctx_a);
+        assert!(peer_book_version(&registry) == 3);
+
+        clock::destroy_for_testing(clock);
+        destroy_peer_book_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_PEER_MISSING_SELF)]
+    fun remove_peer_with_an_unknown_key_aborts() {
+        let ctx_a = &mut ctx_for(ALICE, 42);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        remove_peer(&mut registry, &clock, peer_key_for(9), ctx_a);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_INVALID_PEER_KEY_SELF)]
+    fun publish_peer_rejects_a_malformed_identity() {
+        let ctx_a = &mut ctx_for(ALICE, 43);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        publish_peer(&mut registry, &clock, zeros(31), string::utf8(b"a:1"), ctx_a);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_INVALID_PEER_ADDR_SELF)]
+    fun publish_peer_rejects_an_empty_address() {
+        let ctx_a = &mut ctx_for(ALICE, 44);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        publish_peer(&mut registry, &clock, peer_key_for(1), string::utf8(b""), ctx_a);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_INVALID_PEER_ADDR_SELF)]
+    fun publish_peer_rejects_an_oversized_address() {
+        let ctx_a = &mut ctx_for(ALICE, 45);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        publish_peer(&mut registry, &clock, peer_key_for(1), string::utf8(zeros(257)), ctx_a);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_PEER_FULL_SELF)]
+    fun publish_peer_caps_the_committee() {
+        let ctx_a = &mut ctx_for(ALICE, 46);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        let mut i = 0;
+        while (i < MAX_PEERS) {
+            publish_peer(&mut registry, &clock, peer_key_for(i), string::utf8(b"p:1"), ctx_a);
+            i = i + 1;
+        };
+        publish_peer(&mut registry, &clock, peer_key_for(MAX_PEERS), string::utf8(b"p:2"), ctx_a);
+
+        clock::destroy_for_testing(clock);
+        destroy_peer_book_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED_FOR_TEST, location = rotation)]
+    fun publish_peer_by_a_stranger_aborts() {
+        let ctx_a = &mut ctx_for(ALICE, 47);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        let ctx_c = ctx_for(CAROL, 48);
+        publish_peer(&mut registry, &clock, peer_key_for(1), string::utf8(b"c:1"), &ctx_c);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun the_previous_authority_publishes_in_grace() {
+        let mut ctx_a = ctx_for(ALICE, 49);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
+        let ctx_b = ctx_for(BOB, 50);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut registry, &clock, &ctx_b);
+
+        // Inside grace the old key still steers the committee book.
+        let ctx_a2 = ctx_for(ALICE, 51);
+        publish_peer(&mut registry, &clock, peer_key_for(1), string::utf8(b"old:1"), &ctx_a2);
+        assert!(peer_count(&registry) == 1);
+
+        rotation::retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_peer_book_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED_FOR_TEST, location = rotation)]
+    fun the_previous_authority_cannot_publish_after_retire() {
+        let mut ctx_a = ctx_for(ALICE, 56);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
+        let ctx_b = ctx_for(BOB, 57);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut registry, &clock, &ctx_b);
+        let ctx_b2 = ctx_for(BOB, 58);
+        retire_previous(&mut registry, &ctx_b2);
+
+        // Retire kills the grace window one-way; the old key cannot write.
+        let ctx_a2 = ctx_for(ALICE, 59);
+        publish_peer(&mut registry, &clock, peer_key_for(2), string::utf8(b"old:2"), &ctx_a2);
+
+        rotation::retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun the_new_authority_publishes_right_after_the_claim() {
+        let mut ctx_a = ctx_for(ALICE, 53);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_rotation_ops(&mut registry, &clock, BOB, rotation::min_delay_ms(), &ops);
+        let ctx_b = ctx_for(BOB, 54);
+        clock::set_for_testing(&mut clock, rotation::min_delay_ms());
+        claim_rotation(&mut registry, &clock, &ctx_b);
+        publish_peer(&mut registry, &clock, peer_key_for(1), string::utf8(b"new:1"), &ctx_b);
+        assert!(peer_addr(&registry, &peer_key_for(1)) == string::utf8(b"new:1"));
+
+        rotation::retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_peer_book_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_INVALID_PEER_KEY_SELF)]
+    fun remove_peer_rejects_a_malformed_identity() {
+        let ctx_a = &mut ctx_for(ALICE, 55);
+        let mut registry = rotated_registry_for_testing(ctx_a);
+        let clock = clock::create_for_testing(ctx_a);
+
+        remove_peer(&mut registry, &clock, zeros(33), ctx_a);
+
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
     }
 
     // ---------- adversarial: settlement across the rotation window ----------

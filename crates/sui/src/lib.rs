@@ -6,6 +6,7 @@ pub mod blob_id;
 pub mod bridge;
 pub mod deadline;
 pub mod inbox;
+pub mod peers;
 pub mod rotation;
 pub mod settlement;
 pub mod wire;
