@@ -137,6 +137,13 @@ pub struct DeployedContract {
     pub settler_cap_id: String,
     pub registry_id: String,
     pub inbox_id: String,
+    /// The package's `UpgradeCap`, entombed in the Registry by the deploy
+    /// ceremony. Kept for the record: upgrades go through
+    /// [`upgrade_package`], steered by the Registry's `OpsCap`.
+    pub upgrade_cap_id: String,
+    /// The Registry's `OpsCap` minted by the entombment ceremony (transferred
+    /// to the deployer; move it to cold custody before going live).
+    pub ops_cap_id: String,
 }
 
 /// Sui settlement client that commits block anchors on-chain.
@@ -380,7 +387,9 @@ impl Settlement {
             .effects()
             .clone();
 
-        // The package is the ChangedObject with output_state == PackageWrite.
+        // The package is the ChangedObject with output_state == PackageWrite;
+        // the UpgradeCap is the created address-owned object (transferred to
+        // the sender in the same block).
         use sui_rpc::proto::sui::rpc::v2::changed_object::OutputObjectState;
         let package_id = effects
             .changed_objects()
@@ -390,6 +399,10 @@ impl Settlement {
             .ok_or_else(|| {
                 SettlementError::Execution("package not found in publish response".into())
             })?;
+        let upgrade_cap_id =
+            find_created_object(effects.changed_objects(), owner::OwnerKind::Address).ok_or_else(
+                || SettlementError::Execution("UpgradeCap not found in publish response".into()),
+            )?;
 
         info!(package_id = %package_id, "settlement package published");
 
@@ -433,34 +446,36 @@ impl Settlement {
         // Move doc positions entombment as the migration step after an
         // upgrade; for a fresh deploy it belongs to the deploy ceremony,
         // signed by the cap owner (the deployer).
-        {
-            let mut builder = TransactionBuilder::new();
-            let cap_arg = builder.object(ObjectInput::new(parse_address(
-                &settler_cap_id,
-                "settler cap id",
-            )?));
-            let registry_arg = builder.object(ObjectInput::new(parse_address(
-                &registry_id,
-                "registry id",
-            )?));
-            builder.move_call(
-                Function::new(
-                    package_addr,
-                    Identifier::new("settlement")
-                        .map_err(|e| SettlementError::Parse(e.to_string()))?,
-                    Identifier::new("entomb_settler_cap_ops")
-                        .map_err(|e| SettlementError::Parse(e.to_string()))?,
-                ),
-                vec![cap_arg, registry_arg],
-            );
-            builder.set_sender(sender);
-            let tx = builder
-                .build(&mut rpc)
-                .await
-                .map_err(|e| SettlementError::Build(format!("entomb settler cap: {e}")))?;
-            sign_and_execute(&mut rpc, &key, tx, "entomb settler cap", DEPLOY_TX_WAIT).await?;
-            info!("settler cap entombed; rotation state seeded, ops cap minted");
-        }
+        //
+        // The ceremony mints the Registry's OpsCap to the sender (the
+        // created address-owned object in the entombment effects); it is
+        // the steering capability and the gate for upgrade custody below.
+        let ops_cap_id = run_entomb_settler_cap(
+            &mut rpc,
+            &key,
+            sender,
+            package_addr,
+            parse_address(&settler_cap_id, "settler cap id")?,
+            parse_address(&registry_id, "registry id")?,
+        )
+        .await?;
+
+        // 2.7. Entomb the UpgradeCap into the Registry. The backstop moves
+        // under the same custody class as rotation steering in the deploy
+        // ceremony itself, so a deployment never exists whose UpgradeCap a
+        // raw wallet can spend. The cap comes from this deploy's publish
+        // transaction, so it matches the package by construction.
+        run_entomb_upgrade_cap(
+            &mut rpc,
+            &key,
+            sender,
+            package_addr,
+            parse_address(&registry_id, "registry id")?,
+            parse_address(&upgrade_cap_id, "upgrade cap id")?,
+            parse_address(&ops_cap_id, "ops cap id")?,
+        )
+        .await?;
+        info!(upgrade_cap_id = %upgrade_cap_id, "upgrade cap entombed under the registry");
 
         // 3. Initialize the force-inclusion inbox in its own transaction: the
         // only shared object it creates is the Inbox, so discovery by owner
@@ -479,8 +494,387 @@ impl Settlement {
             settler_cap_id,
             registry_id,
             inbox_id,
+            upgrade_cap_id,
+            ops_cap_id,
         })
     }
+}
+
+/// A compiled package as `sui move build --dump-bytecode-as-base64` reports
+/// it: the module bytecode, the transitive dependency ids, and the upgrade
+/// digest the CLI computed over them.
+///
+/// The digest is consumed verbatim from the CLI output — the same bytes the
+/// validators recompute — so this crate keeps no second implementation of
+/// the hashing to drift.
+#[derive(Debug, Clone)]
+pub struct MoveBuild {
+    pub modules: Vec<Vec<u8>>,
+    pub dependencies: Vec<Address>,
+    pub digest: Vec<u8>,
+}
+
+#[derive(serde::Deserialize)]
+struct MoveBuildJson {
+    modules: Vec<String>,
+    dependencies: Vec<String>,
+    digest: Vec<u8>,
+}
+
+/// Parses `sui move build --dump-bytecode-as-base64` output (the JSON the
+/// CLI prints to stdout; build logs go to stderr).
+///
+/// # Errors
+///
+/// Malformed JSON, undecodable module base64, an unparseable dependency
+/// id, or a digest that is not 32 bytes.
+pub fn parse_move_build(json: &str) -> Result<MoveBuild, SettlementError> {
+    use base64::Engine as _;
+    let raw: MoveBuildJson = serde_json::from_str(json)
+        .map_err(|e| SettlementError::Parse(format!("move build json: {e}")))?;
+    let modules = raw
+        .modules
+        .iter()
+        .map(|m| {
+            base64::engine::general_purpose::STANDARD
+                .decode(m)
+                .map_err(|e| SettlementError::Parse(format!("module base64: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let dependencies = raw
+        .dependencies
+        .iter()
+        .map(|d| parse_address(d, "dependency id"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if raw.digest.len() != 32 {
+        return Err(SettlementError::Parse(format!(
+            "upgrade digest must be 32 bytes, got {}",
+            raw.digest.len()
+        )));
+    }
+    Ok(MoveBuild {
+        modules,
+        dependencies,
+        digest: raw.digest,
+    })
+}
+
+/// BCS mirror of `0x2::package::UpgradeCap` (id, package, version, policy);
+/// a `UID` serializes as its 32-byte address.
+#[derive(serde::Deserialize)]
+struct UpgradeCapMirror {
+    _id: Address,
+    package: Address,
+    #[allow(dead_code)]
+    version: u64,
+    #[allow(dead_code)]
+    policy: u8,
+}
+
+/// Reads the package id an `UpgradeCap` authorizes from its on-chain BCS.
+async fn read_upgrade_cap_package(
+    rpc: &mut sui_rpc::Client,
+    upgrade_cap_id: &Address,
+) -> Result<Address, SettlementError> {
+    let response = rpc
+        .ledger_client()
+        .get_object(
+            GetObjectRequest::new(upgrade_cap_id).with_read_mask(FieldMask::from_str("contents")),
+        )
+        .await
+        .map_err(|e| SettlementError::Rpc(format!("get_object: {e}")))?;
+    let obj = response
+        .into_inner()
+        .object
+        .ok_or_else(|| SettlementError::Execution("UpgradeCap object not found".into()))?;
+    let bytes = obj
+        .contents
+        .and_then(|c| c.value)
+        .ok_or_else(|| SettlementError::Execution("UpgradeCap has no contents".into()))?;
+    let cap: UpgradeCapMirror = bcs::from_bytes(bytes.as_ref())
+        .map_err(|e| SettlementError::Parse(format!("decoding UpgradeCap as BCS: {e}")))?;
+    Ok(cap.package)
+}
+
+/// Entombs the package's `UpgradeCap` inside the Registry under the
+/// `OpsCap`'s steering custody (`settlement::entomb_upgrade_cap`).
+///
+/// The migration ceremony for deployments that predate upgrade custody:
+/// upgrade the package first, then run this, signed by the holder of both
+/// the raw `UpgradeCap` and the Registry's `OpsCap`. From this transaction
+/// on, raw-cap upgrades are impossible. Verifies the cap authorizes
+/// `package_id` before moving it — the slot never opens again, so a
+/// mis-custodied cap would be permanent.
+///
+/// # Errors
+///
+/// The cap's on-chain `package` field not matching `package_id` (checked
+/// before moving the cap — the slot never opens again); otherwise Rpc,
+/// Build, or Execution errors from the read and submit path.
+pub async fn entomb_upgrade_cap(
+    key_path: &Path,
+    rpc_url: &str,
+    package_id: &str,
+    registry_id: &str,
+    upgrade_cap_id: &str,
+    ops_cap_id: &str,
+) -> Result<(), SettlementError> {
+    let (key, sender) = load_signer(key_path)?;
+    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+    let package = parse_address(package_id, "package id")?;
+    let registry = parse_address(registry_id, "registry id")?;
+    let upgrade_cap = parse_address(upgrade_cap_id, "upgrade cap id")?;
+    let ops_cap = parse_address(ops_cap_id, "ops cap id")?;
+
+    let cap_package = read_upgrade_cap_package(&mut rpc, &upgrade_cap).await?;
+    if cap_package != package {
+        return Err(SettlementError::Execution(format!(
+            "UpgradeCap {upgrade_cap_id} authorizes package {cap_package}, not {package_id}"
+        )));
+    }
+
+    run_entomb_upgrade_cap(
+        &mut rpc,
+        &key,
+        sender,
+        package,
+        registry,
+        upgrade_cap,
+        ops_cap,
+    )
+    .await
+}
+
+/// Builds and executes the `settlement::entomb_settler_cap_ops` transaction,
+/// returning the id of the `OpsCap` the ceremony mints to the sender. Used by
+/// [`Settlement::deploy`].
+async fn run_entomb_settler_cap(
+    rpc: &mut sui_rpc::Client,
+    key: &Ed25519PrivateKey,
+    sender: Address,
+    package: Address,
+    settler_cap: Address,
+    registry: Address,
+) -> Result<String, SettlementError> {
+    let mut builder = TransactionBuilder::new();
+    let cap_arg = builder.object(ObjectInput::new(settler_cap));
+    let registry_arg = builder.object(ObjectInput::new(registry));
+    builder.move_call(
+        Function::new(
+            package,
+            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("entomb_settler_cap_ops")
+                .map_err(|e| SettlementError::Parse(e.to_string()))?,
+        ),
+        vec![cap_arg, registry_arg],
+    );
+    builder.set_sender(sender);
+    let tx = builder
+        .build(rpc)
+        .await
+        .map_err(|e| SettlementError::Build(format!("entomb settler cap: {e}")))?;
+    let entombed = sign_and_execute(rpc, key, tx, "entomb settler cap", DEPLOY_TX_WAIT).await?;
+    let ops_cap_id = find_created_object(
+        entombed.transaction().effects().changed_objects(),
+        owner::OwnerKind::Address,
+    )
+    .ok_or_else(|| SettlementError::Execution("OpsCap not found in entombment response".into()))?;
+    info!("settler cap entombed; rotation state seeded, ops cap minted");
+    Ok(ops_cap_id)
+}
+
+/// Builds and executes the `settlement::entomb_upgrade_cap` transaction.
+/// Shared by [`Settlement::deploy`] and [`entomb_upgrade_cap`].
+async fn run_entomb_upgrade_cap(
+    rpc: &mut sui_rpc::Client,
+    key: &Ed25519PrivateKey,
+    sender: Address,
+    package: Address,
+    registry: Address,
+    upgrade_cap: Address,
+    ops_cap: Address,
+) -> Result<(), SettlementError> {
+    let mut builder = TransactionBuilder::new();
+    let cap_arg = builder.object(ObjectInput::new(upgrade_cap));
+    let registry_arg = builder.object(ObjectInput::new(registry));
+    let ops_arg = builder.object(ObjectInput::new(ops_cap));
+    builder.move_call(
+        Function::new(
+            package,
+            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("entomb_upgrade_cap")
+                .map_err(|e| SettlementError::Parse(e.to_string()))?,
+        ),
+        vec![cap_arg, registry_arg, ops_arg],
+    );
+    builder.set_sender(sender);
+    let tx = builder
+        .build(rpc)
+        .await
+        .map_err(|e| SettlementError::Build(format!("entomb upgrade cap: {e}")))?;
+    sign_and_execute(rpc, key, tx, "entomb upgrade cap", DEPLOY_TX_WAIT).await?;
+    Ok(())
+}
+
+/// Upgrades the package in one programmable transaction block:
+/// `authorize_package_upgrade` (steering-custody gate) → `Upgrade` command →
+/// `commit_package_upgrade`. The ticket and receipt are hot potatoes, so the
+/// block is atomic — an upgrade either lands whole or not at all.
+///
+/// `build` is the compiled new version from
+/// `sui move build --dump-bytecode-as-base64` (see [`parse_move_build`]);
+/// `policy` must be at least as restrictive as the entombed cap's. Returns
+/// the new package id.
+///
+/// # Errors
+///
+/// Rpc, Build, or Execution errors from the submit path: a policy weaker
+/// than the cap's, a digest that does not match the module bytes, or an
+/// incompatible module set abort on-chain.
+pub async fn upgrade_package(
+    key_path: &Path,
+    rpc_url: &str,
+    package_id: &str,
+    registry_id: &str,
+    ops_cap_id: &str,
+    build: MoveBuild,
+    policy: u8,
+) -> Result<String, SettlementError> {
+    use sui_rpc::proto::sui::rpc::v2::changed_object::OutputObjectState;
+    let (key, sender) = load_signer(key_path)?;
+    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+    let package = parse_address(package_id, "package id")?;
+    let registry = parse_address(registry_id, "registry id")?;
+    let ops_cap = parse_address(ops_cap_id, "ops cap id")?;
+
+    let mut builder = TransactionBuilder::new();
+    let registry_arg = builder.object(ObjectInput::new(registry));
+    let ops_arg = builder.object(ObjectInput::new(ops_cap));
+    let policy_arg = builder.pure(&policy);
+    let digest_arg = builder.pure(&build.digest);
+    let ticket = builder.move_call(
+        Function::new(
+            package,
+            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("authorize_package_upgrade")
+                .map_err(|e| SettlementError::Parse(e.to_string()))?,
+        ),
+        vec![registry_arg, ops_arg, policy_arg, digest_arg],
+    );
+    let receipt = builder.upgrade(build.modules, build.dependencies, package, ticket);
+    builder.move_call(
+        Function::new(
+            package,
+            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("commit_package_upgrade")
+                .map_err(|e| SettlementError::Parse(e.to_string()))?,
+        ),
+        vec![registry_arg, ops_arg, receipt],
+    );
+    builder.set_sender(sender);
+    let tx = builder
+        .build(&mut rpc)
+        .await
+        .map_err(|e| SettlementError::Build(format!("upgrade package: {e}")))?;
+    let response = sign_and_execute(&mut rpc, &key, tx, "upgrade package", DEPLOY_TX_WAIT).await?;
+
+    let new_package_id = response
+        .transaction()
+        .effects()
+        .changed_objects()
+        .iter()
+        .find(|c| c.output_state() == OutputObjectState::PackageWrite)
+        .and_then(|c| c.object_id.clone())
+        .ok_or_else(|| {
+            SettlementError::Execution("upgraded package not found in response".into())
+        })?;
+    info!(package_id = %new_package_id, "package upgraded under steering custody");
+    Ok(new_package_id)
+}
+
+/// Tightens the entombed cap's upgrade policy
+/// (`settlement::restrict_package_upgrades`). Only the framework's
+/// `additive` and `dep_only` tiers are accepted, never a loosening.
+///
+/// # Errors
+///
+/// Rpc, Build, or Execution errors from the submit path (an unknown or
+/// loosening policy aborts on-chain).
+pub async fn restrict_package_upgrades(
+    key_path: &Path,
+    rpc_url: &str,
+    package_id: &str,
+    registry_id: &str,
+    ops_cap_id: &str,
+    policy: u8,
+) -> Result<(), SettlementError> {
+    let (key, sender) = load_signer(key_path)?;
+    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+    let package = parse_address(package_id, "package id")?;
+    let registry = parse_address(registry_id, "registry id")?;
+    let ops_cap = parse_address(ops_cap_id, "ops cap id")?;
+
+    let mut builder = TransactionBuilder::new();
+    let registry_arg = builder.object(ObjectInput::new(registry));
+    let ops_arg = builder.object(ObjectInput::new(ops_cap));
+    let policy_arg = builder.pure(&policy);
+    builder.move_call(
+        Function::new(
+            package,
+            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("restrict_package_upgrades")
+                .map_err(|e| SettlementError::Parse(e.to_string()))?,
+        ),
+        vec![registry_arg, ops_arg, policy_arg],
+    );
+    builder.set_sender(sender);
+    let tx = builder
+        .build(&mut rpc)
+        .await
+        .map_err(|e| SettlementError::Build(format!("restrict upgrades: {e}")))?;
+    sign_and_execute(&mut rpc, &key, tx, "restrict upgrades", DEPLOY_TX_WAIT).await?;
+    Ok(())
+}
+
+/// Destroys the entombed `UpgradeCap`, making the package permanently
+/// immutable (`settlement::freeze_package`). One way.
+///
+/// # Errors
+///
+/// Rpc, Build, or Execution errors from the submit path (freezing a
+/// package whose cap was never entombed aborts on-chain).
+pub async fn freeze_package(
+    key_path: &Path,
+    rpc_url: &str,
+    package_id: &str,
+    registry_id: &str,
+    ops_cap_id: &str,
+) -> Result<(), SettlementError> {
+    let (key, sender) = load_signer(key_path)?;
+    let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
+    let package = parse_address(package_id, "package id")?;
+    let registry = parse_address(registry_id, "registry id")?;
+    let ops_cap = parse_address(ops_cap_id, "ops cap id")?;
+
+    let mut builder = TransactionBuilder::new();
+    let registry_arg = builder.object(ObjectInput::new(registry));
+    let ops_arg = builder.object(ObjectInput::new(ops_cap));
+    builder.move_call(
+        Function::new(
+            package,
+            Identifier::new("settlement").map_err(|e| SettlementError::Parse(e.to_string()))?,
+            Identifier::new("freeze_package").map_err(|e| SettlementError::Parse(e.to_string()))?,
+        ),
+        vec![registry_arg, ops_arg],
+    );
+    builder.set_sender(sender);
+    let tx = builder
+        .build(&mut rpc)
+        .await
+        .map_err(|e| SettlementError::Build(format!("freeze package: {e}")))?;
+    sign_and_execute(&mut rpc, &key, tx, "freeze package", DEPLOY_TX_WAIT).await?;
+    info!("package frozen: permanently immutable");
+    Ok(())
 }
 
 /// Executes `package::<module>::initialize` and returns the changed objects,
@@ -751,6 +1145,49 @@ fn parse_blob_id(bytes: &[u8]) -> Result<BlobId, SettlementError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_move_build_reads_the_cli_json() {
+        let mut digest = vec![0u8; 32];
+        digest[31] = 7;
+        let json = format!(
+            r#"{{"modules":["AAEC","AwQF"],"dependencies":["0x0000000000000000000000000000000000000000000000000000000000000001","0x0000000000000000000000000000000000000000000000000000000000000002"],"digest":{digest:?}}}"#
+        );
+        let build = parse_move_build(&json).expect("valid build json parses");
+        assert_eq!(build.modules, vec![vec![0, 1, 2], vec![3, 4, 5]]);
+        assert_eq!(build.dependencies.len(), 2);
+        assert_eq!(build.digest, digest);
+    }
+
+    #[test]
+    fn parse_move_build_rejects_a_short_digest() {
+        let json = r#"{"modules":["AAEC"],"dependencies":["0x0000000000000000000000000000000000000000000000000000000000000001"],"digest":[1,2,3]}"#;
+        assert!(parse_move_build(json).is_err());
+    }
+
+    #[test]
+    fn parse_move_build_rejects_bad_module_base64() {
+        let digest = vec![0u8; 32];
+        let json =
+            format!(r#"{{"modules":["not base64!!"],"dependencies":[],"digest":{digest:?}}}"#);
+        assert!(parse_move_build(&json).is_err());
+    }
+
+    #[test]
+    fn upgrade_cap_bcs_mirror_decodes_the_framework_layout() {
+        // 0x2::package::UpgradeCap BCS: UID (32-byte address), package ID
+        // (32 bytes), version (u64 LE), policy (u8).
+        let mut bytes = vec![0u8; 32];
+        bytes[31] = 0xaa; // cap id
+        let package: Address = "0x0000000000000000000000000000000000000000000000000000000000000042"
+            .parse()
+            .unwrap();
+        bytes.extend_from_slice(package.as_ref());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.push(0);
+        let cap: UpgradeCapMirror = bcs::from_bytes(&bytes).expect("decodes");
+        assert_eq!(cap.package, package);
+    }
 
     #[test]
     fn rejects_invalid_key() {

@@ -228,6 +228,11 @@ programmable transaction block, so the two rotations cannot drift apart.
 | `claim_rotation(…)`                    | **pending target** | `sender == pending.to` and `eligible_at_ms <= now <= eligible_at_ms + CLAIM_WINDOW_MS` |
 | `retire_previous(…)`                   | authority       | clears `prev` (one-way, after the swap is verified)           |
 | `mint_ops_cap(parent, recipient, ctx)` / `retire_ops_cap(ops)`                  | authority / holder | one-shot legacy mint straight to the cold address; one-way destroy (see ops custody) |
+| `entomb_upgrade_cap(cap, registry, ops)`                                        | `OpsCap` holder | cap bound to this object; rotation state live; slot empty (`E_UPGRADE_CAP_PRESENT`) — moves the package's `UpgradeCap` under steering custody (see upgrade custody) |
+| `authorize_package_upgrade(registry, ops, policy, digest)`                      | `OpsCap` holder | cap bound to this object; slot present (`E_NO_UPGRADE_CAP`) — issues the framework upgrade ticket; the ticket/receipt hot potatoes make the upgrade one atomic PTB |
+| `commit_package_upgrade(registry, ops, receipt)`                                | `OpsCap` holder | consumes the upgrade receipt, finalizing the upgrade on the entombed cap |
+| `restrict_package_upgrades(registry, ops, policy)`                              | `OpsCap` holder | only the framework `additive`/`dep_only` tiers (`E_TOO_PERMISSIVE` otherwise); the framework rejects any loosening |
+| `freeze_package(registry, ops)`                                                 | `OpsCap` holder | removes and destroys the entombed cap (`package::make_immutable`) — the package becomes permanently immutable |
 
 The pre-ops entrypoints `entomb_settler_cap`, `entomb_bridge_cap`, and
 `request_rotation` keep their published signatures but their bodies are
@@ -387,6 +392,49 @@ rotation to a key it controls, because it does not hold the cap.
   That is a visible livelock, not an escalation: cancel grants no power to
   stage a claim.
 
+## UpgradeCap custody and aging
+
+Everything above guards the live gates. The `UpgradeCap` sits above all of it: an
+upgrade can repoint every entrypoint, replace the authority checks, or mint itself a
+fresh `OpsCap`. Whoever holds the raw cap holds the whole package, so its custody is
+not one more hardening item — it is the ceiling on the rest.
+
+The policy has three moves:
+
+- **Entomb at deploy.** The deploy ceremony entombs the `UpgradeCap` in the Registry
+  (`settlement::entomb_upgrade_cap`) right after the SettlerCap ceremony, under the
+  module-private `UpgradeKey` dynamic field. From that transaction on, a raw-cap
+  upgrade is impossible: the only authorization path borrows the cap from the slot,
+  and that path sits behind the `OpsCap` gate. A deployment never exists in which a
+  wallet can spend the backstop directly.
+- **Upgrade through the gate.** `authorize_package_upgrade(registry, ops, policy,
+  digest)` issues the framework's upgrade ticket only to the Registry's `OpsCap`
+  holder. Ticket and receipt are hot potatoes, so an upgrade is one PTB —
+  authorize → `Upgrade` command → `commit_package_upgrade` — and lands whole or not
+  at all. `podseq_sui::settlement::upgrade_package` builds that block, taking module
+  bytes and digest verbatim from `sui move build --dump-bytecode-as-base64`. The
+  CLI's digest is the one validators recompute; this crate keeps no second
+  implementation of the hash to drift.
+- **Age toward immutable.** `restrict_package_upgrades` tightens the cap's policy to
+  `additive` or `dep_only` (never looser), and `freeze_package` destroys the cap
+  through `package::make_immutable` — one way, event on chain. The ladder ends in a
+  package that can no longer be upgraded at all, for operators done iterating.
+
+Two checks the Move side cannot make, and what covers them:
+
+- *Does the cap match this package?* Move cannot read its own package id. The deploy
+  path entombs the cap minted by the same publish transaction, so the match holds by
+  construction. The migration ceremony reads the cap's `package` field off the chain
+  and refuses to entomb a foreign cap — the slot never opens again, so a wrong cap
+  would be permanent.
+- *Custody before steering?* Entombment aborts unless the Registry's rotation state
+  is live. Order matters: steering infra first, then the backstop.
+
+Deployments that predate upgrade custody migrate by upgrading the package, then
+running `podseq_sui::settlement::entomb_upgrade_cap`, signed by whichever wallet
+still holds the raw cap plus the Registry's `OpsCap`. Until that runs, the raw cap
+still spends upgrades — the same exposure every Sui deployment has by default.
+
 ## Residual risks and follow-ups
 
 - **Pre-claim compromise of the current key** can cancel a pending rotation but
@@ -395,8 +443,11 @@ rotation to a key it controls, because it does not hold the cap.
   repeatedly cancelling the operator's requests — is a visible denial of
   rotation, not a takeover. A lost or unretired `OpsCap` is the mirror risk:
   steering for that object is gone while settlement continues.
-- **`UpgradeCap` custody** is the true backstop above all of this (an upgrade can
-  repoint anything); its custody and aging policy is its own hardening item.
+- **`UpgradeCap` custody** is closed — the cap is entombed under steering custody at
+  deploy, and the aging ladder (restrict → freeze, see above) turns it off on the
+  operator's schedule. What remains is operator discipline, not protocol: actually
+  moving the `OpsCap` to cold storage and running the migration ceremony on
+  pre-custody deployments.
 - Fuzzing and gas measurement landed; see [Verification](#verification).
 
 ## Requirements mapping (K4)
@@ -442,6 +493,14 @@ calls bind a fresh tx context (see the Move test helper pattern).
 | Old-key equivocation after the swap | `settlement::the_previous_owner_cannot_rewrite_a_height_after_the_swap` | aborts `E_CONFLICTING_BLOB` — grace never licenses re-signing a settled height with a different blob |
 | Half-rotation (Vault rotated, Registry not) | `bridge::the_vault_gate_rotates_independently_of_the_registry_gate` | the rotated key releases on the Vault while the stale key settles the Registry: each gate checks only its own record |
 | The staged key settles an unrotated Registry | `bridge::the_new_authority_cannot_settle_while_the_registry_is_unrotated` | aborts `E_NOT_AUTHORIZED` — fail-closed per object |
+| A foreign `OpsCap` entombs the `UpgradeCap` | `settlement::upgrade_entombment_rejects_a_foreign_ops_cap` | aborts `E_OPS_MISMATCH` — the backstop moves only under this object's steering custody |
+| Upgrade authorization without custody | `settlement::authorize_without_custody_aborts` | aborts `E_NO_UPGRADE_CAP` — no ticket without the entombed cap |
+| A second upgrade entombment | `settlement::double_upgrade_entombment_aborts` | aborts `E_UPGRADE_CAP_PRESENT` — the slot is one-way; a foreign cap could never replace the real one |
+| Authorization after freeze | `settlement::authorize_after_freeze_aborts` | aborts `E_NO_UPGRADE_CAP` — the destroyed cap authorizes nothing, ever |
+| A second freeze | `settlement::double_freeze_aborts` | aborts `E_NO_UPGRADE_CAP` — after `make_immutable` there is nothing left to freeze |
+| A foreign `OpsCap` freezes the package | `settlement::freeze_rejects_a_foreign_ops_cap` | aborts `E_OPS_MISMATCH` — the one-way act needs this object's steering custody |
+| The aging ladder only tightens | `settlement::restrict_ladder_tightens_monotonically`, `settlement::restrict_cannot_loosen_the_policy`, `settlement::restrict_rejects_unknown_policy_values` | additive then dep-only accepted; a weaker tier or an unknown value aborts `E_TOO_PERMISSIVE` |
+| Full upgrade ceremony with the framework helpers | `settlement::upgrade_ceremony_entombs_authorizes_and_commits` | entomb → authorize → (`test_upgrade` standing in for the `Upgrade` command) → commit; the cap's version bumps and the package id round-trips |
 
 Node-runtime crash drills (`drill_*` in `crates/sui/src/rotation.rs`) rebuild the
 watcher from chain state alone on every poll — exactly what a restarted node
