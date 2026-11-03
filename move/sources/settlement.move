@@ -5,10 +5,13 @@
 /// to Walrus; the contract records `(height, blob_id)` in an append-only registry.
 module podseq::settlement {
     use std::string::{Self, String};
+    use std::option;
     use podseq::inbox::{Self, Inbox};
     use podseq::rotation;
     use sui::dynamic_field as df;
     use sui::object::{Self, UID};
+    use sui::package;
+    use sui::package::{UpgradeCap, UpgradeReceipt, UpgradeTicket};
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
     use sui::table::{Self, Table};
@@ -354,6 +357,158 @@ module podseq::settlement {
             df::add(&mut registry.id, PeerKey {}, PeerBook { version: 0, peers: vec_map::empty() });
         };
         df::borrow_mut<PeerKey, PeerBook>(&mut registry.id, PeerKey {})
+    // ---------- package upgrade custody ----------
+
+    /// No `UpgradeCap` is entombed — never entombed, or already frozen.
+    const E_NO_UPGRADE_CAP: u64 = 7;
+    /// An `UpgradeCap` is already entombed.
+    const E_UPGRADE_CAP_PRESENT: u64 = 8;
+    /// A requested upgrade policy is weaker than the cap's current one.
+    const E_TOO_PERMISSIVE: u64 = 9;
+
+    /// Dynamic-field key under which the package's `UpgradeCap` is entombed.
+    public struct UpgradeKey has copy, drop, store {}
+
+    /// Returns the `UpgradeKey` singleton for indexers and tests.
+    public fun upgrade_key(): UpgradeKey {
+        UpgradeKey {}
+    }
+
+    /// Emitted when the package's `UpgradeCap` is entombed.
+    public struct UpgradeCapEntombed has copy, drop {
+        package: object::ID,
+    }
+
+    /// Emitted when the upgrade policy is tightened.
+    public struct UpgradePolicyRestricted has copy, drop {
+        package: object::ID,
+        policy: u8,
+    }
+
+    /// Emitted when the package is made permanently immutable.
+    public struct PackageFrozen has copy, drop {
+        package: object::ID,
+    }
+
+    /// Entombs the package's `UpgradeCap` inside the `Registry`.
+    ///
+    /// The `UpgradeCap` is the true backstop — an upgrade can repoint every
+    /// gate in this package — so it lives under the steering custody class:
+    /// gated by the Registry's `OpsCap`, the same capability that steers
+    /// rotation. From this transaction on, raw-cap upgrade ceremonies are
+    /// impossible: the only authorization path is
+    /// [`authorize_package_upgrade`]. Entombment is one way (no un-entomb).
+    ///
+    /// The Registry's rotation state must already exist (the settlement
+    /// entombment seeds it), and the cap must match this package — verify
+    /// `package::upgrade_package(&cap)` against the deployed package id
+    /// before calling. A foreign cap only locks its own package out of
+    /// upgrades, but the slot never opens again.
+    public fun entomb_upgrade_cap(cap: UpgradeCap, registry: &mut Registry, ops: &rotation::OpsCap) {
+        rotation::assert_ops_cap(&registry.id, ops);
+        // Fail closed unless the steering infra (rotation state) is in place.
+        let _ = rotation::state(&registry.id);
+        assert!(
+            !df::exists_with_type<UpgradeKey, UpgradeCap>(&registry.id, UpgradeKey {}),
+            E_UPGRADE_CAP_PRESENT,
+        );
+        let pkg = package::upgrade_package(&cap);
+        df::add(&mut registry.id, UpgradeKey {}, cap);
+        event::emit(UpgradeCapEntombed { package: pkg });
+    }
+
+    /// Issues an upgrade ticket from the entombed `UpgradeCap`.
+    ///
+    /// `OpsCap`-gated. The ticket is a hot potato: it must be consumed by
+    /// the `Upgrade` transaction command in the same programmable transaction
+    /// block and finalized through [`commit_package_upgrade`], or the whole
+    /// block reverts — an upgrade is atomic by construction. The requested
+    /// `policy` must be at least as restrictive as the cap's; the framework
+    /// re-checks both policy and bytecode digest at execution.
+    public fun authorize_package_upgrade(
+        registry: &mut Registry,
+        ops: &rotation::OpsCap,
+        policy: u8,
+        digest: vector<u8>,
+    ): UpgradeTicket {
+        rotation::assert_ops_cap(&registry.id, ops);
+        assert!(
+            df::exists_with_type<UpgradeKey, UpgradeCap>(&registry.id, UpgradeKey {}),
+            E_NO_UPGRADE_CAP,
+        );
+        package::authorize_upgrade(
+            df::borrow_mut<UpgradeKey, UpgradeCap>(&mut registry.id, UpgradeKey {}),
+            policy,
+            digest,
+        )
+    }
+
+    /// Consumes an upgrade receipt, finalizing the upgrade on the entombed
+    /// cap. `OpsCap`-gated; only reachable in the same transaction block as
+    /// [`authorize_package_upgrade`] (the receipt is a hot potato).
+    public fun commit_package_upgrade(
+        registry: &mut Registry,
+        ops: &rotation::OpsCap,
+        receipt: UpgradeReceipt,
+    ) {
+        rotation::assert_ops_cap(&registry.id, ops);
+        assert!(
+            df::exists_with_type<UpgradeKey, UpgradeCap>(&registry.id, UpgradeKey {}),
+            E_NO_UPGRADE_CAP,
+        );
+        package::commit_upgrade(
+            df::borrow_mut<UpgradeKey, UpgradeCap>(&mut registry.id, UpgradeKey {}),
+            receipt,
+        );
+    }
+
+    /// Tightens the entombed cap's upgrade policy — the middle rung of the
+    /// aging ladder between the deploy-time `COMPATIBLE` default and
+    /// [`freeze_package`]. Only the two framework tiers are accepted, and
+    /// the framework rejects any loosening.
+    public fun restrict_package_upgrades(registry: &mut Registry, ops: &rotation::OpsCap, policy: u8) {
+        rotation::assert_ops_cap(&registry.id, ops);
+        assert!(
+            df::exists_with_type<UpgradeKey, UpgradeCap>(&registry.id, UpgradeKey {}),
+            E_NO_UPGRADE_CAP,
+        );
+        let cap = df::borrow_mut<UpgradeKey, UpgradeCap>(&mut registry.id, UpgradeKey {});
+        let pkg = package::upgrade_package(cap);
+        if (policy == package::additive_policy()) {
+            package::only_additive_upgrades(cap);
+        } else if (policy == package::dep_only_policy()) {
+            package::only_dep_upgrades(cap);
+        } else {
+            abort E_TOO_PERMISSIVE
+        };
+        event::emit(UpgradePolicyRestricted { package: pkg, policy });
+    }
+
+    /// Destroys the entombed `UpgradeCap`, making the package permanently
+    /// immutable. One way and irreversible: no upgrade of any kind is
+    /// possible afterwards. The terminal rung of the aging ladder.
+    public fun freeze_package(registry: &mut Registry, ops: &rotation::OpsCap) {
+        rotation::assert_ops_cap(&registry.id, ops);
+        assert!(
+            df::exists_with_type<UpgradeKey, UpgradeCap>(&registry.id, UpgradeKey {}),
+            E_NO_UPGRADE_CAP,
+        );
+        let cap = df::remove<UpgradeKey, UpgradeCap>(&mut registry.id, UpgradeKey {});
+        let pkg = package::upgrade_package(&cap);
+        package::make_immutable(cap);
+        event::emit(PackageFrozen { package: pkg });
+    }
+
+    /// Returns the entombed cap's package id, if custody was taken.
+    public fun upgrade_package_id(registry: &Registry): option::Option<object::ID> {
+        if (df::exists_with_type<UpgradeKey, UpgradeCap>(&registry.id, UpgradeKey {})) {
+            option::some(package::upgrade_package(df::borrow<UpgradeKey, UpgradeCap>(
+                &registry.id,
+                UpgradeKey {},
+            )))
+        } else {
+            option::none()
+        }
     }
 
     // ---------- tests ----------
@@ -1207,6 +1362,236 @@ module podseq::settlement {
         rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
         destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    // ---------- package upgrade custody tests ----------
+
+    /// Mirrors this module's `E_NO_UPGRADE_CAP`.
+    #[test_only]
+    const E_NO_UPGRADE_CAP_FOR_TEST: u64 = 7;
+    /// Mirrors this module's `E_UPGRADE_CAP_PRESENT`.
+    #[test_only]
+    const E_UPGRADE_CAP_PRESENT_FOR_TEST: u64 = 8;
+    /// Mirrors this module's `E_TOO_PERMISSIVE`.
+    #[test_only]
+    const E_TOO_PERMISSIVE_FOR_TEST: u64 = 9;
+    /// Mirrors `rotation::E_OPS_MISMATCH`.
+    #[test_only]
+    const E_OPS_MISMATCH_FOR_TEST: u64 = 9;
+
+    /// A package `UpgradeCap` for a stand-in package id, mirroring what the
+    /// publish transaction returns to the deployer.
+    #[test_only]
+    fun upgrade_cap_for_testing(ctx: &mut TxContext): package::UpgradeCap {
+        package::test_publish(object::id_from_address(@0x42), ctx)
+    }
+
+    /// Frees the entombed `UpgradeCap`, if any, so tests can destroy the
+    /// registry. Consumes the cap through `make_immutable`.
+    #[test_only]
+    public fun destroy_upgrade_cap_for_testing(registry: &mut Registry) {
+        if (df::exists_with_type<UpgradeKey, package::UpgradeCap>(&registry.id, UpgradeKey {})) {
+            let cap = df::remove<UpgradeKey, package::UpgradeCap>(&mut registry.id, UpgradeKey {});
+            package::make_immutable(cap);
+        };
+    }
+
+    #[test]
+    fun upgrade_ceremony_entombs_authorizes_and_commits() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+        let pkg_id = option::borrow(&upgrade_package_id(&registry));
+        assert!(*pkg_id == object::id_from_address(@0x42));
+
+        let ticket = authorize_package_upgrade(
+            &mut registry,
+            &ops,
+            package::compatible_policy(),
+            b"fake-digest",
+        );
+        // Stands in for the `Upgrade` transaction command: the framework's
+        // test helper converts the ticket into the receipt the validators
+        // would produce for a matching upgrade.
+        let receipt = package::test_upgrade(ticket);
+        commit_package_upgrade(&mut registry, &ops, receipt);
+
+        let cap = df::borrow<UpgradeKey, UpgradeCap>(&registry.id, upgrade_key());
+        assert!(package::version(cap) == 2);
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_OPS_MISMATCH_FOR_TEST, location = rotation)]
+    fun upgrade_entombment_rejects_a_foreign_ops_cap() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut ctx_b = ctx_for(BOB, 2);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let other = registry_for_testing(&mut ctx_b);
+        let foreign = ops_cap_for_testing(&other, &mut ctx_b);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(&mut ctx_a), &mut registry, &foreign);
+
+        rotation::retire_ops_cap(foreign);
+        destroy_registry(other);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NO_UPGRADE_CAP_FOR_TEST)]
+    fun authorize_without_custody_aborts() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        // The runtime abort fires at the missing-slot check; the binding
+        // keeps the hot-potato ticket well-formed for compilation.
+        let ticket = authorize_package_upgrade(
+            &mut registry,
+            &ops,
+            package::compatible_policy(),
+            b"fake-digest",
+        );
+        let receipt = package::test_upgrade(ticket);
+        commit_package_upgrade(&mut registry, &ops, receipt);
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_UPGRADE_CAP_PRESENT_FOR_TEST)]
+    fun double_upgrade_entombment_aborts() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NO_UPGRADE_CAP_FOR_TEST)]
+    fun authorize_after_freeze_aborts() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+        freeze_package(&mut registry, &ops);
+        assert!(option::is_none(&upgrade_package_id(&registry)));
+
+        // The runtime abort fires at the missing-slot check; the binding
+        // keeps the hot-potato ticket well-formed for compilation.
+        let ticket = authorize_package_upgrade(
+            &mut registry,
+            &ops,
+            package::compatible_policy(),
+            b"fake-digest",
+        );
+        let receipt = package::test_upgrade(ticket);
+        commit_package_upgrade(&mut registry, &ops, receipt);
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NO_UPGRADE_CAP_FOR_TEST)]
+    fun double_freeze_aborts() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+        freeze_package(&mut registry, &ops);
+        freeze_package(&mut registry, &ops);
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_OPS_MISMATCH_FOR_TEST, location = rotation)]
+    fun freeze_rejects_a_foreign_ops_cap() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut ctx_b = ctx_for(BOB, 2);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let other = registry_for_testing(&mut ctx_b);
+        let foreign = ops_cap_for_testing(&other, &mut ctx_b);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(&mut ctx_a), &mut registry, &foreign);
+
+        rotation::retire_ops_cap(foreign);
+        destroy_registry(other);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun restrict_ladder_tightens_monotonically() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+        restrict_package_upgrades(&mut registry, &ops, package::additive_policy());
+        let cap = df::borrow<UpgradeKey, package::UpgradeCap>(&registry.id, upgrade_key());
+        assert!(package::upgrade_policy(cap) == package::additive_policy());
+
+        restrict_package_upgrades(&mut registry, &ops, package::dep_only_policy());
+        let cap = df::borrow<UpgradeKey, package::UpgradeCap>(&registry.id, upgrade_key());
+        assert!(package::upgrade_policy(cap) == package::dep_only_policy());
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_TOO_PERMISSIVE_FOR_TEST)]
+    fun restrict_cannot_loosen_the_policy() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+        restrict_package_upgrades(&mut registry, &ops, package::additive_policy());
+        restrict_package_upgrades(&mut registry, &ops, package::compatible_policy());
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_TOO_PERMISSIVE_FOR_TEST)]
+    fun restrict_rejects_unknown_policy_values() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let ops = ops_cap_for_testing(&registry, ctx);
+
+        entomb_upgrade_cap(upgrade_cap_for_testing(ctx), &mut registry, &ops);
+        restrict_package_upgrades(&mut registry, &ops, 63);
+
+        rotation::retire_ops_cap(ops);
+        destroy_upgrade_cap_for_testing(&mut registry);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
     }
