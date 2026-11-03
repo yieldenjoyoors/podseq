@@ -357,6 +357,8 @@ module podseq::settlement {
             df::add(&mut registry.id, PeerKey {}, PeerBook { version: 0, peers: vec_map::empty() });
         };
         df::borrow_mut<PeerKey, PeerBook>(&mut registry.id, PeerKey {})
+    }
+
     // ---------- package upgrade custody ----------
 
     /// No `UpgradeCap` is entombed — never entombed, or already frozen.
