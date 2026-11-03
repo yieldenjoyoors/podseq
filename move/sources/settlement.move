@@ -648,8 +648,6 @@ module podseq::settlement {
     const E_OPS_REQUIRED_FOR_TEST: u64 = 8;
 
     #[test_only]
-    use std::option;
-    #[test_only]
     const ALICE: address = @0xA;
     #[test_only]
     const BOB: address = @0xB;
