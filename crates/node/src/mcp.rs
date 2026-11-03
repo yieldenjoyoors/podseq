@@ -869,12 +869,15 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn tmp_dir(label: &str) -> PathBuf {
+        // pid + process-local counter: nanos alone collide when two tests
+        // spawn a server in the same nanosecond, and the shared dir makes
+        // the second seed panic on the store.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "podseq-mcp-test-{label}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "podseq-mcp-test-{label}-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
