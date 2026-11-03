@@ -326,6 +326,12 @@ module podseq::rotation {
         abort E_OPS_REQUIRED
     }
 
+    /// Aborts unless `ops` steers `parent` — the capability is the whole
+    /// check; the sender is never read.
+    public fun assert_ops_cap(parent: &UID, ops: &OpsCap) {
+        assert!(ops.for_id == object::uid_to_inner(parent), E_OPS_MISMATCH);
+    }
+
     /// Pre-authorizes `to` to claim after `delay_ms`, replacing any pending
     /// request. Authorized by holding the object's `OpsCap` — the steering
     /// authority — not by being the rotation authority, so the hot sequencer
@@ -342,7 +348,7 @@ module podseq::rotation {
         clock: &Clock,
         ops: &OpsCap,
     ) {
-        assert!(ops.for_id == object::uid_to_inner(parent), E_OPS_MISMATCH);
+        assert_ops_cap(parent, ops);
         assert!(MIN_DELAY_MS <= delay_ms && delay_ms <= MAX_DELAY_MS, E_DELAY_OUT_OF_BOUNDS);
         let eligible_at_ms = clock::timestamp_ms(clock) + delay_ms;
         let authority = state(parent).authority;
