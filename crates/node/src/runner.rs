@@ -30,6 +30,42 @@ struct PendingBlock {
     height: u64,
 }
 
+/// Flush-timer policy for the DA batch: arms when the batch becomes
+/// non-empty and tracks the age of the OLDEST buffered block, so a batch
+/// held open by low traffic still flushes once `flush_after` elapses.
+#[derive(Debug)]
+struct FlushTimer {
+    flush_after: Option<Duration>,
+    at: Option<tokio::time::Instant>,
+}
+
+impl FlushTimer {
+    fn new(flush_after: Option<Duration>) -> Self {
+        Self {
+            flush_after,
+            at: None,
+        }
+    }
+
+    /// Arms on the first block of a batch; arming again inside the same
+    /// batch is a no-op so the deadline tracks the OLDEST buffered block.
+    fn arm(&mut self) {
+        if self.at.is_none() {
+            self.at = self
+                .flush_after
+                .map(|after| tokio::time::Instant::now() + after);
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.at = None;
+    }
+
+    fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.at
+    }
+}
+
 struct ChainState {
     head: B256,
     safe: B256,
@@ -50,6 +86,7 @@ pub struct Runner {
     fee_recipient: Address,
     genesis_hash: Option<B256>,
     da_batch_size: usize,
+    da_flush_after: Option<Duration>,
     inbox: Option<InboxIntegration>,
     metrics: Arc<PodseqMetrics>,
 }
@@ -66,10 +103,16 @@ impl Runner {
         data_dir: &std::path::Path,
         broadcaster: Option<BlockBroadcaster>,
         da_batch_size: usize,
+        da_flush_ms: u64,
         inbox: Option<InboxIntegration>,
         metrics: Arc<PodseqMetrics>,
     ) -> Result<Self> {
         crate::store::init(data_dir).context("initializing storage under data_dir")?;
+        let da_flush_after = if da_flush_ms == 0 {
+            None
+        } else {
+            Some(Duration::from_millis(da_flush_ms))
+        };
         Ok(Self {
             engine,
             sui,
@@ -82,6 +125,7 @@ impl Runner {
             fee_recipient: config.fee_recipient.parse().unwrap_or_default(),
             genesis_hash,
             da_batch_size,
+            da_flush_after,
             inbox,
             metrics,
         })
@@ -140,6 +184,7 @@ impl Runner {
             self.pending_store.clone(),
             shutting_down.clone(),
             self.da_batch_size,
+            self.da_flush_after,
             inbox.clone(),
             Arc::clone(&metrics),
         ));
@@ -330,21 +375,48 @@ async fn finalize_blocks(
     pending_store: Arc<PendingStore>,
     shutting_down: Arc<AtomicBool>,
     batch_size_bytes: usize,
+    flush_after: Option<Duration>,
     inbox: Option<InboxIntegration>,
     metrics: Arc<PodseqMetrics>,
 ) {
     let mut batch: Vec<PendingBlock> = Vec::new();
     let mut batch_bytes: usize = 0;
+    let mut flush_timer = FlushTimer::new(flush_after);
 
     loop {
+        let flush_deadline = flush_timer.deadline();
         tokio::select! {
             biased;
             _ = shutdown_guard(&shutting_down), if !batch.is_empty() => {
                 finalize_buffered_locally(&engine, &state, std::mem::take(&mut batch)).await;
                 break;
             }
+            _ = async {
+                match flush_deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            }, if flush_deadline.is_some() => {
+                metrics.da_time_flushes_total.inc();
+                info!(
+                    blocks = batch.len(),
+                    "DA batch flush interval reached; publishing before the size threshold"
+                );
+                flush_batch(
+                    &engine, &sui, &state, &mut batch, &mut batch_bytes,
+                    &block_store, &state_store, &pending_store, &shutting_down,
+                    &inbox, &metrics,
+                ).await;
+                if batch.is_empty() {
+                    flush_timer.disarm();
+                }
+                metrics.pending_blocks.set(batch.len() as i64);
+            }
             msg = rx.recv() => match msg {
                 Some(p) => {
+                    if batch.is_empty() {
+                        flush_timer.arm();
+                    }
                     batch_bytes = batch_bytes.saturating_add(p.block.data.len());
                     batch.push(p);
                     metrics.pending_blocks.set(batch.len() as i64);
@@ -354,10 +426,14 @@ async fn finalize_blocks(
                             &block_store, &state_store, &pending_store, &shutting_down,
                             &inbox, &metrics,
                         ).await;
+                        if batch.is_empty() {
+                            flush_timer.disarm();
+                        }
                         metrics.pending_blocks.set(batch.len() as i64);
                     }
                 }
                 None => {
+                    flush_timer.disarm();
                     if !batch.is_empty() {
                         flush_batch(
                             &engine, &sui, &state, &mut batch, &mut batch_bytes,
@@ -701,8 +777,10 @@ async fn shutdown_signal() -> Result<()> {
 mod tests {
     use super::*;
     use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
+    use podseq_core::Ed25519BlockSigner;
     use podseq_core::Header;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use podseq_engine::Auth;
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
     fn tmp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -887,5 +965,367 @@ mod tests {
         assert_eq!(h[30], 1);
         assert_eq!(h[31], 0);
         assert_ne!(derive_prev_randao(1), derive_prev_randao(2));
+    }
+
+    // ---- DA batch flush timer ----
+
+    #[test]
+    fn flush_timer_arms_once_per_batch_and_keeps_the_oldest_deadline() {
+        let mut timer = FlushTimer::new(Some(Duration::from_millis(500)));
+        assert_eq!(timer.deadline(), None, "empty batch: no flush deadline");
+        timer.arm();
+        let first = timer.deadline().expect("first block arms the timer");
+        timer.arm();
+        assert_eq!(
+            timer.deadline(),
+            Some(first),
+            "later blocks in the same batch keep the oldest deadline"
+        );
+    }
+
+    #[test]
+    fn flush_timer_disarms_after_a_flush_and_rearms_for_the_next_batch() {
+        let mut timer = FlushTimer::new(Some(Duration::from_millis(500)));
+        timer.arm();
+        timer.disarm();
+        assert_eq!(timer.deadline(), None, "drained batch: timer disarmed");
+        timer.arm();
+        assert!(timer.deadline().is_some(), "next batch re-arms the timer");
+    }
+
+    #[test]
+    fn flush_timer_deadline_is_one_interval_after_arming() {
+        let mut timer = FlushTimer::new(Some(Duration::from_secs(2)));
+        let before = tokio::time::Instant::now();
+        timer.arm();
+        let at = timer.deadline().expect("armed");
+        let after = tokio::time::Instant::now();
+        assert!(at >= before + Duration::from_secs(2));
+        assert!(at <= after + Duration::from_secs(2));
+    }
+
+    #[test]
+    fn flush_timer_without_interval_never_arms() {
+        let mut timer = FlushTimer::new(None);
+        timer.arm();
+        assert_eq!(timer.deadline(), None, "size-only batching: no deadline");
+    }
+
+    /// Flag 0x00 (ed25519) + a fixed 32-byte key, raw-base64 form.
+    const BLOCK_TEST_KEY_B64: &str = "ABERERERERERERERERERERERERERERERERERERERERER";
+
+    #[test]
+    fn runner_new_maps_flush_ms_to_interval() {
+        let dir = tmp_dir();
+        let key_path = dir.join("block.key");
+        std::fs::write(&key_path, BLOCK_TEST_KEY_B64).unwrap();
+        let make_deps = || {
+            let signer: Arc<dyn BlockSigner> =
+                Arc::new(Ed25519BlockSigner::from_suiprivkey_file(&key_path).unwrap());
+            let engine = Engine::new(
+                "http://127.0.0.1:1",
+                Auth::from_hex("4d6ccb86b5f16e56e9d8859c64cf8b16c8a4d00ec3ee79416e0c4d56c57f9160")
+                    .unwrap(),
+            )
+            .unwrap();
+            (engine, signer)
+        };
+
+        let (engine, signer) = make_deps();
+        let sui = SuiClient::new(podseq_sui::Config::default()).unwrap();
+        let runner = Runner::new(
+            engine,
+            sui,
+            signer,
+            &SequencerConfig::default(),
+            None,
+            &dir,
+            None,
+            1024,
+            0,
+            None,
+            Arc::new(PodseqMetrics::new()),
+        )
+        .unwrap();
+        assert_eq!(
+            runner.da_flush_after, None,
+            "batch_flush_ms = 0 disables the age flush"
+        );
+
+        let (engine, signer) = make_deps();
+        let sui = SuiClient::new(podseq_sui::Config::default()).unwrap();
+        let runner = Runner::new(
+            engine,
+            sui,
+            signer,
+            &SequencerConfig::default(),
+            None,
+            &dir,
+            None,
+            1024,
+            1500,
+            None,
+            Arc::new(PodseqMetrics::new()),
+        )
+        .unwrap();
+        assert_eq!(
+            runner.da_flush_after,
+            Some(Duration::from_millis(1500)),
+            "batch_flush_ms maps to the age-flush interval"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Publish attempts = accepted TCP connections. Each stream is dropped
+    /// immediately so the publisher errors fast and the finalizer retries.
+    fn spawn_publish_counter() -> (String, Arc<AtomicUsize>, Arc<AtomicBool>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let t_attempts = Arc::clone(&attempts);
+        let t_stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            while !t_stop.load(Ordering::SeqCst) {
+                if let Ok((stream, _)) = listener.accept() {
+                    drop(stream);
+                    t_attempts.fetch_add(1, Ordering::SeqCst);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        (format!("http://{addr}"), attempts, stop)
+    }
+
+    fn lull_finalizer_deps(
+        dir: &std::path::Path,
+        publisher_url: String,
+    ) -> (
+        Arc<Engine>,
+        SuiClient,
+        Arc<Mutex<ChainState>>,
+        Arc<BlockStore>,
+        Arc<StateStore>,
+        Arc<PendingStore>,
+        Arc<PodseqMetrics>,
+    ) {
+        let engine = Engine::new(
+            "http://127.0.0.1:1",
+            Auth::from_hex("4d6ccb86b5f16e56e9d8859c64cf8b16c8a4d00ec3ee79416e0c4d56c57f9160")
+                .unwrap(),
+        )
+        .unwrap();
+        let sui = SuiClient::new(podseq_sui::Config {
+            publisher_url,
+            sui_rpc_url: "http://127.0.0.1:1".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let state = Arc::new(Mutex::new(ChainState {
+            head: B256::ZERO,
+            safe: B256::ZERO,
+            finalized: B256::ZERO,
+            timestamp: 0,
+        }));
+        (
+            Arc::new(engine),
+            sui,
+            state,
+            Arc::new(BlockStore::new(dir)),
+            Arc::new(StateStore::new(dir)),
+            Arc::new(PendingStore::new(dir)),
+            Arc::new(PodseqMetrics::new()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_finalizer(
+        deps: (
+            Arc<Engine>,
+            SuiClient,
+            Arc<Mutex<ChainState>>,
+            Arc<BlockStore>,
+            Arc<StateStore>,
+            Arc<PendingStore>,
+            Arc<PodseqMetrics>,
+        ),
+        rx: mpsc::UnboundedReceiver<PendingBlock>,
+        batch_size_bytes: usize,
+        flush_after: Option<Duration>,
+        shutting_down: Arc<AtomicBool>,
+    ) -> tokio::task::JoinHandle<()> {
+        let (engine, sui, state, block_store, state_store, pending_store, metrics) = deps;
+        tokio::spawn(finalize_blocks(
+            engine,
+            sui,
+            state,
+            rx,
+            block_store,
+            state_store,
+            pending_store,
+            shutting_down,
+            batch_size_bytes,
+            flush_after,
+            None,
+            metrics,
+        ))
+    }
+
+    async fn wait_for_attempts(attempts: &AtomicUsize, min: usize) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while attempts.load(Ordering::SeqCst) < min {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        true
+    }
+
+    async fn stop_finalizer(
+        handle: tokio::task::JoinHandle<()>,
+        stop: &Arc<AtomicBool>,
+        shutting_down: &Arc<AtomicBool>,
+    ) {
+        stop.store(true, Ordering::SeqCst);
+        shutting_down.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(30), handle)
+            .await
+            .expect("finalizer exits after shutdown")
+            .expect("finalizer task did not panic");
+    }
+
+    #[tokio::test]
+    async fn time_flush_publishes_a_lull_batch_without_new_blocks() {
+        let dir = tmp_dir();
+        let (publisher, attempts, stop) = spawn_publish_counter();
+        let deps = lull_finalizer_deps(&dir, publisher);
+        let metrics = Arc::clone(&deps.6);
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = start_finalizer(
+            deps,
+            rx,
+            usize::MAX,
+            Some(Duration::from_millis(100)),
+            Arc::clone(&shutting_down),
+        );
+
+        tx.send(PendingBlock {
+            block: block_with_hash(1, B256::from_slice(&[1u8; 32])),
+            block_hash: B256::from_slice(&[1u8; 32]),
+            height: 1,
+        })
+        .unwrap();
+
+        // No further blocks ever arrive: the age flush alone must publish.
+        assert!(
+            wait_for_attempts(&attempts, 1).await,
+            "publish attempt after the flush interval without new blocks"
+        );
+        assert_eq!(
+            metrics.da_time_flushes_total.get(),
+            1,
+            "flush attributed to the age timer"
+        );
+
+        stop_finalizer(handle, &stop, &shutting_down).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn size_threshold_flushes_immediately_despite_armed_timer() {
+        let dir = tmp_dir();
+        let (publisher, attempts, stop) = spawn_publish_counter();
+        let deps = lull_finalizer_deps(&dir, publisher);
+        let metrics = Arc::clone(&deps.6);
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = start_finalizer(
+            deps,
+            rx,
+            1,
+            Some(Duration::from_secs(3600)),
+            Arc::clone(&shutting_down),
+        );
+
+        tx.send(PendingBlock {
+            block: block_with_hash(1, B256::from_slice(&[2u8; 32])),
+            block_hash: B256::from_slice(&[2u8; 32]),
+            height: 1,
+        })
+        .unwrap();
+
+        assert!(
+            wait_for_attempts(&attempts, 1).await,
+            "size threshold flushes without waiting the age interval"
+        );
+        assert_eq!(
+            metrics.da_time_flushes_total.get(),
+            0,
+            "flush attributed to the size threshold, not age"
+        );
+
+        stop_finalizer(handle, &stop, &shutting_down).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn disabled_time_flush_never_publishes_a_lull_batch() {
+        let dir = tmp_dir();
+        let (publisher, attempts, stop) = spawn_publish_counter();
+        let deps = lull_finalizer_deps(&dir, publisher);
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = start_finalizer(deps, rx, usize::MAX, None, Arc::clone(&shutting_down));
+
+        tx.send(PendingBlock {
+            block: block_with_hash(1, B256::from_slice(&[3u8; 32])),
+            block_hash: B256::from_slice(&[3u8; 32]),
+            height: 1,
+        })
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            0,
+            "no age timer and no size threshold: nothing publishes"
+        );
+
+        stop_finalizer(handle, &stop, &shutting_down).await;
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            0,
+            "shutdown drain finalizes locally and never publishes"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn channel_close_drains_and_flushes_the_held_batch() {
+        let dir = tmp_dir();
+        let (publisher, attempts, stop) = spawn_publish_counter();
+        let deps = lull_finalizer_deps(&dir, publisher);
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = start_finalizer(deps, rx, usize::MAX, None, Arc::clone(&shutting_down));
+
+        tx.send(PendingBlock {
+            block: block_with_hash(1, B256::from_slice(&[4u8; 32])),
+            block_hash: B256::from_slice(&[4u8; 32]),
+            height: 1,
+        })
+        .unwrap();
+        drop(tx);
+
+        assert!(
+            wait_for_attempts(&attempts, 1).await,
+            "channel close flushes the held batch"
+        );
+
+        stop_finalizer(handle, &stop, &shutting_down).await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -6,8 +6,11 @@ without an external bridge.
 
 ## Walrus: data availability
 
-Blocks are buffered and posted to a Walrus publisher **in batches by size**: one
-blob holds many blocks, amortizing the per-blob certification cost. Blobs are
+Blocks are buffered and posted to a Walrus publisher **in batches by size or age**:
+one blob holds many blocks, amortizing the per-blob certification cost. A batch
+flushes when it reaches `walrus.batch_size_bytes`, or when its oldest block has
+waited `walrus.batch_flush_ms` (default 2 min) — so settlement lag stays bounded
+even when traffic never fills a batch. Blobs are
 stored **permanent** (not deletable, even by the sequencer) for the configured
 number of epochs (`walrus.epochs`, default = max, ≈ 2 years).
 

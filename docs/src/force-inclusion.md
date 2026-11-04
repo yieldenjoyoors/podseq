@@ -152,6 +152,11 @@ check.
   the pending-block store. A crash between inclusion and settle then re-derives the
   cursor from local block data, and the idempotent `settle` re-submit lands the
   same state.
+- Bound settlement lag: the on-chain inclusion cursor only advances on settle, so
+  DA batches also flush by age (`walrus.batch_flush_ms`, default 2 min) and never
+  wait indefinitely for the size threshold. With 5 flush opportunities inside the
+  10-minute inclusion window, batching alone cannot push a settled-but-unrecorded
+  entry past its deadline.
 
 ## Full node verification
 
@@ -167,8 +172,6 @@ values passed to `settle`, which is an attributable equivocation.
 
 ## Open work
 
-- The sequencer needs a time-based batch flush so settlement lag stays bounded under
-  low traffic; byte thresholds alone can hold a batch indefinitely.
 - The exit queue (see [roadmap](./roadmap.md)) composes with the inbox: a halted
   settlement should unlock forced exits so users can leave during a halt.
 - The window constant is fixed per package version. Making it adjustable needs an

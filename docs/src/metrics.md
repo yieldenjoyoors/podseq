@@ -30,6 +30,7 @@ When `enabled = false`, no HTTP server is started.
 | `podseq_sui_gas_balance_mist`        | Gauge     | Settlement key SUI balance in mistos                                  |
 | `podseq_da_publish_duration_seconds` | Histogram | Walrus DA publish latency, observed per attempt (success and failure) |
 | `podseq_da_publish_errors_total`     | Counter   | Total Walrus DA publish attempts that failed                          |
+| `podseq_da_time_flushes_total`       | Counter   | DA batches flushed by `batch_flush_ms` age before the size threshold   |
 | `podseq_settlement_duration_seconds` | Histogram | Latency of the successful Sui settlement RPC per block                |
 | `podseq_bridge_deposits_total`       | Counter   | Bridge deposits minted on L2                                          |
 | `podseq_bridge_withdrawals_total`    | Counter   | Bridge withdrawals released on Sui                                    |

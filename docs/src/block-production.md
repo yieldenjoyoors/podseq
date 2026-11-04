@@ -52,8 +52,9 @@ User Tx → Reth mempool
    (Commonware) so full nodes can execute it immediately, before it is posted to DA.
 
 5. **Submit to DA (hard confirmation).** Blocks are buffered and posted to Walrus in
-   **batches by size** (`walrus.batch_size_bytes`) under a single permanent blob. Once
-   Walrus attests availability, the data is retrievable by anyone.
+   **batches by size or age** (`walrus.batch_size_bytes`, `walrus.batch_flush_ms`) under
+   a single permanent blob. Once Walrus attests availability, the data is retrievable
+   by anyone.
 
 6. **Finalize.** Podseq calls `engine_newPayloadV4` and
    `engine_forkchoiceUpdatedV3` to tell Reth to accept and finalize the block.
@@ -69,8 +70,10 @@ Production and DA finalization run in parallel:
 - **Production task** (per tick): builds a block, accepts it (`newPayload` + advance
   head), sends it to a channel. Never waits for DA.
 - **Finalizer task** (background): drains the channel, buffers blocks until they reach
-  `walrus.batch_size_bytes`, posts one Walrus blob per batch, settles each block on Sui,
-  and advances safe/finalized. Retries DA failures with exponential backoff.
+  `walrus.batch_size_bytes` or the oldest has waited `walrus.batch_flush_ms` (default
+  2 min, so a quiet chain still settles within the force-inclusion window), posts one
+  Walrus blob per batch, settles each block on Sui, and advances safe/finalized.
+  Retries DA failures with exponential backoff.
 
 If DA is slow, production continues at its own pace. The finalizer batches and catches
 up when DA recovers. Finalization is sequential (no skipping gaps), but production is

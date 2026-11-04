@@ -35,6 +35,9 @@ pub struct PodseqMetrics {
     pub da_publish_duration: Histogram,
     /// Total Walrus DA publish attempts that failed.
     pub da_publish_errors_total: Counter,
+    /// DA batches flushed by age (`walrus.batch_flush_ms`) before the size
+    /// threshold was reached.
+    pub da_time_flushes_total: Counter,
     /// Latency of the successful Sui settlement RPC for each block.
     pub settlement_duration: Histogram,
     /// Blocks buffered in the finalizer channel.
@@ -80,6 +83,13 @@ impl PodseqMetrics {
             "podseq_da_publish_errors_total",
             "Total Walrus DA publish attempts that failed",
             da_publish_errors_total.clone(),
+        );
+
+        let da_time_flushes_total = Counter::default();
+        registry.register(
+            "podseq_da_time_flushes_total",
+            "DA batches flushed by batch_flush_ms age before the size threshold",
+            da_time_flushes_total.clone(),
         );
 
         let settlement_duration = Histogram::new(exponential_buckets(0.01, 2.0, 13));
@@ -130,6 +140,7 @@ impl PodseqMetrics {
             blocks_built,
             da_publish_duration,
             da_publish_errors_total,
+            da_time_flushes_total,
             settlement_duration,
             pending_blocks,
             sui_gas_balance,
@@ -237,6 +248,7 @@ mod tests {
         m.blocks_built.inc();
         m.da_publish_duration.observe(0.5);
         m.da_publish_errors_total.inc();
+        m.da_time_flushes_total.inc();
         m.settlement_duration.observe(1.0);
         m.pending_blocks.set(3);
         m.sui_gas_balance.set(1_000_000_000);

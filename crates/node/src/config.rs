@@ -90,6 +90,13 @@ pub struct WalrusConfig {
     /// Flush a DA blob once buffered blocks reach this size.
     #[serde(default = "default_batch_size_bytes")]
     pub batch_size_bytes: usize,
+    /// Flush a DA blob once the oldest buffered block has waited this long,
+    /// even if the size threshold was never reached. Keeps settlement lag
+    /// bounded under low traffic: the on-chain force-inclusion cursor only
+    /// advances on settle, and it must stay well inside the inbox's 10-minute
+    /// inclusion window. `0` disables the age flush (batching is size-only).
+    #[serde(default = "default_batch_flush_ms")]
+    pub batch_flush_ms: u64,
     /// Bearer token for authenticated publishers.
     /// Leave unset when using an open  publisher.
     #[serde(default)]
@@ -112,6 +119,13 @@ fn default_batch_size_bytes() -> usize {
     64 * 1024
 }
 
+/// Two minutes: five flush opportunities inside the inbox's 10-minute
+/// inclusion window, so batching alone can never let the on-chain inclusion
+/// cursor outlive a force-inclusion deadline.
+fn default_batch_flush_ms() -> u64 {
+    120_000
+}
+
 impl Default for WalrusConfig {
     fn default() -> Self {
         Self {
@@ -119,6 +133,7 @@ impl Default for WalrusConfig {
             aggregator_url: default_aggregator(),
             epochs: default_epochs(),
             batch_size_bytes: default_batch_size_bytes(),
+            batch_flush_ms: default_batch_flush_ms(),
             publisher_auth_token: None,
         }
     }

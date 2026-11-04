@@ -44,8 +44,9 @@ pub publisher_auth_token: Option<String>, // bearer token for an authenticated p
 
 - `publish(blocks)`: encodes the batch (BCS `Vec<WireBlock>`), stores it via the
   Walrus publisher in a single `PUT /v1/blobs`, returns the `BlobId`. The
-  sequencer batches blocks by accumulated size (`walrus.batch_size_bytes`) so
-  one certification covers many blocks.
+  sequencer batches blocks by accumulated size (`walrus.batch_size_bytes`) or
+  age (`walrus.batch_flush_ms`) so one certification covers many blocks without
+  letting settlement lag grow unbounded under low traffic.
 - `fetch(blob_id)`: reads the blob from the Walrus aggregator and decodes the
   whole batch (`Vec<Block>`); callers pick the block by height.
 

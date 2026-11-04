@@ -511,6 +511,7 @@ async fn start_sequencer(
         &config.data_dir,
         broadcaster,
         config.walrus.batch_size_bytes,
+        config.walrus.batch_flush_ms,
         inbox,
         Arc::clone(&podseq_metrics),
     )?;

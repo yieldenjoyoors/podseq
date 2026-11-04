@@ -80,6 +80,7 @@ publisher_url = "https://publisher.walrus-testnet.walrus.space"
 aggregator_url = "https://aggregator.walrus-testnet.walrus.space"
 # epochs = 53               # storage lifetime; default = max (53 ≈ 2 years)
 # batch_size_bytes = 65536  # flush a DA blob once blocks reach this size
+# batch_flush_ms = 120000   # flush once the oldest block waited this long (0 = off)
 
 [sui]
 rpc_url = "https://fullnode.testnet.sui.io:443"
