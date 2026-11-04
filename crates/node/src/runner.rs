@@ -1098,10 +1098,8 @@ mod tests {
         (format!("http://{addr}"), attempts, stop)
     }
 
-    fn lull_finalizer_deps(
-        dir: &std::path::Path,
-        publisher_url: String,
-    ) -> (
+    /// The finalizer's dependency tuple, shared by the harness helpers.
+    type FinalizerDeps = (
         Arc<Engine>,
         SuiClient,
         Arc<Mutex<ChainState>>,
@@ -1109,7 +1107,9 @@ mod tests {
         Arc<StateStore>,
         Arc<PendingStore>,
         Arc<PodseqMetrics>,
-    ) {
+    );
+
+    fn lull_finalizer_deps(dir: &std::path::Path, publisher_url: String) -> FinalizerDeps {
         let engine = Engine::new(
             "http://127.0.0.1:1",
             Auth::from_hex("4d6ccb86b5f16e56e9d8859c64cf8b16c8a4d00ec3ee79416e0c4d56c57f9160")
@@ -1141,15 +1141,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn start_finalizer(
-        deps: (
-            Arc<Engine>,
-            SuiClient,
-            Arc<Mutex<ChainState>>,
-            Arc<BlockStore>,
-            Arc<StateStore>,
-            Arc<PendingStore>,
-            Arc<PodseqMetrics>,
-        ),
+        deps: FinalizerDeps,
         rx: mpsc::UnboundedReceiver<PendingBlock>,
         batch_size_bytes: usize,
         flush_after: Option<Duration>,
