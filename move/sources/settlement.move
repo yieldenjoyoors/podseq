@@ -187,6 +187,36 @@ module podseq::settlement {
         rotation::cancel_rotation(&mut registry.id, ctx)
     }
 
+    /// Sets the force-inclusion inclusion window: a narrowing applies
+    /// immediately, a widening stages behind a timelock (see
+    /// `inbox::stage_window_change`).
+    ///
+    /// Authorized by holding the Registry's `OpsCap` — the steering
+    /// authority, held in cold custody — so the hot sequencer key can settle
+    /// but cannot move the window. Aborts with `rotation::E_OPS_MISMATCH`
+    /// for a cap minted for another object.
+    public fun request_window_change(
+        registry: &mut Registry,
+        inbox: &mut Inbox,
+        clock: &sui::clock::Clock,
+        new_window_ms: u64,
+        delay_ms: u64,
+        ops: &rotation::OpsCap,
+    ) {
+        rotation::assert_ops_cap(&registry.id, ops);
+        inbox::stage_window_change(inbox, new_window_ms, delay_ms, clock)
+    }
+
+    /// Cancels a staged window widening (see [`request_window_change`]).
+    public fun cancel_window_change(
+        registry: &mut Registry,
+        inbox: &mut Inbox,
+        ops: &rotation::OpsCap,
+    ) {
+        rotation::assert_ops_cap(&registry.id, ops);
+        inbox::cancel_window_change(inbox)
+    }
+
     /// Claims the settler authority. Pending target only, inside the claim
     /// window; starts the previous owner's grace window.
     public fun claim_rotation(
@@ -938,6 +968,175 @@ module podseq::settlement {
 
         rotation::retire_ops_cap(ops);
         clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    // ---------- window steering (force inclusion) ----------
+    //
+    // The inclusion window is adjustable: the Registry's `OpsCap` steers it,
+    // narrowings apply immediately, widenings stage behind a timelock.
+
+    /// Mirrors `inbox::E_WINDOW_OUT_OF_BOUNDS`; own constants are private.
+    #[test_only]
+    const E_WINDOW_OUT_OF_BOUNDS_FOR_TEST: u64 = 5;
+
+    /// Mirrors `inbox::E_NO_PENDING_WINDOW`; own constants are private.
+    #[test_only]
+    const E_NO_PENDING_WINDOW_FOR_TEST: u64 = 7;
+
+    #[test]
+    fun ops_gated_narrowing_applies_immediately() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+        clock::set_for_testing(&mut clock, 1_000_000);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_window_change(&mut registry, &mut inbox, &clock, 60_000, 0, &ops);
+
+        assert!(inbox::window_override_ms(&inbox) == option::some(60_000));
+        assert!(option::is_none(&inbox::pending_window(&inbox)));
+        assert!(inbox::effective_window_ms(&inbox, &clock) == 60_000);
+
+        // Fresh submissions charge the narrowed window.
+        inbox::submit(&mut inbox, &clock, b"tx");
+        assert!(inbox::pending_deadline_ms_for_testing(&inbox, 0) == 1_000_000 + 60_000);
+
+        inbox::drain_for_testing(&mut inbox);
+        rotation::retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun ops_gated_widening_stages_behind_the_timelock() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+        clock::set_for_testing(&mut clock, 1_000_000);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_window_change(
+            &mut registry,
+            &mut inbox,
+            &clock,
+            1_800_000,
+            inbox::min_widen_delay_ms(),
+            &ops,
+        );
+
+        // Staged, not applied: submissions still charge the default window
+        // until the timelock elapses, then flip without any transaction.
+        let staged = inbox::pending_window(&inbox);
+        assert!(option::is_some(&staged));
+        assert!(inbox::effective_window_ms(&inbox, &clock) == 600_000);
+        inbox::submit(&mut inbox, &clock, b"tx");
+        assert!(inbox::pending_deadline_ms_for_testing(&inbox, 0) == 1_000_000 + 600_000);
+        inbox::drain_for_testing(&mut inbox);
+
+        clock::set_for_testing(&mut clock, 1_000_000 + inbox::min_widen_delay_ms());
+        assert!(inbox::effective_window_ms(&inbox, &clock) == 1_800_000);
+        inbox::submit(&mut inbox, &clock, b"tx-2");
+        assert!(inbox::pending_deadline_ms_for_testing(&inbox, 1)
+            == 1_000_000 + inbox::min_widen_delay_ms() + 1_800_000);
+
+        inbox::drain_for_testing(&mut inbox);
+        rotation::retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun ops_gated_cancel_removes_the_staged_widening() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let mut clock = clock::create_for_testing(&mut ctx_a);
+        clock::set_for_testing(&mut clock, 1_000_000);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_window_change(
+            &mut registry,
+            &mut inbox,
+            &clock,
+            1_800_000,
+            inbox::min_widen_delay_ms(),
+            &ops,
+        );
+        cancel_window_change(&mut registry, &mut inbox, &ops);
+
+        assert!(option::is_none(&inbox::pending_window(&inbox)));
+        assert!(inbox::effective_window_ms(&inbox, &clock) == 600_000);
+
+        rotation::retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_OPS_MISMATCH_FOR_TEST, location = rotation)]
+    fun window_change_rejects_a_foreign_ops_cap() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut ctx_b = ctx_for(BOB, 2);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let other = registry_for_testing(&mut ctx_b);
+        let foreign = ops_cap_for_testing(&other, &mut ctx_b);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let clock = clock::create_for_testing(&mut ctx_a);
+
+        request_window_change(&mut registry, &mut inbox, &clock, 60_000, 0, &foreign);
+
+        rotation::retire_ops_cap(foreign);
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_registry(other);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_WINDOW_OUT_OF_BOUNDS_FOR_TEST, location = inbox)]
+    fun window_change_rejects_windows_above_the_ceiling() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+        let clock = clock::create_for_testing(&mut ctx_a);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        request_window_change(
+            &mut registry,
+            &mut inbox,
+            &clock,
+            inbox::max_window_ms() + 1,
+            0,
+            &ops,
+        );
+
+        rotation::retire_ops_cap(ops);
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NO_PENDING_WINDOW_FOR_TEST, location = inbox)]
+    fun window_cancel_without_a_staged_change_aborts() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let mut registry = rotated_registry_for_testing(&mut ctx_a);
+        let mut inbox = inbox::inbox_for_testing(&mut ctx_a);
+
+        let ops = ops_cap_for_testing(&registry, &mut ctx_a);
+        cancel_window_change(&mut registry, &mut inbox, &ops);
+
+        rotation::retire_ops_cap(ops);
+        destroy_inbox_helper(inbox);
         destroy_rotation_for_testing(&mut registry);
         destroy_registry(registry);
     }

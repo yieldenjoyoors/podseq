@@ -106,7 +106,34 @@ roughly a 300-block budget. The window must absorb the sequencer's poll interval
 block build time, and DA batch lag, which under low traffic is bounded by the batch
 flush timeout, not by byte thresholds. A window too tight halts the chain under
 load; too wide weakens the escape hatch. 10 minutes keeps halts rare while capping
-censorship at 10 minutes per transaction.
+censorship at 10 minutes per transaction. It is the default, not a permanent value:
+operators can adjust it (see the next section).
+
+### Adjusting the window
+
+The window lives in a dynamic field of the `Inbox`. `Inbox` is a public struct, so
+its layout froze at publish; keeping the window off-struct means existing objects
+keep the constant default until an operator changes anything.
+
+`settlement::request_window_change` moves it, and the Registry's `OpsCap` — the same
+cold-custody capability that steers key rotation — is the whole check. The hot
+sequencer key can settle but cannot move the window.
+
+Narrowing and widening are asymmetric, because they are not equally dangerous:
+
+- A narrowing tightens the escape hatch, so it applies in the transaction that sets
+  it. Entries already pending keep their submit-time deadlines.
+- A widening weakens the escape hatch, so it stages behind a timelock (10 minutes to
+  7 days, the rotation bounds) and applies from its effective time on without any
+  further transaction. A mis-staged value can be cancelled before it lands; a
+  narrowing that lands while a widening waits supersedes it.
+
+The effective window is derived, not stored: `inbox::effective_window_ms` returns an
+elapsed staging, else the override, else the constant. Full nodes compute the same
+value from chain data alone. The sequencer's block-budget gate re-reads the window
+on every inbox sync and re-derives its deadline budget from it, so the local gate
+follows the chain instead of assuming 10 minutes; a degraded window read keeps the
+previous budget, since the settlement gate must never pause on transport errors.
 
 ## Objects and API
 
@@ -155,8 +182,8 @@ check.
 - Bound settlement lag: the on-chain inclusion cursor only advances on settle, so
   DA batches also flush by age (`walrus.batch_flush_ms`, default 2 min) and never
   wait indefinitely for the size threshold. With 5 flush opportunities inside the
-  10-minute inclusion window, batching alone cannot push a settled-but-unrecorded
-  entry past its deadline.
+  inclusion window (10 minutes by default), batching alone cannot push a
+  settled-but-unrecorded entry past its deadline.
 
 ## Full node verification
 
@@ -174,6 +201,3 @@ values passed to `settle`, which is an attributable equivocation.
 
 - The exit queue (see [roadmap](./roadmap.md)) composes with the inbox: a halted
   settlement should unlock forced exits so users can leave during a halt.
-- The window constant is fixed per package version. Making it adjustable needs an
-  admin-gated field plus a timelock, which is the same machinery as the hot-swap key
-  rotation planned for `SettlerCap` and `BridgeCap`.

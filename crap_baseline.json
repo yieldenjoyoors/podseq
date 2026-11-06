@@ -21,14 +21,8 @@
       "function": "Ed25519BlockSigner::from_suiprivkey_file",
       "line": 67,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0,
-      "uncovered": [
-        {
-          "start": 67,
-          "end": 75
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 3.0
     },
     {
       "file": "./crates/core/src/keys.rs",
@@ -171,12 +165,12 @@
       "function": "Client::call",
       "line": 144,
       "cyclomatic": 7.0,
-      "coverage": 0.0,
-      "crap": 56.0,
+      "coverage": 58.333333333333336,
+      "crap": 10.544560185185183,
       "uncovered": [
         {
-          "start": 144,
-          "end": 187
+          "start": 168,
+          "end": 186
         }
       ]
     },
@@ -185,14 +179,8 @@
       "function": "Client::fork_choice_updated_v3",
       "line": 58,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 58,
-          "end": 71
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/engine/src/client.rs",
@@ -213,14 +201,8 @@
       "function": "Client::new",
       "line": 46,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0,
-      "uncovered": [
-        {
-          "start": 46,
-          "end": 55
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 3.0
     },
     {
       "file": "./crates/engine/src/client.rs",
@@ -339,12 +321,12 @@
       "function": "Engine::finalize",
       "line": 165,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
+      "coverage": 92.85714285714286,
+      "crap": 2.001457725947522,
       "uncovered": [
         {
-          "start": 165,
-          "end": 178
+          "start": 177,
+          "end": 177
         }
       ]
     },
@@ -353,14 +335,8 @@
       "function": "Engine::new",
       "line": 39,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "uncovered": [
-        {
-          "start": 39,
-          "end": 43
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/engine/src/lib.rs",
@@ -381,12 +357,12 @@
       "function": "Engine::wait_for_forkchoice",
       "line": 182,
       "cyclomatic": 6.0,
-      "coverage": 0.0,
-      "crap": 42.0,
+      "coverage": 46.42857142857143,
+      "crap": 11.534803206997083,
       "uncovered": [
         {
-          "start": 182,
-          "end": 222
+          "start": 196,
+          "end": 221
         }
       ]
     },
@@ -1109,7 +1085,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "BridgeConfig::default",
-      "line": 263,
+      "line": 294,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1117,7 +1093,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::from_str",
-      "line": 363,
+      "line": 396,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1125,7 +1101,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::load",
-      "line": 356,
+      "line": 389,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -1133,7 +1109,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::save",
-      "line": 374,
+      "line": 407,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1141,7 +1117,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::testnet",
-      "line": 395,
+      "line": 428,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1149,7 +1125,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::to_toml",
-      "line": 368,
+      "line": 401,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1157,21 +1133,21 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::write",
-      "line": 378,
+      "line": 411,
       "cyclomatic": 5.0,
       "coverage": 76.92307692307693,
       "crap": 5.3072371415566675,
       "uncovered": [
         {
-          "start": 384,
-          "end": 388
+          "start": 417,
+          "end": 421
         }
       ]
     },
     {
       "file": "./crates/node/src/config.rs",
       "function": "MetricsConfig::default",
-      "line": 314,
+      "line": 347,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1179,7 +1155,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "P2pConfig::default",
-      "line": 275,
+      "line": 306,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1187,7 +1163,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "SequencerConfig::default",
-      "line": 345,
+      "line": 378,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1195,7 +1171,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "SignerConfig::default",
-      "line": 192,
+      "line": 207,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1203,7 +1179,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "SuiConfig::default",
-      "line": 167,
+      "line": 182,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1211,7 +1187,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "WalrusConfig::default",
-      "line": 116,
+      "line": 130,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1219,7 +1195,15 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_aggregator",
-      "line": 103,
+      "line": 110,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_batch_flush_ms",
+      "line": 125,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1227,7 +1211,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_batch_size_bytes",
-      "line": 111,
+      "line": 118,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1235,7 +1219,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_block_time_ms",
-      "line": 336,
+      "line": 369,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1243,7 +1227,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_bridge_poll_ms",
-      "line": 254,
+      "line": 285,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1267,7 +1251,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_epochs",
-      "line": 107,
+      "line": 114,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1275,7 +1259,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_fee_recipient",
-      "line": 340,
+      "line": 373,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1283,7 +1267,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_metrics_enabled",
-      "line": 305,
+      "line": 338,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1291,7 +1275,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_metrics_listen",
-      "line": 309,
+      "line": 342,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1307,15 +1291,29 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_move_dir",
-      "line": 162,
+      "line": 177,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
     },
     {
       "file": "./crates/node/src/config.rs",
+      "function": "default_p2p_advertise",
+      "line": 250,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 250,
+          "end": 252
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/config.rs",
       "function": "default_p2p_key_path",
-      "line": 286,
+      "line": 319,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1323,7 +1321,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_p2p_listen",
-      "line": 290,
+      "line": 323,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1331,7 +1329,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_publisher",
-      "line": 99,
+      "line": 106,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1339,7 +1337,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_relayer_key_path",
-      "line": 258,
+      "line": 289,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1355,7 +1353,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_signer_key_path",
-      "line": 200,
+      "line": 215,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1363,135 +1361,177 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_sui_rpc",
-      "line": 158,
+      "line": 173,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
     },
     {
       "file": "./crates/node/src/full_node.rs",
+      "function": "AbortOnDrop::drop",
+      "line": 532,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "uncovered": [
+        {
+          "start": 532,
+          "end": 536
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/full_node.rs",
+      "function": "AdmissionHandle::admit",
+      "line": 547,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 547,
+          "end": 549
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::apply_and_finalize",
-      "line": 399,
+      "line": 419,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0,
       "uncovered": [
         {
-          "start": 399,
-          "end": 423
+          "start": 419,
+          "end": 443
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::apply_block",
-      "line": 316,
+      "line": 336,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 316,
-          "end": 349
+          "start": 336,
+          "end": 369
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::mark_finalized",
-      "line": 355,
+      "line": 375,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 355,
-          "end": 392
+          "start": 375,
+          "end": 412
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::new",
-      "line": 54,
+      "line": 62,
       "cyclomatic": 10.0,
       "coverage": 0.0,
       "crap": 110.0,
       "uncovered": [
         {
-          "start": 54,
-          "end": 137
+          "start": 62,
+          "end": 152
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::poll_p2p",
-      "line": 272,
+      "line": 292,
       "cyclomatic": 10.0,
       "coverage": 0.0,
       "crap": 110.0,
       "uncovered": [
         {
-          "start": 272,
-          "end": 307
+          "start": 292,
+          "end": 327
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::run",
-      "line": 140,
+      "line": 155,
       "cyclomatic": 6.0,
       "coverage": 0.0,
       "crap": 42.0,
       "uncovered": [
         {
-          "start": 140,
-          "end": 196
+          "start": 155,
+          "end": 216
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::sync_from_settlement",
-      "line": 198,
+      "line": 218,
       "cyclomatic": 16.0,
       "coverage": 0.0,
       "crap": 272.0,
       "uncovered": [
         {
-          "start": 198,
-          "end": 258
+          "start": 218,
+          "end": 278
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "FullNode::verify_signature",
-      "line": 260,
+      "line": 280,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 260,
-          "end": 270
+          "start": 280,
+          "end": 290
         }
       ]
     },
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "HaltGate::update",
-      "line": 494,
+      "line": 617,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0
     },
     {
       "file": "./crates/node/src/full_node.rs",
+      "function": "build_admission",
+      "line": 572,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "uncovered": [
+        {
+          "start": 572,
+          "end": 601
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/full_node.rs",
       "function": "build_deadline_monitor",
-      "line": 454,
+      "line": 474,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0
@@ -1499,91 +1539,101 @@
     {
       "file": "./crates/node/src/full_node.rs",
       "function": "parse_forkchoice",
-      "line": 431,
+      "line": 451,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 431,
-          "end": 448
+          "start": 451,
+          "end": 468
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/full_node.rs",
+      "function": "poll_admission",
+      "line": 555,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0
+    },
+    {
+      "file": "./crates/node/src/full_node.rs",
+      "function": "spawn_admission_poll",
+      "line": 505,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 505,
+          "end": 526
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxIntegration::fmt",
-      "line": 315,
+      "line": 385,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 315,
-          "end": 319
+          "start": 385,
+          "end": 389
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxIntegration::from_config",
-      "line": 340,
+      "line": 410,
       "cyclomatic": 2.0,
-      "coverage": 40.909090909090914,
-      "crap": 2.825319308790383,
-      "uncovered": [
-        {
-          "start": 349,
-          "end": 362
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxIntegration::from_parts",
-      "line": 325,
+      "line": 395,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 325,
-          "end": 335
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxIntegration::tracker",
-      "line": 365,
+      "line": 426,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 365,
-          "end": 367
+          "start": 426,
+          "end": 428
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::fmt",
-      "line": 96,
+      "line": 109,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 96,
-          "end": 101
+          "start": 109,
+          "end": 117
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::halt_check",
-      "line": 265,
+      "line": 335,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0
@@ -1591,7 +1641,7 @@
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::new",
-      "line": 107,
+      "line": 125,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1599,25 +1649,25 @@
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::observe_inclusion",
-      "line": 209,
+      "line": 279,
       "cyclomatic": 7.0,
       "coverage": 42.857142857142854,
       "crap": 16.14285714285714,
       "uncovered": [
         {
-          "start": 215,
-          "end": 219
+          "start": 285,
+          "end": 289
         },
         {
-          "start": 221,
-          "end": 223
+          "start": 291,
+          "end": 293
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::observe_transactions",
-      "line": 178,
+      "line": 248,
       "cyclomatic": 8.0,
       "coverage": 100.0,
       "crap": 8.0
@@ -1625,21 +1675,39 @@
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::pending_submissions",
-      "line": 230,
+      "line": 300,
       "cyclomatic": 2.0,
       "coverage": 86.36363636363636,
       "crap": 2.010142749812171,
       "uncovered": [
         {
-          "start": 249,
-          "end": 251
+          "start": 319,
+          "end": 321
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/inbox.rs",
+      "function": "InboxTracker::refresh_window",
+      "line": 201,
+      "cyclomatic": 8.0,
+      "coverage": 72.0,
+      "crap": 9.404928,
+      "uncovered": [
+        {
+          "start": 208,
+          "end": 215
+        },
+        {
+          "start": 232,
+          "end": 232
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::settle_cursor",
-      "line": 259,
+      "line": 329,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -1647,35 +1715,43 @@
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "InboxTracker::sync",
-      "line": 127,
+      "line": 149,
       "cyclomatic": 9.0,
-      "coverage": 97.14285714285714,
-      "crap": 9.001889212827988,
+      "coverage": 97.2972972972973,
+      "crap": 9.001599115550905,
       "uncovered": [
         {
-          "start": 156,
-          "end": 156
+          "start": 180,
+          "end": 180
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
+      "function": "build_tracker",
+      "line": 434,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0
+    },
+    {
+      "file": "./crates/node/src/inbox.rs",
       "function": "commit_with_inbox",
-      "line": 531,
+      "line": 621,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 531,
-          "end": 550
+          "start": 621,
+          "end": 640
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "deadline_blocks_for",
-      "line": 42,
+      "line": 49,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1683,7 +1759,7 @@
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "decode_tx_bytes",
-      "line": 301,
+      "line": 371,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1691,112 +1767,112 @@
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "eth_get_transaction_receipt_height",
-      "line": 449,
+      "line": 539,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0,
       "uncovered": [
         {
-          "start": 449,
-          "end": 480
+          "start": 539,
+          "end": 570
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "observe_block_inclusions",
-      "line": 598,
+      "line": 688,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 598,
-          "end": 611
+          "start": 688,
+          "end": 701
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "parse_tx_hash",
-      "line": 289,
+      "line": 359,
       "cyclomatic": 3.0,
       "coverage": 60.0,
       "crap": 3.576,
       "uncovered": [
         {
-          "start": 292,
-          "end": 295
+          "start": 362,
+          "end": 365
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "poll_pass",
-      "line": 403,
+      "line": 493,
       "cyclomatic": 9.0,
       "coverage": 0.0,
       "crap": 90.0,
       "uncovered": [
         {
-          "start": 403,
-          "end": 446
+          "start": 493,
+          "end": 536
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "run_poller",
-      "line": 386,
+      "line": 476,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 386,
-          "end": 400
+          "start": 476,
+          "end": 490
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "settle_with_gate",
-      "line": 557,
+      "line": 647,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 557,
-          "end": 594
+          "start": 647,
+          "end": 684
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "spawn_poller",
-      "line": 373,
+      "line": 463,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 373,
-          "end": 382
+          "start": 463,
+          "end": 472
         }
       ]
     },
     {
       "file": "./crates/node/src/inbox.rs",
       "function": "wait_inclusion_gate",
-      "line": 488,
+      "line": 578,
       "cyclomatic": 6.0,
       "coverage": 0.0,
       "crap": 42.0,
       "uncovered": [
         {
-          "start": 488,
-          "end": 525
+          "start": 578,
+          "end": 615
         }
       ]
     },
@@ -1858,15 +1934,47 @@
     },
     {
       "file": "./crates/node/src/main.rs",
+      "function": "advertise_targets",
+      "line": 245,
+      "cyclomatic": 7.0,
+      "coverage": 78.04878048780488,
+      "crap": 7.51828905558538,
+      "uncovered": [
+        {
+          "start": 271,
+          "end": 273
+        },
+        {
+          "start": 283,
+          "end": 291
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/main.rs",
       "function": "build_p2p",
-      "line": 244,
+      "line": 360,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0,
       "uncovered": [
         {
-          "start": 244,
-          "end": 289
+          "start": 360,
+          "end": 406
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/main.rs",
+      "function": "full_node_p2p_parts",
+      "line": 587,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "uncovered": [
+        {
+          "start": 587,
+          "end": 601
         }
       ]
     },
@@ -1895,6 +2003,20 @@
         {
           "start": 87,
           "end": 96
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/main.rs",
+      "function": "maybe_spawn_advertise",
+      "line": 340,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "uncovered": [
+        {
+          "start": 340,
+          "end": 357
         }
       ]
     },
@@ -1942,15 +2064,29 @@
     },
     {
       "file": "./crates/node/src/main.rs",
+      "function": "spawn_advertise",
+      "line": 306,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "uncovered": [
+        {
+          "start": 306,
+          "end": 336
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/main.rs",
       "function": "start_full_node",
-      "line": 460,
+      "line": 603,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0,
       "uncovered": [
         {
-          "start": 460,
-          "end": 492
+          "start": 603,
+          "end": 633
         }
       ]
     },
@@ -1971,14 +2107,14 @@
     {
       "file": "./crates/node/src/main.rs",
       "function": "start_sequencer",
-      "line": 291,
+      "line": 408,
       "cyclomatic": 20.0,
       "coverage": 0.0,
       "crap": 420.0,
       "uncovered": [
         {
-          "start": 291,
-          "end": 458
+          "start": 408,
+          "end": 583
         }
       ]
     },
@@ -2333,7 +2469,7 @@
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "PodseqMetrics::default",
-      "line": 144,
+      "line": 155,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -2341,7 +2477,7 @@
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "PodseqMetrics::new",
-      "line": 54,
+      "line": 57,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -2349,28 +2485,28 @@
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "handle_connection",
-      "line": 191,
+      "line": 202,
       "cyclomatic": 8.0,
       "coverage": 0.0,
       "crap": 72.0,
       "uncovered": [
         {
-          "start": 191,
-          "end": 226
+          "start": 202,
+          "end": 237
         }
       ]
     },
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "serve",
-      "line": 154,
+      "line": 165,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0,
       "uncovered": [
         {
-          "start": 154,
-          "end": 189
+          "start": 165,
+          "end": 200
         }
       ]
     },
@@ -2558,50 +2694,76 @@
     },
     {
       "file": "./crates/node/src/runner.rs",
-      "function": "Runner::new",
-      "line": 60,
+      "function": "FlushTimer::arm",
+      "line": 52,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "uncovered": [
-        {
-          "start": 60,
-          "end": 88
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/node/src/runner.rs",
+      "function": "FlushTimer::deadline",
+      "line": 64,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/runner.rs",
+      "function": "FlushTimer::disarm",
+      "line": 60,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/runner.rs",
+      "function": "FlushTimer::new",
+      "line": 43,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/runner.rs",
+      "function": "Runner::new",
+      "line": 97,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "Runner::run",
-      "line": 91,
+      "line": 135,
       "cyclomatic": 10.0,
       "coverage": 0.0,
       "crap": 110.0,
       "uncovered": [
         {
-          "start": 91,
-          "end": 216
+          "start": 135,
+          "end": 261
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "advance_finalized",
-      "line": 672,
+      "line": 748,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
+      "coverage": 75.0,
+      "crap": 2.0625,
       "uncovered": [
         {
-          "start": 672,
-          "end": 687
+          "start": 759,
+          "end": 762
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "decode_block_hash",
-      "line": 631,
+      "line": 707,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -2609,7 +2771,7 @@
     {
       "file": "./crates/node/src/runner.rs",
       "function": "derive_prev_randao",
-      "line": 659,
+      "line": 735,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -2617,121 +2779,157 @@
     {
       "file": "./crates/node/src/runner.rs",
       "function": "finalize_blocks",
-      "line": 323,
+      "line": 368,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
+      "coverage": 91.78082191780823,
+      "crap": 2.002220982630579,
       "uncovered": [
         {
-          "start": 323,
-          "end": 379
+          "start": 397,
+          "end": 397
+        },
+        {
+          "start": 402,
+          "end": 402
+        },
+        {
+          "start": 411,
+          "end": 411
+        },
+        {
+          "start": 430,
+          "end": 430
+        },
+        {
+          "start": 444,
+          "end": 444
+        },
+        {
+          "start": 447,
+          "end": 447
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "finalize_buffered_locally",
-      "line": 550,
+      "line": 626,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0,
+      "coverage": 83.33333333333334,
+      "crap": 3.0416666666666665,
       "uncovered": [
         {
-          "start": 550,
-          "end": 571
+          "start": 640,
+          "end": 641
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "flush_batch",
-      "line": 391,
+      "line": 467,
       "cyclomatic": 10.0,
-      "coverage": 0.0,
-      "crap": 110.0,
+      "coverage": 40.243902439024396,
+      "crap": 31.337654706112783,
       "uncovered": [
         {
-          "start": 391,
-          "end": 497
+          "start": 481,
+          "end": 481
+        },
+        {
+          "start": 487,
+          "end": 487
+        },
+        {
+          "start": 494,
+          "end": 498
+        },
+        {
+          "start": 506,
+          "end": 506
+        },
+        {
+          "start": 516,
+          "end": 572
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "now_unix",
-      "line": 652,
+      "line": 728,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 652,
-          "end": 657
+          "start": 728,
+          "end": 733
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "persist_state",
-      "line": 638,
+      "line": 714,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 638,
-          "end": 650
+          "start": 714,
+          "end": 726
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "produce_block",
-      "line": 220,
+      "line": 265,
       "cyclomatic": 10.0,
       "coverage": 0.0,
       "crap": 110.0,
       "uncovered": [
         {
-          "start": 220,
-          "end": 320
+          "start": 265,
+          "end": 365
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "recover_pending",
-      "line": 575,
+      "line": 651,
       "cyclomatic": 12.0,
       "coverage": 69.23076923076923,
       "crap": 16.19481110605371,
       "uncovered": [
         {
-          "start": 582,
-          "end": 584
+          "start": 658,
+          "end": 660
         },
         {
-          "start": 591,
-          "end": 591
+          "start": 667,
+          "end": 667
         },
         {
-          "start": 603,
-          "end": 608
+          "start": 679,
+          "end": 684
         },
         {
-          "start": 616,
-          "end": 616
+          "start": 692,
+          "end": 692
         },
         {
-          "start": 624,
-          "end": 624
+          "start": 700,
+          "end": 700
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "retry_with_backoff",
-      "line": 523,
+      "line": 599,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0
@@ -2739,42 +2937,36 @@
     {
       "file": "./crates/node/src/runner.rs",
       "function": "settle_block",
-      "line": 506,
+      "line": 582,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 506,
-          "end": 515
+          "start": 582,
+          "end": 591
         }
       ]
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "shutdown_guard",
-      "line": 382,
+      "line": 458,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "uncovered": [
-        {
-          "start": 382,
-          "end": 386
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/node/src/runner.rs",
       "function": "shutdown_signal",
-      "line": 689,
+      "line": 765,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 689,
-          "end": 698
+          "start": 765,
+          "end": 774
         }
       ]
     },
@@ -2957,14 +3149,8 @@
       "function": "init",
       "line": 37,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "uncovered": [
-        {
-          "start": 37,
-          "end": 40
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/node/src/store/pending_store.rs",
@@ -3063,16 +3249,10 @@
     {
       "file": "./crates/p2p/src/config.rs",
       "function": "P2pConfig::default",
-      "line": 27,
+      "line": 53,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 27,
-          "end": 38
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/key.rs",
@@ -3123,21 +3303,15 @@
     {
       "file": "./crates/p2p/src/message.rs",
       "function": "Block::from",
-      "line": 39,
+      "line": 40,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 39,
-          "end": 41
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/message.rs",
       "function": "BlockMessage::bytes",
-      "line": 18,
+      "line": 20,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3145,7 +3319,7 @@
     {
       "file": "./crates/p2p/src/message.rs",
       "function": "BlockMessage::digest",
-      "line": 25,
+      "line": 27,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3153,7 +3327,7 @@
     {
       "file": "./crates/p2p/src/message.rs",
       "function": "BlockMessage::encode_size",
-      "line": 51,
+      "line": 52,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3161,21 +3335,15 @@
     {
       "file": "./crates/p2p/src/message.rs",
       "function": "BlockMessage::from",
-      "line": 34,
+      "line": 35,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 34,
-          "end": 36
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/message.rs",
       "function": "BlockMessage::read_cfg",
-      "line": 58,
+      "line": 59,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -3183,150 +3351,234 @@
     {
       "file": "./crates/p2p/src/message.rs",
       "function": "BlockMessage::write",
-      "line": 45,
+      "line": 46,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/node.rs",
-      "function": "BlockAnnounce::decode",
-      "line": 48,
-      "cyclomatic": 4.0,
-      "coverage": 0.0,
-      "crap": 20.0,
+      "function": "AdmissionHandle::admit",
+      "line": 82,
+      "cyclomatic": 3.0,
+      "coverage": 81.25,
+      "crap": 3.059326171875,
       "uncovered": [
         {
-          "start": 48,
-          "end": 58
+          "start": 87,
+          "end": 89
+        }
+      ]
+    },
+    {
+      "file": "./crates/p2p/src/node.rs",
+      "function": "AdmissionHandle::applied_epoch",
+      "line": 103,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 103,
+          "end": 105
+        }
+      ]
+    },
+    {
+      "file": "./crates/p2p/src/node.rs",
+      "function": "BlockAnnounce::decode",
+      "line": 134,
+      "cyclomatic": 4.0,
+      "coverage": 90.9090909090909,
+      "crap": 4.012021036814425,
+      "uncovered": [
+        {
+          "start": 136,
+          "end": 136
         }
       ]
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "BlockAnnounce::encode",
-      "line": 41,
+      "line": 127,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 41,
-          "end": 46
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "BlockBroadcaster::announce",
-      "line": 87,
+      "line": 179,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 87,
-          "end": 96
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "BlockBroadcaster::broadcast",
-      "line": 73,
+      "line": 159,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
+      "coverage": 90.9090909090909,
+      "crap": 2.0030052592036065,
       "uncovered": [
         {
-          "start": 73,
-          "end": 84
+          "start": 168,
+          "end": 168
         }
       ]
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "BlockReceiver::poll_next",
-      "line": 119,
-      "cyclomatic": 7.0,
-      "coverage": 0.0,
-      "crap": 56.0,
+      "line": 211,
+      "cyclomatic": 6.0,
+      "coverage": 73.33333333333333,
+      "crap": 6.682666666666667,
       "uncovered": [
         {
-          "start": 119,
-          "end": 140
+          "start": 222,
+          "end": 225
         }
       ]
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "BlockReceiver::receive",
-      "line": 110,
+      "line": 202,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 110,
-          "end": 116
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/p2p/src/node.rs",
+      "function": "P2pNode::admission",
+      "line": 390,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::broadcaster",
-      "line": 258,
+      "line": 396,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 258,
-          "end": 260
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::new",
-      "line": 153,
-      "cyclomatic": 4.0,
-      "coverage": 0.0,
-      "crap": 20.0,
+      "line": 252,
+      "cyclomatic": 7.0,
+      "coverage": 97.16981132075472,
+      "crap": 7.001110816311452,
       "uncovered": [
         {
-          "start": 153,
-          "end": 255
+          "start": 258,
+          "end": 258
+        },
+        {
+          "start": 282,
+          "end": 283
         }
       ]
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::receiver",
-      "line": 263,
+      "line": 402,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 263,
-          "end": 268
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/p2p/src/node.rs",
+      "function": "admission_set",
+      "line": 110,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/p2p/src/node.rs",
+      "function": "handshake",
+      "line": 34,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/p2p/src/node.rs",
+      "function": "initial_tracked_set",
+      "line": 421,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0
     },
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "load_pubkey",
-      "line": 271,
+      "line": 410,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 271,
-          "end": 276
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/p2p/tests/net.rs",
+      "function": "config",
+      "line": 55,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/p2p/tests/net.rs",
+      "function": "decode_identity",
+      "line": 165,
+      "cyclomatic": 2.0,
+      "coverage": null,
+      "crap": 6.0
+    },
+    {
+      "file": "./crates/p2p/tests/net.rs",
+      "function": "free_port",
+      "line": 34,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/p2p/tests/net.rs",
+      "function": "run_dynamic_admission",
+      "line": 82,
+      "cyclomatic": 12.0,
+      "coverage": null,
+      "crap": 156.0
+    },
+    {
+      "file": "./crates/p2p/tests/net.rs",
+      "function": "run_exchange",
+      "line": 182,
+      "cyclomatic": 8.0,
+      "coverage": null,
+      "crap": 72.0
+    },
+    {
+      "file": "./crates/p2p/tests/net.rs",
+      "function": "sample_block",
+      "line": 20,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/p2p/tests/net.rs",
+      "function": "temp_key",
+      "line": 43,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
@@ -3764,8 +4016,24 @@
     },
     {
       "file": "./crates/sui/src/inbox.rs",
+      "function": "Arc::field_contents",
+      "line": 144,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "Arc::object_contents",
+      "line": 137,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
       "function": "InboxReader::new",
-      "line": 138,
+      "line": 162,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3773,7 +4041,7 @@
     {
       "file": "./crates/sui/src/inbox.rs",
       "function": "InboxReader::next_nonce",
-      "line": 149,
+      "line": 173,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -3781,7 +4049,7 @@
     {
       "file": "./crates/sui/src/inbox.rs",
       "function": "InboxReader::pending_at",
-      "line": 156,
+      "line": 180,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0
@@ -3789,29 +4057,43 @@
     {
       "file": "./crates/sui/src/inbox.rs",
       "function": "InboxReader::status",
-      "line": 143,
+      "line": 167,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
     },
     {
       "file": "./crates/sui/src/inbox.rs",
+      "function": "InboxReader::window",
+      "line": 196,
+      "cyclomatic": 9.0,
+      "coverage": 95.45454545454545,
+      "crap": 9.007607062359128,
+      "uncovered": [
+        {
+          "start": 213,
+          "end": 213
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
       "function": "SuiInboxTransport::field_contents",
-      "line": 116,
+      "line": 120,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 116,
-          "end": 126
+          "start": 120,
+          "end": 130
         }
       ]
     },
     {
       "file": "./crates/sui/src/inbox.rs",
       "function": "SuiInboxTransport::new",
-      "line": 90,
+      "line": 94,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3819,37 +4101,173 @@
     {
       "file": "./crates/sui/src/inbox.rs",
       "function": "SuiInboxTransport::object_contents",
-      "line": 98,
+      "line": 102,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 98,
-          "end": 114
+          "start": 102,
+          "end": 118
         }
       ]
     },
     {
       "file": "./crates/sui/src/inbox.rs",
-      "function": "parse_inbox_status",
-      "line": 170,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0
-    },
-    {
-      "file": "./crates/sui/src/inbox.rs",
-      "function": "parse_pending_tx",
-      "line": 197,
+      "function": "effective_window_ms",
+      "line": 395,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
     },
     {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "parse_inbox_status",
+      "line": 229,
+      "cyclomatic": 2.0,
+      "coverage": 66.66666666666666,
+      "crap": 2.1481481481481484,
+      "uncovered": [
+        {
+          "start": 240,
+          "end": 244
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "parse_pending_tx",
+      "line": 256,
+      "cyclomatic": 3.0,
+      "coverage": 72.22222222222221,
+      "crap": 3.1929012345679015,
+      "uncovered": [
+        {
+          "start": 265,
+          "end": 267
+        },
+        {
+          "start": 273,
+          "end": 274
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "parse_pending_window",
+      "line": 380,
+      "cyclomatic": 2.0,
+      "coverage": 36.36363636363637,
+      "crap": 3.0308039068369643,
+      "uncovered": [
+        {
+          "start": 381,
+          "end": 386
+        },
+        {
+          "start": 389,
+          "end": 389
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "parse_window_override",
+      "line": 362,
+      "cyclomatic": 2.0,
+      "coverage": 83.33333333333334,
+      "crap": 2.0185185185185186,
+      "uncovered": [
+        {
+          "start": 365,
+          "end": 365
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "pending_window_field_id",
+      "line": 353,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "pending_window_key_type_tag",
+      "line": 335,
+      "cyclomatic": 1.0,
+      "coverage": 83.33333333333334,
+      "crap": 1.0046296296296295,
+      "uncovered": [
+        {
+          "start": 335,
+          "end": 335
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "submit_cancel_window_change",
+      "line": 511,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 511,
+          "end": 527
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "submit_window_change",
+      "line": 464,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "uncovered": [
+        {
+          "start": 464,
+          "end": 497
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "validate_window_change",
+      "line": 421,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "window_field_id",
+      "line": 346,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/inbox.rs",
+      "function": "window_key_type_tag",
+      "line": 325,
+      "cyclomatic": 1.0,
+      "coverage": 75.0,
+      "crap": 1.015625,
+      "uncovered": [
+        {
+          "start": 326,
+          "end": 327
+        }
+      ]
+    },
+    {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::aggregator_url",
-      "line": 202,
+      "line": 203,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3857,117 +4275,93 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::commit",
-      "line": 291,
+      "line": 292,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 291,
-          "end": 301
+          "start": 292,
+          "end": 302
         }
       ]
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::commit_with_cursor",
-      "line": 307,
+      "line": 308,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 307,
-          "end": 322
+          "start": 308,
+          "end": 323
         }
       ]
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::fetch",
-      "line": 284,
+      "line": 285,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 284,
-          "end": 287
+          "start": 285,
+          "end": 288
         }
       ]
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::fetch_blob",
-      "line": 259,
+      "line": 260,
       "cyclomatic": 4.0,
-      "coverage": 58.82352941176471,
-      "crap": 5.117036433950743,
+      "coverage": 66.66666666666666,
+      "crap": 4.5925925925925934,
       "uncovered": [
         {
-          "start": 263,
-          "end": 263
-        },
-        {
-          "start": 267,
-          "end": 271
-        },
-        {
-          "start": 273,
-          "end": 273
+          "start": 268,
+          "end": 272
         }
       ]
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::has_settlement",
-      "line": 151,
+      "line": 152,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 151,
-          "end": 153
+          "start": 152,
+          "end": 154
         }
       ]
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::new",
-      "line": 133,
+      "line": 134,
       "cyclomatic": 2.0,
-      "coverage": 80.0,
-      "crap": 2.032,
-      "uncovered": [
-        {
-          "start": 134,
-          "end": 134
-        },
-        {
-          "start": 141,
-          "end": 141
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::publish",
-      "line": 279,
+      "line": 280,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "uncovered": [
-        {
-          "start": 279,
-          "end": 282
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::publisher_url",
-      "line": 198,
+      "line": 199,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3975,7 +4369,7 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::rpc_url",
-      "line": 194,
+      "line": 195,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3983,7 +4377,7 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::settlement_handle",
-      "line": 157,
+      "line": 158,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -3991,25 +4385,15 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::settlement_sender",
-      "line": 169,
+      "line": 170,
       "cyclomatic": 2.0,
-      "coverage": 77.77777777777779,
-      "crap": 2.0438957475994513,
-      "uncovered": [
-        {
-          "start": 170,
-          "end": 170
-        },
-        {
-          "start": 176,
-          "end": 176
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 2.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::settlement_sender_handle",
-      "line": 162,
+      "line": 163,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4017,13 +4401,17 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::store_blob",
-      "line": 206,
+      "line": 207,
       "cyclomatic": 9.0,
-      "coverage": 0.0,
-      "crap": 90.0,
+      "coverage": 24.242424242424242,
+      "crap": 44.21788129226145,
       "uncovered": [
         {
-          "start": 206,
+          "start": 220,
+          "end": 225
+        },
+        {
+          "start": 229,
           "end": 257
         }
       ]
@@ -4031,21 +4419,21 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::sui_balance",
-      "line": 184,
+      "line": 185,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 184,
-          "end": 192
+          "start": 185,
+          "end": 193
         }
       ]
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Client::with_settlement",
-      "line": 145,
+      "line": 146,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4053,43 +4441,23 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Config::default",
-      "line": 105,
+      "line": 106,
       "cyclomatic": 1.0,
-      "coverage": 77.77777777777779,
-      "crap": 1.0109739368998627,
-      "uncovered": [
-        {
-          "start": 109,
-          "end": 109
-        },
-        {
-          "start": 111,
-          "end": 111
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "Error::is_transient",
-      "line": 78,
+      "line": 79,
       "cyclomatic": 4.0,
-      "coverage": 77.77777777777779,
-      "crap": 4.175582990397805,
-      "uncovered": [
-        {
-          "start": 83,
-          "end": 83
-        },
-        {
-          "start": 90,
-          "end": 90
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 4.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "StoreResponse::blob_id",
-      "line": 340,
+      "line": 341,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4097,36 +4465,76 @@
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "to_core",
-      "line": 327,
+      "line": 328,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "uncovered": [
-        {
-          "start": 327,
-          "end": 329
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 1.0
     },
     {
       "file": "./crates/sui/src/lib.rs",
       "function": "verify_block_signature",
-      "line": 26,
+      "line": 27,
       "cyclomatic": 2.0,
-      "coverage": 64.70588235294117,
-      "crap": 2.175859963362508,
+      "coverage": 100.0,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/sui/src/peers.rs",
+      "function": "PeerBookReader::new",
+      "line": 121,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/peers.rs",
+      "function": "PeerBookReader::snapshot",
+      "line": 142,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/sui/src/peers.rs",
+      "function": "parse_peer_book",
+      "line": 66,
+      "cyclomatic": 3.0,
+      "coverage": 91.30434782608695,
+      "crap": 3.0059176460918877,
       "uncovered": [
         {
-          "start": 28,
-          "end": 30
-        },
+          "start": 97,
+          "end": 98
+        }
+      ]
+    },
+    {
+      "file": "./crates/sui/src/peers.rs",
+      "function": "peer_book_field_id",
+      "line": 36,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/peers.rs",
+      "function": "peer_key_type_tag",
+      "line": 22,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/peers.rs",
+      "function": "submit_publish_peer",
+      "line": 172,
+      "cyclomatic": 7.0,
+      "coverage": 0.0,
+      "crap": 56.0,
+      "uncovered": [
         {
-          "start": 33,
-          "end": 33
-        },
-        {
-          "start": 40,
-          "end": 41
+          "start": 172,
+          "end": 211
         }
       ]
     },
@@ -4537,14 +4945,8 @@
       "function": "Settlement::new",
       "line": 171,
       "cyclomatic": 4.0,
-      "coverage": 90.9090909090909,
-      "crap": 4.012021036814425,
-      "uncovered": [
-        {
-          "start": 177,
-          "end": 178
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 4.0
     },
     {
       "file": "./crates/sui/src/settlement.rs",
@@ -4757,26 +5159,8 @@
       "function": "parse_move_build",
       "line": 531,
       "cyclomatic": 5.0,
-      "coverage": 80.0,
-      "crap": 5.2,
-      "uncovered": [
-        {
-          "start": 532,
-          "end": 532
-        },
-        {
-          "start": 536,
-          "end": 537
-        },
-        {
-          "start": 555,
-          "end": 555
-        },
-        {
-          "start": 557,
-          "end": 558
-        }
-      ]
+      "coverage": 100.0,
+      "crap": 5.0
     },
     {
       "file": "./crates/sui/src/settlement.rs",
@@ -5602,12 +5986,13 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 40,
+    "analyzed_files": 42,
     "lcov_files": 35,
-    "matched_files": 33,
+    "matched_files": 34,
     "source_only": {
-      "count": 7,
+      "count": 8,
       "examples": [
+        "./crates/p2p/tests/net.rs",
         "./crates/sui/examples/rotation_gas_bench.rs",
         "./e2e/lib.rs",
         "./e2e/tests/bridge_bootstrap.rs",
@@ -5618,10 +6003,9 @@
       ]
     },
     "lcov_only": {
-      "count": 2,
+      "count": 1,
       "examples": [
-        "/opt/data/projects/podseq/crates/core/src/runtime.rs",
-        "/opt/data/projects/podseq/crates/sui/src/peers.rs"
+        "/opt/data/projects/podseq/crates/core/src/runtime.rs"
       ]
     }
   }

@@ -15,14 +15,18 @@
 //! deadline check (see `docs/src/force-inclusion.md`).
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_primitives::{keccak256, Bytes, B256};
 use anyhow::Context as _;
 use podseq_core::Settlement as _;
-use podseq_sui::inbox::{parse_inbox_status, parse_pending_tx, InboxTransport, SuiInboxTransport};
+use podseq_sui::deadline::{parse_clock, SUI_CLOCK_ID};
+use podseq_sui::inbox::{
+    parse_inbox_status, parse_pending_tx, InboxReader, InboxTransport, SuiInboxTransport,
+    WindowView, DEFAULT_WINDOW_MS,
+};
 use sui_sdk_types::Address;
 use thiserror::Error;
 use tracing::{debug, info, warn};
@@ -32,16 +36,18 @@ use crate::config::SuiConfig;
 use crate::metrics::PodseqMetrics;
 use crate::store::{InboxStore, NonceRecord, StoreError};
 
-/// Inclusion window on chain (ms), mirrored from `inbox.move`
-/// (`INCLUSION_WINDOW_MS`): a forced transaction must be included in a block
-/// whose timestamp is at most this many ms after submission.
-pub const INCLUSION_WINDOW_MS: u64 = 600_000;
+/// Default inclusion window on chain (ms), mirrored from `podseq_sui::inbox`
+/// (`DEFAULT_WINDOW_MS`, i.e. `inbox.move`'s `INCLUSION_WINDOW_MS`): a forced
+/// transaction must be included in a block whose timestamp is at most this
+/// many ms after submission. This is only the seed: with a configured
+/// settlement package id the tracker re-derives the budget from the chain's
+/// window on every sync (it is operator-adjustable).
+pub const INCLUSION_WINDOW_MS: u64 = DEFAULT_WINDOW_MS;
 
-/// Converts the on-chain inclusion window into a block budget for the
+/// Converts an on-chain inclusion window into a block budget for the
 /// sequencer-side gate: ceil(window / block_time).
-pub fn deadline_blocks_for(block_time_ms: u64) -> u64 {
-    let block_time_ms = block_time_ms.max(1);
-    INCLUSION_WINDOW_MS.div_ceil(block_time_ms)
+pub fn deadline_blocks_for(window_ms: u64, block_time_ms: u64) -> u64 {
+    window_ms.div_ceil(block_time_ms.max(1))
 }
 
 /// Errors from the sequencer-side inbox tracker.
@@ -85,36 +91,52 @@ pub struct TrackedSubmission {
 /// point re-derives the same state: submissions are persisted before the
 /// transaction enters the pool (persist-before-settle), and inclusions are
 /// persisted before the settle call that covers them.
+///
+/// The block budget is chain-derived: with a settlement package id
+/// configured, every sync re-reads the inbox's inclusion window (operator
+/// adjustable: narrowings apply immediately, widenings behind a timelock) and
+/// re-derives `deadline_blocks`. Read errors keep the previous budget.
 pub struct InboxTracker {
     transport: Arc<dyn InboxTransport>,
     inbox_id: Address,
     store: InboxStore,
-    deadline_blocks: u64,
+    block_time_ms: u64,
+    window_package: Option<Address>,
+    deadline_blocks: AtomicU64,
 }
 
 impl std::fmt::Debug for InboxTracker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InboxTracker")
             .field("inbox_id", &self.inbox_id)
-            .field("deadline_blocks", &self.deadline_blocks)
+            .field(
+                "deadline_blocks",
+                &self.deadline_blocks.load(Ordering::Relaxed),
+            )
             .finish_non_exhaustive()
     }
 }
 
 impl InboxTracker {
     /// Creates a tracker over `inbox_id` with the given persisted marker
-    /// store and block deadline budget.
+    /// store, block time, and chain-package id for window reads. The seeded
+    /// `deadline_blocks` applies until the first window read succeeds;
+    /// without a package id the seed stands for the tracker's lifetime.
     pub fn new(
         transport: Arc<dyn InboxTransport>,
         inbox_id: Address,
         store: InboxStore,
         deadline_blocks: u64,
+        block_time_ms: u64,
+        window_package: Option<Address>,
     ) -> Self {
         Self {
             transport,
             inbox_id,
             store,
-            deadline_blocks,
+            block_time_ms,
+            window_package,
+            deadline_blocks: AtomicU64::new(deadline_blocks),
         }
     }
 
@@ -127,9 +149,11 @@ impl InboxTracker {
     pub async fn sync(&self, at_height: u64) -> Result<Vec<TrackedSubmission>, TrackerError> {
         let contents = self.transport.object_contents(&self.inbox_id).await?;
         let status = parse_inbox_status(&contents)?;
+        self.refresh_window().await;
         let tracked = self.store.snapshot()?;
 
-        let deadline_height = at_height.saturating_add(self.deadline_blocks);
+        let deadline_height =
+            at_height.saturating_add(self.deadline_blocks.load(Ordering::Relaxed));
         let mut fresh = Vec::new();
         for nonce in status.included_count..status.next_nonce {
             if tracked.contains_key(&nonce) {
@@ -164,6 +188,52 @@ impl InboxTracker {
             });
         }
         Ok(fresh)
+    }
+
+    /// Re-derives the block budget from the chain's inclusion window.
+    ///
+    /// Best effort by design: any read error (transport, clock, decode) keeps
+    /// the previous budget with a warning — the settlement gate must never
+    /// pause because a window read degraded. A tracker without a package id
+    /// never refreshes (the seed stands). A narrowed window shrinks the
+    /// budget immediately; an elapsed staged widening grows it without any
+    /// transaction, mirroring `inbox::effective_window_ms`.
+    async fn refresh_window(&self) {
+        let Some(package) = self.window_package else {
+            return;
+        };
+        let now_ms = match self.transport.object_contents(&SUI_CLOCK_ID).await {
+            Ok(bytes) => match parse_clock(&bytes) {
+                Ok(ms) => ms,
+                Err(e) => {
+                    warn!(error = %e, "clock decode failed; keeping the previous window budget");
+                    return;
+                }
+            },
+            Err(e) => {
+                warn!(error = %e, "clock read failed; keeping the previous window budget");
+                return;
+            }
+        };
+        let reader = InboxReader::new(Arc::clone(&self.transport), self.inbox_id);
+        let view: WindowView = match reader.window(package, now_ms).await {
+            Ok(view) => view,
+            Err(e) => {
+                warn!(error = %e, "window read failed; keeping the previous window budget");
+                return;
+            }
+        };
+        let blocks = deadline_blocks_for(view.effective_ms, self.block_time_ms);
+        let previous = self.deadline_blocks.swap(blocks, Ordering::Relaxed);
+        if previous != blocks {
+            info!(
+                window_ms = view.effective_ms,
+                override_ms = ?view.override_ms,
+                pending = ?view.pending.as_ref().map(|p| p.new_window_ms),
+                deadline_blocks = blocks,
+                "inclusion-window budget updated from chain"
+            );
+        }
     }
 
     /// Marks every tracked-but-unincluded nonce whose transaction bytes appear
@@ -346,16 +416,7 @@ impl InboxIntegration {
         let Some(inbox_id) = sui.inbox_id.as_deref() else {
             return Ok(None);
         };
-        let inbox_id: Address = inbox_id
-            .parse()
-            .map_err(|e| TrackerError::Corrupt(format!("parsing sui.inbox_id {inbox_id}: {e}")))?;
-        let transport = Arc::new(SuiInboxTransport::new(&sui.rpc_url));
-        let tracker = InboxTracker::new(
-            transport,
-            inbox_id,
-            InboxStore::new(data_dir),
-            deadline_blocks_for(block_time_ms),
-        );
+        let tracker = build_tracker(sui, inbox_id, data_dir, block_time_ms)?;
         Ok(Some(Self::from_parts(
             Arc::new(tracker),
             reth_rpc_url.to_string(),
@@ -365,6 +426,35 @@ impl InboxIntegration {
     pub fn tracker(&self) -> &Arc<InboxTracker> {
         &self.tracker
     }
+}
+
+/// Assembles the tracker from config: both object ids parse fail-closed, and
+/// the block budget seeds from the default window until the first chain
+/// window read lands.
+fn build_tracker(
+    sui: &SuiConfig,
+    inbox_id: &str,
+    data_dir: &Path,
+    block_time_ms: u64,
+) -> Result<InboxTracker, TrackerError> {
+    let inbox_id: Address = inbox_id
+        .parse()
+        .map_err(|e| TrackerError::Corrupt(format!("parsing sui.inbox_id {inbox_id}: {e}")))?;
+    let window_package = sui
+        .settlement_package_id
+        .as_deref()
+        .map(|id| id.parse::<Address>())
+        .transpose()
+        .map_err(|e| TrackerError::Corrupt(format!("parsing sui.settlement_package_id: {e}")))?;
+    let transport = Arc::new(SuiInboxTransport::new(&sui.rpc_url));
+    Ok(InboxTracker::new(
+        transport,
+        inbox_id,
+        InboxStore::new(data_dir),
+        deadline_blocks_for(INCLUSION_WINDOW_MS, block_time_ms),
+        block_time_ms,
+        window_package,
+    ))
 }
 
 /// Spawns the inbox poller when the integration is configured; no-op
@@ -614,7 +704,7 @@ pub fn observe_block_inclusions(inbox: Option<&InboxIntegration>, raw_txs: &[Byt
 mod tests {
     use super::*;
     use crate::store::InboxStore;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     const INBOX_ID: [u8; 32] = [0x11; 32];
     const TABLE_UID: [u8; 32] = [0x22; 32];
@@ -677,11 +767,13 @@ mod tests {
     }
 
     /// Mock at the `get_object` transport boundary, same shape as the sui-crate
-    /// mock: two maps, one per read shape.
+    /// mock: two maps, one per read shape. Ids in `fail_ids` error instead of
+    /// serving contents, to exercise degraded window reads.
     #[derive(Default)]
     struct MockTransport {
         objects: BTreeMap<Address, Vec<u8>>,
         fields: BTreeMap<(Address, u64), Vec<u8>>,
+        fail_ids: BTreeSet<Address>,
     }
 
     impl MockTransport {
@@ -707,6 +799,11 @@ mod tests {
         ) -> podseq_sui::inbox::InboxFuture<'a, Result<Vec<u8>, podseq_sui::inbox::InboxError>>
         {
             Box::pin(async move {
+                if self.fail_ids.contains(id) {
+                    return Err(podseq_sui::inbox::InboxError::Rpc(format!(
+                        "read down: {id}"
+                    )));
+                }
                 self.objects.get(id).cloned().ok_or_else(|| {
                     podseq_sui::inbox::InboxError::NotFound(format!("no object {id}"))
                 })
@@ -761,6 +858,8 @@ mod tests {
             Address::new(INBOX_ID),
             InboxStore::new(&dir),
             deadline_blocks,
+            1_000,
+            None,
         );
         TestRig { tracker, dir }
     }
@@ -872,6 +971,8 @@ mod tests {
                 Address::new(INBOX_ID),
                 store,
                 3,
+                1_000,
+                None,
             );
             tracker.sync(10).await.unwrap();
             tracker
@@ -883,6 +984,8 @@ mod tests {
             Address::new(INBOX_ID),
             InboxStore::new(&dir),
             3,
+            1_000,
+            None,
         );
         let pending: Vec<u64> = recovered
             .pending_submissions()
@@ -916,6 +1019,8 @@ mod tests {
                 Address::new(INBOX_ID),
                 InboxStore::new(&dir),
                 3,
+                1_000,
+                None,
             );
             tracker.sync(10).await.unwrap();
             tracker
@@ -928,6 +1033,8 @@ mod tests {
             Address::new(INBOX_ID),
             InboxStore::new(&dir),
             3,
+            1_000,
+            None,
         );
         assert_eq!(recovered.settle_cursor().unwrap(), 1);
         assert_eq!(
@@ -1015,13 +1122,142 @@ mod tests {
     }
 
     #[test]
-    fn deadline_blocks_derived_from_block_time() {
+    fn deadline_blocks_derived_from_window_and_block_time() {
         // 10-minute window at the default 2 s block time, per the Move docs.
-        assert_eq!(deadline_blocks_for(2_000), 300);
-        assert_eq!(deadline_blocks_for(1_000), 600);
+        assert_eq!(deadline_blocks_for(600_000, 2_000), 300);
+        assert_eq!(deadline_blocks_for(600_000, 1_000), 600);
         // ceil, not floor: a 3 s block time must not under-budget the window.
-        assert_eq!(deadline_blocks_for(3_000), 200);
-        assert_eq!(deadline_blocks_for(0), INCLUSION_WINDOW_MS);
+        assert_eq!(deadline_blocks_for(600_000, 3_000), 200);
+        // A zero block time degenerates to one-block budgeting, not a panic.
+        assert_eq!(deadline_blocks_for(600_000, 0), 600_000);
+    }
+
+    // ---------- chain-derived window budget ----------
+
+    /// Stand-in deployed package id for window dynamic-field derivation.
+    const PACKAGE_ID: [u8; 32] = [0x77; 32];
+
+    /// Mirror of the shared `Clock` object BCS: id + timestamp_ms.
+    fn clock_bytes(now_ms: u64) -> Vec<u8> {
+        let mut bytes = vec![0u8; 32];
+        bytes.extend_from_slice(&now_ms.to_le_bytes());
+        bytes
+    }
+
+    /// Mirror of `Field<inbox::WindowKey, u64>`: id + value.
+    fn window_field_bytes(value: u64) -> Vec<u8> {
+        let mut bytes = vec![0xee; 32];
+        bytes.extend_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    /// Mirror of `Field<inbox::PendingWindowKey, inbox::PendingWindow>`:
+    /// id + new_window_ms + effective_at_ms.
+    fn pending_window_field_bytes(new_window_ms: u64, effective_at_ms: u64) -> Vec<u8> {
+        let mut bytes = vec![0xef; 32];
+        bytes.extend_from_slice(&new_window_ms.to_le_bytes());
+        bytes.extend_from_slice(&effective_at_ms.to_le_bytes());
+        bytes
+    }
+
+    /// A rig whose tracker derives its block budget from the chain: the
+    /// default window (600_000 ms) is the seed at a 1_000 ms block time, so
+    /// the un-refreshed budget is 600 blocks.
+    fn rig_window(mut mock: MockTransport) -> TestRig {
+        let dir = tmp_dir();
+        mock.objects
+            .insert(podseq_sui::deadline::SUI_CLOCK_ID, clock_bytes(1_000_000));
+        let transport = Arc::new(mock);
+        let tracker = InboxTracker::new(
+            Arc::clone(&transport) as Arc<dyn InboxTransport>,
+            Address::new(INBOX_ID),
+            InboxStore::new(&dir),
+            deadline_blocks_for(600_000, 1_000),
+            1_000,
+            Some(Address::new(PACKAGE_ID)),
+        );
+        TestRig { tracker, dir }
+    }
+
+    #[tokio::test]
+    async fn sync_derives_the_block_budget_from_the_chain_window() {
+        let inbox_id = Address::new(INBOX_ID);
+        let package = Address::new(PACKAGE_ID);
+        let mut mock = MockTransport::with_inbox(1, 0, &[(0, b"tx-a")]);
+        mock.objects.insert(
+            podseq_sui::inbox::window_field_id(inbox_id, package),
+            window_field_bytes(120_000),
+        );
+        let r = rig_window(mock);
+
+        // Seeded at 600 blocks; the narrowed on-chain window applies from the
+        // first sync: fresh submissions anchor at height + 120.
+        let fresh = r.tracker.sync(10).await.unwrap();
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].deadline_height, 130);
+    }
+
+    #[tokio::test]
+    async fn sync_keeps_the_seeded_budget_without_window_state() {
+        let r = rig_window(MockTransport::with_inbox(1, 0, &[(0, b"tx-a")]));
+
+        // No override, no staging: the default window applies (600 blocks at
+        // a 1_000 ms block time).
+        let fresh = r.tracker.sync(10).await.unwrap();
+        assert_eq!(fresh[0].deadline_height, 610);
+    }
+
+    #[tokio::test]
+    async fn sync_applies_an_elapsed_staged_widening() {
+        let inbox_id = Address::new(INBOX_ID);
+        let package = Address::new(PACKAGE_ID);
+        let mut mock = MockTransport::with_inbox(1, 0, &[(0, b"tx-a")]);
+        mock.objects.insert(
+            podseq_sui::inbox::pending_window_field_id(inbox_id, package),
+            pending_window_field_bytes(1_800_000, 900_000),
+        );
+        let r = rig_window(mock);
+
+        // The staging elapsed (clock 1_000_000 >= effective 900_000): the
+        // widened window applies without any transaction.
+        let fresh = r.tracker.sync(10).await.unwrap();
+        assert_eq!(fresh[0].deadline_height, 1_810);
+    }
+
+    #[tokio::test]
+    async fn sync_ignores_an_unelapsed_staged_widening() {
+        let inbox_id = Address::new(INBOX_ID);
+        let package = Address::new(PACKAGE_ID);
+        let mut mock = MockTransport::with_inbox(1, 0, &[(0, b"tx-a")]);
+        mock.objects.insert(
+            podseq_sui::inbox::pending_window_field_id(inbox_id, package),
+            pending_window_field_bytes(1_800_000, 2_000_000),
+        );
+        let r = rig_window(mock);
+
+        // Staged but not yet effective: the default still applies.
+        let fresh = r.tracker.sync(10).await.unwrap();
+        assert_eq!(fresh[0].deadline_height, 610);
+    }
+
+    #[tokio::test]
+    async fn sync_keeps_the_previous_budget_when_the_window_read_fails() {
+        let inbox_id = Address::new(INBOX_ID);
+        let package = Address::new(PACKAGE_ID);
+        let mut mock = MockTransport::with_inbox(1, 0, &[(0, b"tx-a")]);
+        mock.objects.insert(
+            podseq_sui::inbox::window_field_id(inbox_id, package),
+            window_field_bytes(120_000),
+        );
+        mock.fail_ids
+            .insert(podseq_sui::inbox::window_field_id(inbox_id, package));
+        let r = rig_window(mock);
+
+        // The window read is degraded, the inbox read is not: sync proceeds,
+        // submissions keep the seeded budget, no pause.
+        let fresh = r.tracker.sync(10).await.unwrap();
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].deadline_height, 610);
     }
 
     #[test]
@@ -1032,5 +1268,73 @@ mod tests {
             InboxIntegration::from_config(&sui, "http://localhost:8545", &dir, 2_000).unwrap();
         assert!(integration.is_none());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn from_config_wires_the_tracker_with_the_window_package() {
+        let dir = tmp_dir();
+        let sui = SuiConfig {
+            inbox_id: Some(format!("0x{}", hex_str(&[0x11; 32]))),
+            settlement_package_id: Some(format!("0x{}", hex_str(&[0x77; 32]))),
+            ..SuiConfig::default()
+        };
+        let integration =
+            InboxIntegration::from_config(&sui, "http://localhost:8545", &dir, 1_000).unwrap();
+        assert!(
+            integration.is_some(),
+            "an inbox id assembles the integration"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn from_config_tolerates_a_missing_package_id() {
+        // Without a package id the window stays at the seeded default; the
+        // integration still assembles.
+        let dir = tmp_dir();
+        let sui = SuiConfig {
+            inbox_id: Some(format!("0x{}", hex_str(&[0x11; 32]))),
+            settlement_package_id: None,
+            ..SuiConfig::default()
+        };
+        let integration =
+            InboxIntegration::from_config(&sui, "http://localhost:8545", &dir, 1_000).unwrap();
+        assert!(integration.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn from_config_rejects_a_malformed_package_id() {
+        let dir = tmp_dir();
+        let sui = SuiConfig {
+            inbox_id: Some(format!("0x{}", hex_str(&[0x11; 32]))),
+            settlement_package_id: Some("not-an-address".into()),
+            ..SuiConfig::default()
+        };
+        assert!(matches!(
+            InboxIntegration::from_config(&sui, "http://localhost:8545", &dir, 1_000),
+            Err(TrackerError::Corrupt(msg)) if msg.contains("settlement_package_id")
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn from_config_rejects_a_malformed_inbox_id() {
+        let dir = tmp_dir();
+        let sui = SuiConfig {
+            inbox_id: Some("also-not-an-address".into()),
+            settlement_package_id: Some(format!("0x{}", hex_str(&[0x77; 32]))),
+            ..SuiConfig::default()
+        };
+        assert!(matches!(
+            InboxIntegration::from_config(&sui, "http://localhost:8545", &dir, 1_000),
+            Err(TrackerError::Corrupt(msg)) if msg.contains("inbox_id")
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Lowercase hex without a prefix (Address's Display form).
+    fn hex_str(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 }

@@ -510,7 +510,7 @@ pub struct RotationTargets {
     pub vault: Address,
 }
 
-fn module_function(
+pub(crate) fn module_function(
     package: Address,
     module: &str,
     name: &str,
@@ -523,7 +523,7 @@ fn module_function(
 }
 
 /// Builds, signs, and confirms a PTB through `builder_fn`.
-async fn submit_rotation_tx(
+pub(crate) async fn submit_rotation_tx(
     rpc_url: &str,
     key: &Ed25519PrivateKey,
     label: &str,

@@ -232,6 +232,8 @@ programmable transaction block, so the two rotations cannot drift apart.
 | `authorize_package_upgrade(registry, ops, policy, digest)`                      | `OpsCap` holder | cap bound to this object; slot present (`E_NO_UPGRADE_CAP`) — issues the framework upgrade ticket; the ticket/receipt hot potatoes make the upgrade one atomic PTB |
 | `commit_package_upgrade(registry, ops, receipt)`                                | `OpsCap` holder | consumes the upgrade receipt, finalizing the upgrade on the entombed cap |
 | `restrict_package_upgrades(registry, ops, policy)`                              | `OpsCap` holder | only the framework `additive`/`dep_only` tiers (`E_TOO_PERMISSIVE` otherwise); the framework rejects any loosening |
+| `request_window_change(registry, inbox, clock, new_window_ms, delay_ms, ops)`  | `OpsCap` holder | cap bound to this object; window within `[1 min, 1 h]`; a widening waits out `delay_ms` (10 min–7 d) before it applies, a narrowing lands in the same transaction (see force inclusion) |
+| `cancel_window_change(registry, inbox, ops)`                                    | `OpsCap` holder | drops a staged widening before its timelock elapses |
 | `freeze_package(registry, ops)`                                                 | `OpsCap` holder | removes and destroys the entombed cap (`package::make_immutable`) — the package becomes permanently immutable |
 
 The pre-ops entrypoints `entomb_settler_cap`, `entomb_bridge_cap`, and
