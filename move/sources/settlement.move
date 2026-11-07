@@ -44,6 +44,14 @@ module podseq::settlement {
         blob_id: vector<u8>,
     }
 
+    /// Emitted when a settled block's state root is anchored on chain. This is
+    /// the proof anchor for balance proofs: light clients verify an L2 balance
+    /// against the committed root without executing any block.
+    public struct StateRootCommitted has copy, drop {
+        height: u64,
+        state_root: vector<u8>,
+    }
+
     /// Creates and shares the registry. Transfers SettlerCap to the caller.
     ///
     /// Call once at package publish or via a dedicated setup transaction.
@@ -215,6 +223,67 @@ module podseq::settlement {
     ) {
         rotation::assert_ops_cap(&registry.id, ops);
         inbox::cancel_window_change(inbox)
+    }
+
+    /// Anchors the state root of the settled block at `height`.
+    ///
+    /// Called in the same programmable transaction block as [`settle_as`],
+    /// immediately after it: the root names the settled tip, so the pair is
+    /// atomic (both land or neither does). The same sender check as
+    /// [`settle_as`] applies — the rotation authority, or the previous
+    /// authority inside its grace window.
+    ///
+    /// The anchored root is the proof anchor for balance proofs (exit queue):
+    /// a light client verifies an L2 balance against the root committed at the
+    /// height whose state included it, without executing blocks or trusting
+    /// the sequencer.
+    ///
+    /// Re-committing the identical root is a no-op success (crash-safe retry
+    /// of the composed PTB); a different value aborts — the header carrying
+    /// the root is signed and committed in the blob, so a mismatch is an
+    /// attributable equivocation, mirroring [`E_CONFLICTING_BLOB`].
+    public fun commit_state_root(
+        registry: &mut Registry,
+        clock: &sui::clock::Clock,
+        height: u64,
+        state_root: vector<u8>,
+        ctx: &TxContext,
+    ) {
+        rotation::assert_can_act(&registry.id, clock, ctx);
+        assert!(state_root.length() == STATE_ROOT_LEN, E_STATE_ROOT_MALFORMED);
+        assert!(height == registry.latest_height, E_STATE_ROOT_HEIGHT);
+        if (df::exists<StateRootKey>(&registry.id, StateRootKey { height })) {
+            assert!(
+                *df::borrow<StateRootKey, vector<u8>>(&registry.id, StateRootKey { height })
+                    == state_root,
+                E_STATE_ROOT_CONFLICT,
+            );
+            return
+        };
+        df::add(&mut registry.id, StateRootKey { height }, state_root);
+        event::emit(StateRootCommitted { height, state_root })
+    }
+
+    /// Returns [`STATE_ROOT_LEN`], the required root length in bytes.
+    public fun state_root_len(): u64 {
+        STATE_ROOT_LEN
+    }
+
+    /// Returns the [`StateRootKey`] for `height`, for indexers and test
+    /// teardown to name the dynamic-field entry; production reads go through
+    /// [`state_root`].
+    public fun state_root_key(height: u64): StateRootKey {
+        StateRootKey { height }
+    }
+
+    /// The state root anchored for `height`, `none` when the block settled
+    /// before state-root anchoring was adopted (or the height never settled).
+    public fun state_root(registry: &Registry, height: u64): Option<vector<u8>> {
+        if (df::exists<StateRootKey>(&registry.id, StateRootKey { height })) {
+            option::some(*df::borrow<StateRootKey, vector<u8>>(&registry.id, StateRootKey { height }))
+        } else {
+            option::none()
+        }
     }
 
     /// Claims the settler authority. Pending target only, inside the claim
@@ -397,6 +466,20 @@ module podseq::settlement {
     const E_UPGRADE_CAP_PRESENT: u64 = 8;
     /// A requested upgrade policy is weaker than the cap's current one.
     const E_TOO_PERMISSIVE: u64 = 9;
+    /// State root is not [`STATE_ROOT_LEN`] bytes.
+    const E_STATE_ROOT_MALFORMED: u64 = 10;
+    /// Height is not the settled tip (commit_state_root anchors the tip only).
+    const E_STATE_ROOT_HEIGHT: u64 = 11;
+    /// A different root was already anchored for this height: equivocation.
+    const E_STATE_ROOT_CONFLICT: u64 = 12;
+
+    /// Length of an L2 state root in bytes (a 32-byte trie root).
+    const STATE_ROOT_LEN: u64 = 32;
+
+    /// Dynamic-field key: the state root anchored for `height`.
+    public struct StateRootKey has copy, drop, store {
+        height: u64,
+    }
 
     /// Dynamic-field key under which the package's `UpgradeCap` is entombed.
     public struct UpgradeKey has copy, drop, store {}
@@ -567,10 +650,13 @@ module podseq::settlement {
     /// and tear down registries too.
     #[test_only]
     public fun destroy_registry(registry: Registry) {
-        let Registry { id, latest_height, mut commitments } = registry;
+        let Registry { mut id, latest_height, mut commitments } = registry;
         let mut height = latest_height;
         while (height > 0) {
             table::remove(&mut commitments, height);
+            if (df::exists<StateRootKey>(&id, StateRootKey { height })) {
+                let _ = df::remove<StateRootKey, vector<u8>>(&mut id, StateRootKey { height });
+            };
             height = height - 1;
         };
         table::destroy_empty(commitments);
@@ -1211,6 +1297,189 @@ module podseq::settlement {
         destroy_registry(registry);
         destroy_inbox_helper(inbox);
         destroy_cap(cap);
+    }
+
+    // ---------- settled state roots (exit-queue proof anchor) ----------
+
+    /// Mirrors `settlement::E_STATE_ROOT_MALFORMED`; own constants are private.
+    #[test_only]
+    const E_STATE_ROOT_MALFORMED_FOR_TEST: u64 = 10;
+
+    /// Mirrors `settlement::E_STATE_ROOT_HEIGHT`; own constants are private.
+    #[test_only]
+    const E_STATE_ROOT_HEIGHT_FOR_TEST: u64 = 11;
+
+    /// Mirrors `settlement::E_STATE_ROOT_CONFLICT`; own constants are private.
+    #[test_only]
+    const E_STATE_ROOT_CONFLICT_FOR_TEST: u64 = 12;
+
+    /// Settles heights 1..=`to` with placeholder blobs and no inbox traffic.
+    #[test_only]
+    fun settled_registry_for_testing(
+        ctx: &mut TxContext,
+        to: u64,
+    ): (Registry, inbox::Inbox, sui::clock::Clock) {
+        let mut registry = rotated_registry_for_testing(ctx);
+        let mut inbox = inbox::inbox_for_testing(ctx);
+        let clock = clock::create_for_testing(ctx);
+        let mut height = 1;
+        while (height <= to) {
+            settle_as(&mut registry, &mut inbox, &clock, b"blob", height, height * 1_000, 0, ctx);
+            height = height + 1;
+        };
+        (registry, inbox, clock)
+    }
+
+    #[test]
+    fun state_root_is_none_before_any_commit() {
+        let ctx = &mut tx_context::dummy();
+        let (mut registry, inbox, clock) = settled_registry_for_testing(ctx, 1);
+
+        assert!(option::is_none(&state_root(&registry, 1)));
+
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun commit_state_root_stores_the_settled_root() {
+        let ctx = &mut tx_context::dummy();
+        let (mut registry, inbox, clock) = settled_registry_for_testing(ctx, 1);
+        let root = digest_for_testing(7);
+
+        commit_state_root(&mut registry, &clock, 1, root, ctx);
+
+        assert!(option::is_some(&state_root(&registry, 1)));
+        assert!(*option::borrow(&state_root(&registry, 1)) == root);
+
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun commit_state_root_keeps_heights_independent() {
+        let ctx = &mut tx_context::dummy();
+        let mut registry = rotated_registry_for_testing(ctx);
+        let mut inbox = inbox::inbox_for_testing(ctx);
+        let mut clock = clock::create_for_testing(ctx);
+        let root_1 = digest_for_testing(1);
+        let root_2 = digest_for_testing(2);
+
+        // Each settle composes its own root commit at the tip.
+        settle_as(&mut registry, &mut inbox, &clock, b"blob", 1, 1_000, 0, ctx);
+        commit_state_root(&mut registry, &clock, 1, root_1, ctx);
+        settle_as(&mut registry, &mut inbox, &clock, b"blob", 2, 2_000, 0, ctx);
+        commit_state_root(&mut registry, &clock, 2, root_2, ctx);
+
+        assert!(*option::borrow(&state_root(&registry, 1)) == root_1);
+        assert!(*option::borrow(&state_root(&registry, 2)) == root_2);
+
+        clock::destroy_for_testing(clock);
+        destroy_inbox_helper(inbox);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_STATE_ROOT_MALFORMED_FOR_TEST, location = Self)]
+    fun commit_state_root_rejects_a_root_of_the_wrong_length() {
+        let ctx = &mut tx_context::dummy();
+        let (mut registry, inbox, clock) = settled_registry_for_testing(ctx, 1);
+
+        commit_state_root(&mut registry, &clock, 1, x"0001020304", ctx);
+
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_STATE_ROOT_HEIGHT_FOR_TEST, location = Self)]
+    fun commit_state_root_rejects_a_height_above_the_settled_tip() {
+        let ctx = &mut tx_context::dummy();
+        let (mut registry, inbox, clock) = settled_registry_for_testing(ctx, 1);
+
+        commit_state_root(&mut registry, &clock, 2, digest_for_testing(2), ctx);
+
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_STATE_ROOT_HEIGHT_FOR_TEST, location = Self)]
+    fun commit_state_root_rejects_a_height_below_the_settled_tip() {
+        let ctx = &mut tx_context::dummy();
+        let (mut registry, inbox, clock) = settled_registry_for_testing(ctx, 2);
+
+        commit_state_root(&mut registry, &clock, 1, digest_for_testing(1), ctx);
+
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test]
+    fun recommitting_the_same_root_is_a_no_op() {
+        let ctx = &mut tx_context::dummy();
+        let (mut registry, inbox, clock) = settled_registry_for_testing(ctx, 1);
+        let root = digest_for_testing(7);
+
+        commit_state_root(&mut registry, &clock, 1, root, ctx);
+        // Crash-retry of the composed settle PTB re-runs both commands.
+        commit_state_root(&mut registry, &clock, 1, root, ctx);
+
+        assert!(*option::borrow(&state_root(&registry, 1)) == root);
+
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_STATE_ROOT_CONFLICT_FOR_TEST, location = Self)]
+    fun recommitting_a_different_root_aborts() {
+        let ctx = &mut tx_context::dummy();
+        let (mut registry, inbox, clock) = settled_registry_for_testing(ctx, 1);
+
+        commit_state_root(&mut registry, &clock, 1, digest_for_testing(7), ctx);
+        commit_state_root(&mut registry, &clock, 1, digest_for_testing(8), ctx);
+
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_AUTHORIZED_FOR_TEST, location = rotation)]
+    fun commit_state_root_requires_the_rotation_authority() {
+        let mut ctx_a = ctx_for(ALICE, 1);
+        let (mut registry, inbox, clock) = settled_registry_for_testing(&mut ctx_a, 1);
+        // A different sender cannot anchor a state root, even at the tip.
+        let ctx_b = ctx_for(BOB, 2);
+        commit_state_root(&mut registry, &clock, 1, digest_for_testing(7), &ctx_b);
+
+        rotation::retire_ops_cap(ops_cap_for_testing(&registry, &mut ctx_a));
+        destroy_inbox_helper(inbox);
+        clock::destroy_for_testing(clock);
+        destroy_rotation_for_testing(&mut registry);
+        destroy_registry(registry);
+    }
+
+    /// Placeholder 32-byte root; the commit path only checks the length.
+    #[test_only]
+    fun digest_for_testing(seed: u8): vector<u8> {
+        let mut root = vector::empty<u8>();
+        let mut i = 0;
+        while (i < 32) {
+            vector::push_back(&mut root, seed);
+            i = i + 1;
+        };
+        root
     }
 
     /// Drains pending entries so the inbox can be destroyed in these tests.

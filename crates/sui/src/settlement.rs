@@ -155,6 +155,10 @@ pub struct Settlement {
     registry: Address,
     inbox: Address,
     rpc: sui_rpc::Client,
+    /// Composes `settlement::commit_state_root` into every settle PTB. On by
+    /// default; pin off only while settling against a package that predates
+    /// the entrypoint (the appended call would abort the whole PTB).
+    commit_state_roots: bool,
 }
 
 impl std::fmt::Debug for Settlement {
@@ -188,7 +192,16 @@ impl Settlement {
             registry,
             inbox,
             rpc,
+            commit_state_roots: true,
         })
+    }
+
+    /// Pins state-root anchoring in settle PTBs. On by default; only pin off
+    /// while the deployed Move package predates `commit_state_root`.
+    #[must_use]
+    pub fn with_commit_state_roots(mut self, enabled: bool) -> Self {
+        self.commit_state_roots = enabled;
+        self
     }
 
     /// Returns the settlement key's Sui address.
@@ -288,6 +301,37 @@ impl Settlement {
         Ok(())
     }
 
+    /// Appends the `commit_state_root` command to a settle PTB when state-root
+    /// anchoring is enabled: the root rides in the same transaction as its
+    /// settle, so the pair is atomic and the contract pins the root to the
+    /// settled tip. Fresh object inputs per command, the same shape the
+    /// rotation PTB builders use. The root is a header field typed
+    /// `[u8; 32]`, so the length the Move entrypoint enforces holds by
+    /// construction and the append cannot fail.
+    fn append_commit_state_root(
+        builder: &mut TransactionBuilder,
+        package: Address,
+        registry: Address,
+        header: &Header,
+        enabled: bool,
+    ) {
+        let Some(root) = crate::state_root::state_root_command(enabled, header) else {
+            return;
+        };
+        let commit_registry = builder.object(ObjectInput::new(registry));
+        let commit_clock = builder.object(ObjectInput::new(crate::deadline::SUI_CLOCK_ID));
+        let commit_height = builder.pure(&header.height);
+        let root_arg = builder.pure(&root);
+        builder.move_call(
+            Function::new(
+                package,
+                Identifier::new("settlement").expect("static name"),
+                Identifier::new("commit_state_root").expect("static name"),
+            ),
+            vec![commit_registry, commit_clock, commit_height, root_arg],
+        );
+    }
+
     /// Builds the settle transaction for `header` + `blob` with the given
     /// inbox cursor.
     ///
@@ -325,6 +369,13 @@ impl Settlement {
                 block_ts_arg,
                 cursor_arg,
             ],
+        );
+        Self::append_commit_state_root(
+            &mut builder,
+            self.package,
+            self.registry,
+            header,
+            self.commit_state_roots,
         );
         builder.set_sender(self.sender);
 
@@ -1200,6 +1251,22 @@ mod tests {
             "https://fullnode.testnet.sui.io:443",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn settle_ptb_append_records_the_state_root_command_when_enabled() {
+        let mut builder = TransactionBuilder::new();
+        let header = podseq_core::Header {
+            height: 4,
+            parent_hash: [0; 32],
+            state_root: [9; 32],
+            timestamp: 1_000,
+        };
+        let package = Address::new([0x44; 32]);
+        let registry = Address::new([0x33; 32]);
+        Settlement::append_commit_state_root(&mut builder, package, registry, &header, true);
+        // Disabled: the early return must not panic and must not record.
+        Settlement::append_commit_state_root(&mut builder, package, registry, &header, false);
     }
 
     /// Builds a minimal registry BCS buffer with the given height.

@@ -9,6 +9,7 @@ pub mod inbox;
 pub mod peers;
 pub mod rotation;
 pub mod settlement;
+pub mod state_root;
 pub mod wire;
 
 use podseq_core::{BlobId, Block, DataAvailability, Settlement};

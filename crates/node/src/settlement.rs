@@ -113,7 +113,8 @@ pub async fn setup_signer(
                 inbox,
                 &config.sui.rpc_url,
             )
-            .context("building settlement signer")?;
+            .context("building settlement signer")?
+            .with_commit_state_roots(config.sui.commit_state_roots);
             info!(key = %signer_key_path.display(), "settlement signer attached");
             Ok(settlement)
         }

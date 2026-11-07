@@ -168,10 +168,21 @@ pub struct SuiConfig {
     /// the old key. Unset leaves the watcher in observe-only mode.
     #[serde(default)]
     pub rotation_key_path: Option<PathBuf>,
+    /// Anchors each settled block's state root in the settle PTB
+    /// (`settlement::commit_state_root`). On by default: it is the proof
+    /// anchor balance proofs verify against. Pin off only while the deployed
+    /// Move package predates the entrypoint — the appended call would abort
+    /// the whole settle PTB.
+    #[serde(default = "default_true")]
+    pub commit_state_roots: bool,
 }
 
 fn default_sui_rpc() -> String {
     "https://fullnode.testnet.sui.io:443".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_move_dir() -> PathBuf {
@@ -188,6 +199,7 @@ impl Default for SuiConfig {
             registry_id: None,
             inbox_id: None,
             rotation_key_path: None,
+            commit_state_roots: true,
         }
     }
 }
@@ -471,6 +483,18 @@ key_path = "sequencer.key"
         assert_eq!(config.walrus.epochs, 5);
         assert_eq!(config.sui.settlement_package_id.as_deref(), Some("0xabc"));
         assert_eq!(config.signer.key_path, Some(PathBuf::from("sequencer.key")));
+    }
+
+    #[test]
+    fn sui_commit_state_roots_defaults_on_and_pins_off() {
+        let config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        assert!(config.sui.commit_state_roots);
+
+        let config = Config::from_str(
+            "[reth]\njwt_path = \"jwt.hex\"\n\n[sui]\ncommit_state_roots = false\n",
+        )
+        .unwrap();
+        assert!(!config.sui.commit_state_roots);
     }
 
     #[test]

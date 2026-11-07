@@ -7,6 +7,7 @@
 - [Node Setup](./setup.md)
 - [Settlement Contract](./contract.md)
 - [Force Inclusion](./force-inclusion.md)
+- [Exit Queue](./exit-queue.md)
 - [Cap Rotation](./cap-rotation.md)
 - [Enshrined Bridge](./bridge.md)
 

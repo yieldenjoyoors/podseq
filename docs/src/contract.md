@@ -48,6 +48,35 @@ public fun latest_height(registry: &Registry): u64
 Full nodes read the registry to find the blob ID for a given height, fetch the blob from
 Walrus, decode the block, and re-execute it against Reth.
 
+## State roots
+
+`settle` records that a block's data is available; it does not say what the block
+*did*. For that, the sequencer anchors the settled block's state root in the same
+transaction:
+
+```move
+public fun commit_state_root(
+    registry: &mut Registry,
+    clock: &sui::clock::Clock,
+    height: u64,
+    state_root: vector<u8>,
+    ctx: &TxContext,
+)
+public fun state_root(registry: &Registry, height: u64): Option<vector<u8>>
+```
+
+The sequencer composes the call immediately after `settle_as` in one PTB, so a
+root and its settle are atomic, and `commit_state_root` accepts only the settled
+tip (`height == latest_height`). Authorization is the same sender check settle
+uses, so only the settlement authority can anchor a root. Re-committing the
+identical root is a no-op success; a different value aborts
+(`E_STATE_ROOT_CONFLICT`), because the header carrying the root is signed and
+committed in the blob, which makes the mismatch an attributable equivocation.
+
+The anchored root is the proof anchor for balance proofs (see
+[exit queue](./exit-queue.md)): a light client verifies an L2 balance against the
+root committed at the height whose state included it, without executing blocks.
+
 ## Access control
 
 Only the sequencer can call `settle`. This is enforced by the `SettlerCap`, an owned
