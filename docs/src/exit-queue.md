@@ -12,12 +12,14 @@ without the sequencer.
 
 ## Status
 
-The proof anchor is implemented. The proof verifier is not. This page records the
-design and what exists so far; the verification side is the next slice.
+The proof anchor and the balance verifier are implemented. The unlock
+condition, the ordered queue on the bridge, and a live gas measurement of the
+proof walk are not.
 
-Implemented: `settlement::commit_state_root` anchors each settled block's state
-root in the Registry (see below). Not implemented: Merkle-proof verification in
-Move, the unlock condition, the ordered queue on the bridge.
+Implemented: `settlement::commit_state_root` anchors each settled block's
+state root in the Registry (see below), and `exit_queue::verify_account`
+verifies a Merkle account proof against that anchor and returns the account's
+`(nonce, balance)`.
 
 ## Why state roots land on Sui
 
@@ -67,22 +69,74 @@ The sequencer sends `sui.commit_state_roots` (default on). Pin it off only
 while the deployed Move package predates the entrypoint: the appended call
 would abort the whole settle PTB and halt settlement.
 
-## How the exit path will verify balances
+## The balance verifier
 
-The planned mechanism, against the anchor that now exists:
+`podseq::exit_queue::verify_account` checks an account proof against the
+anchored root and returns `(nonce, balance)`:
 
-1. A user's L2 balance is included in the state of some settled height H.
-2. The bridge's escape entrypoint takes a Merkle (MPT) proof of that balance
-   and verifies it against the root anchored at H. Verification means an RLP
-   decode, keccak hashing, and a trie walk in Move. Whether that stays within
-   reasonable gas is the open R&D question for the next slice; Move has a
-   native keccak, but the proof walk is the part that has never been priced
-   for this contract set.
-3. The entrypoint unlocks only when the inbox-derived halt condition holds:
-   the oldest pending forced transaction is past its deadline while settlement
-   does not advance. That is the same chain data the K3 deadline monitor
-   reads, so the unlock is verifiable without trusting any sequencer endpoint.
-4. Exit requests take a queue position from the L2 height that produced the
+```move
+public fun verify_account(
+    registry: &Registry,
+    height: u64,
+    address: vector<u8>,        // 20-byte L2 address
+    proof: vector<vector<u8>>,  // RLP nodes, root first (the eth_getProof shape)
+): (u64, u256)
+```
+
+The walk reimplements what Ethereum proofs are made of, in Move:
+
+- **RLP.** One header decoder plus a list splitter cover branch nodes (17
+  items), extension and leaf nodes (2 items), and the account list itself.
+  Bounds are checked before any byte is read, so a truncated proof aborts
+  with a named error instead of panicking on an out-of-range index.
+- **Hex-prefix paths.** Leaf and extension share the 2-item shape; the flag
+  byte's high bits tell them apart, and both decode to nibbles.
+- **The walk.** The key is `keccak256(address)` expanded to 64 nibbles.
+  Branches route by the next nibble, extensions must match their decoded
+  path exactly, and the leaf must match what remains of the key. An empty
+  branch slot aborts: a dead walk is a rejected proof, not a balance of zero.
+- **Every link is checked.** `keccak(proof[0])` must equal the anchored root,
+  and each hashed child must hash to the reference its parent embedded.
+  Inline (sub-32-byte) child nodes are handled per spec, though account-trie
+  nodes never get that small. The walk must consume exactly the whole proof,
+  so a proof cannot smuggle unchecked material past the root check.
+- **The account.** The leaf value decodes as the four-item account RLP: the
+  nonce (≤ 8 bytes) and the balance (≤ 32 bytes, into a u256) come out; the
+  storage root and code hash are shape-checked and discarded.
+
+The anchored root is the only Sui-side input, and the same sender check that
+guards settle guards the anchor, so a proof verifies against state the
+sequencer actually committed. Everything else is checked arithmetic over the
+bytes the proof itself carries.
+
+Tests run against fixtures from `crates/sui/examples/mpt_fixture.rs`, which
+builds tries with alloy-trie (reth's own node encoder), retains root-first
+proofs, validates each against its root, and prints them as Move literals:
+a single-leaf trie, a root extension over a 10-nibble shared prefix, a
+nine-account trie whose proof walks branch, extension, branch, leaf, and a
+zero-balance account (an empty RLP integer). Negative tests tamper nodes,
+truncate and extend the proof, and aim the walk at a foreign address, a dead
+branch, and a non-trie root.
+
+Open: the gas number. Sui's gas model has no offline estimate, so the walk's
+cost is unmeasured until a testnet publish runs `verify_account` against a
+real proof — the same bench the rotation ceremony used. The loop is bounded
+by the proof length, so nothing is unbounded, but the MIST number is the
+evidence the gas question needs, and it is the next slice's first item.
+
+## How the exit path completes
+
+The remaining pieces, against the anchor and verifier that now exist:
+
+1. A user's L2 balance is included in the state of some settled height H,
+   and anyone can prove it with `verify_account` against the root anchored
+   at H.
+2. The escape entrypoint unlocks only when the inbox-derived halt condition
+   holds: the oldest pending forced transaction is past its deadline while
+   settlement does not advance. That is the same chain data the K3 deadline
+   monitor reads, so the unlock is verifiable without trusting any sequencer
+   endpoint.
+3. Exit requests take a queue position from the L2 height that produced the
    balance, so reordering exits is as impossible as reordering blocks.
 
 A useful side effect of the anchor: a light client can verify one balance
