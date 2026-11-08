@@ -1315,7 +1315,7 @@ module podseq::settlement {
 
     /// Settles heights 1..=`to` with placeholder blobs and no inbox traffic.
     #[test_only]
-    fun settled_registry_for_testing(
+    public fun settled_registry_for_testing(
         ctx: &mut TxContext,
         to: u64,
     ): (Registry, inbox::Inbox, sui::clock::Clock) {
