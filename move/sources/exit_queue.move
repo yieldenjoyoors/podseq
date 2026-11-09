@@ -1,4 +1,5 @@
-//! Exit queue: verify L2 balance proofs against settled state roots.
+//! Exit queue: verify L2 balance proofs against settled state roots, and
+//! redeem them without the sequencer.
 //!
 //! Force inclusion gets transactions in; the exit queue gets value out. A
 //! censoring sequencer also refuses withdrawals, so the bridge needs the same
@@ -15,12 +16,21 @@
 //! nibble-by-nibble, verifies every hashed child link against the anchored
 //! root, and decodes the leaf's account RLP into `(nonce, balance)`.
 //!
+//! Redemption consumes a recorded request: the owner signs the payout with
+//! their L2 key (EIP-191 over domain ‖ address ‖ amount ‖ recipient), the
+//! recovered address must equal the recorded one, and [`redeem`] mints a
+//! `bridge::ExitClaim` hot potato that releases the vault's coins.
+//!
 //! See `docs/src/exit-queue.md` for the design and the rejected
 //! alternatives (sequencer attestations, ZK transitions, challenge windows).
 module podseq::exit_queue {
     use std::option::Self;
     use std::vector;
+    use podseq::bridge::{Self, Vault};
+    use sui::address;
     use sui::clock::{Self, Clock};
+    use sui::coin;
+    use sui::ecdsa_k1;
     use sui::event;
     use sui::hash;
     use sui::object::{Self, UID};
@@ -57,9 +67,32 @@ module podseq::exit_queue {
     /// The chain is not in the inbox-derived halt state: no pending forced
     /// transaction is past its deadline, so the escape path stays closed.
     const E_NOT_HALTED: u64 = 12;
+    /// No escape request is recorded for this address.
+    const E_NO_REQUEST: u64 = 13;
+    /// The signature is not a 65-byte `(r, s, v)` value, or the recovered
+    /// address is not the recorded one.
+    const E_SIGNATURE: u64 = 14;
+    /// The signed payload does not bind what redemption pays: wrong length,
+    /// domain, address, amount, or recipient.
+    const E_PAYLOAD: u64 = 15;
+    /// The remaining proven balance exceeds the u64 amounts the vault holds.
+    const E_AMOUNT: u64 = 16;
+    /// Nothing is left to redeem: the recorded balance is fully paid out.
+    const E_NOTHING_TO_REDEEM: u64 = 17;
 
     /// Longest RLP length-of-length prefix accepted, matching Ethereum's 8.
     const MAX_LEN_BYTES: u64 = 8;
+
+    /// Byte length of a recoverable ECDSA signature: `r ‖ s ‖ v`.
+    const SIGNATURE_LEN: u64 = 65;
+    /// Byte length of the signed redemption payload: 15-byte domain ‖ 20-byte
+    /// address ‖ 32-byte amount ‖ 32-byte recipient.
+    const PAYLOAD_LEN: u64 = 99;
+    /// Domain separator binding the signature to this redemption path.
+    const PAYLOAD_DOMAIN: vector<u8> = b"podseq-exit:v1:";
+    /// The framework's hash selector for keccak256 in the ecdsa natives (its
+    /// `ecdsa_k1::KECCAK256` constant is private).
+    const ECRECOVER_KECCAK256: u8 = 0;
 
     /// Grace period after the oldest pending deadline before the escape path
     /// treats the chain as halted. Generous on purpose: a transaction included
@@ -354,6 +387,10 @@ module podseq::exit_queue {
         balance: u256,
         /// Total order among requests at the same height.
         seq: u64,
+        /// What redemption has already paid out against this record. Carried
+        /// through reproofs, so the cumulative payout never exceeds the
+        /// balance proven at some settled height.
+        paid: u256,
     }
 
     /// Shared record of escape requests. Singleton by convention, like the
@@ -443,6 +480,32 @@ module podseq::exit_queue {
         }
     }
 
+    /// What redemption has already paid out against `address`'s request,
+    /// `none` when it never requested. A user computing what to sign needs
+    /// this: the signed amount must equal `balance - paid`.
+    public fun paid_at(queue: &ExitQueue, address: vector<u8>): Option<u256> {
+        if (table::contains(&queue.requests, address)) {
+            option::some((*table::borrow(&queue.requests, address)).paid)
+        } else {
+            option::none()
+        }
+    }
+
+    /// Emitted when a request is redeemed. The vault release itself emits
+    /// `bridge::EscapeReleased` in the same PTB.
+    public struct ExitRedeemed has copy, drop {
+        /// The 20-byte L2 address whose balance was paid out.
+        address: vector<u8>,
+        /// Settled height the request was proven at.
+        height: u64,
+        /// Sequence the request holds.
+        seq: u64,
+        /// What the vault releases in this PTB.
+        amount: u64,
+        /// Where the released coin goes.
+        recipient: address,
+    }
+
     /// How many accounts hold a recorded request.
     public fun request_count(queue: &ExitQueue): u64 {
         table::length(&queue.requests)
@@ -464,8 +527,13 @@ module podseq::exit_queue {
     /// at a later height it is ignored. Queue position never regresses, and
     /// nobody can force it backward: proofs are public chain data, so anyone
     /// can produce a valid proof at any later height, and the rule makes
-    /// that useless. Ordering is `(height, seq)`; redemption consumes the
-    /// queue in that order.
+    /// that useless. The redeemed total ([`paid_at`]) is carried through
+    /// replacements, so the cumulative payout never exceeds the balance
+    /// proven at some settled height. Redemption itself ([`redeem`]) is
+    /// first-come in Sui transaction order: the queue position protects the
+    /// record, not the payout race, and the vault either covers everyone or
+    /// was already drained — the residual risk documented in the design
+    /// page.
     public fun request_exit(
         queue: &mut ExitQueue,
         registry: &Registry,
@@ -488,6 +556,7 @@ module podseq::exit_queue {
                     nonce,
                     balance,
                     seq: current.seq,
+                    paid: current.paid,
                 };
                 event::emit(ExitRequested {
                     address,
@@ -506,6 +575,7 @@ module podseq::exit_queue {
                 nonce,
                 balance,
                 seq,
+                paid: 0,
             });
             event::emit(ExitRequested {
                 address,
@@ -516,6 +586,136 @@ module podseq::exit_queue {
                 expired_deadline_ms,
             });
         };
+    }
+
+    /// Redeems a recorded request: the owner signs the payout with their L2
+    /// key and the vault releases what remains — no sequencer capability
+    /// involved.
+    ///
+    /// Fires only in the inbox-derived halt state (the same gate as
+    /// [`request_exit`]). The payout is `balance - paid` from the recorded
+    /// request, bound three ways before any value moves: the recovered
+    /// signer's Ethereum address must equal the recorded address; the
+    /// payload must name (domain, address, amount, recipient) with the
+    /// amount equal to the state-derived remainder, so a replayed signature
+    /// covers a past amount and fails; and the claim is a
+    /// `bridge::ExitClaim` hot potato that only `bridge::escape_release`
+    /// accepts, so the PTB cannot drop it or spend it twice.
+    ///
+    /// `payload` is the exact bytes the owner signed: 15-byte domain
+    /// [`PAYLOAD_DOMAIN`] ‖ 20-byte address ‖ 32-byte big-endian amount ‖
+    /// 32-byte recipient. `signature` is the 65-byte `(r, s, v)` EIP-191
+    /// personal-signature value (v 27/28, or the bare recovery id 0/1).
+    public fun redeem(
+        queue: &mut ExitQueue,
+        inbox: &Inbox,
+        clock: &Clock,
+        address: vector<u8>,
+        recipient: address,
+        payload: vector<u8>,
+        signature: vector<u8>,
+    ): bridge::ExitClaim {
+        let expired = halt_expired_deadline(inbox, clock);
+        assert!(option::is_some(&expired), E_NOT_HALTED);
+        assert!(table::contains(&queue.requests, address), E_NO_REQUEST);
+        let request = *table::borrow(&queue.requests, address);
+        // Saturating remainder: an earlier-height proof can replace the
+        // record with a smaller balance after a full payout, and u256
+        // subtraction would wrap on that shape instead of saying "nothing".
+        let remaining = if (request.balance > request.paid) {
+            request.balance - request.paid
+        } else {
+            0
+        };
+        assert!(remaining > 0, E_NOTHING_TO_REDEEM);
+        // The vault's coin amounts are u64; a balance beyond that cannot be
+        // backed by deposits made through this bridge in the first place.
+        assert!(remaining <= 0xFFFFFFFFFFFFFFFFu256, E_AMOUNT);
+        verify_redemption_signature(&address, recipient, remaining, &payload, &signature);
+
+        *table::borrow_mut(&mut queue.requests, address) = ExitRequest {
+            height: request.height,
+            nonce: request.nonce,
+            balance: request.balance,
+            seq: request.seq,
+            paid: request.balance,
+        };
+        event::emit(ExitRedeemed {
+            address,
+            height: request.height,
+            seq: request.seq,
+            amount: (remaining as u64),
+            recipient,
+        });
+        bridge::escape_claim(address, (remaining as u64), recipient)
+    }
+
+    /// Recovers the signer from `signature` over the EIP-191 encoding of
+    /// `payload` and asserts the bindings: the payload names the recorded
+    /// address, `amount`, and `recipient`, and the recovered Ethereum
+    /// address equals the recorded address.
+    fun verify_redemption_signature(
+        address: &vector<u8>,
+        recipient: address,
+        amount: u256,
+        payload: &vector<u8>,
+        signature: &vector<u8>,
+    ) {
+        assert!(vector::length(signature) == SIGNATURE_LEN, E_SIGNATURE);
+        assert!(vector::length(payload) == PAYLOAD_LEN, E_PAYLOAD);
+        assert!(range(payload, 0, 15) == PAYLOAD_DOMAIN, E_PAYLOAD);
+        assert!(range(payload, 15, 35) == *address, E_PAYLOAD);
+        assert!(be_u256(&range(payload, 35, 67)) == amount, E_PAYLOAD);
+        assert!(range(payload, 67, 99) == address::to_bytes(recipient), E_PAYLOAD);
+        let recovered = recover_eth_address(signature, &eip191_preimage(payload));
+        assert!(recovered == *address, E_SIGNATURE);
+    }
+
+    /// The Ethereum address behind `signature`: normalize the v byte
+    /// (Ethereum 27/28 → recovery id 0/1, both accepted by the framework's
+    /// recoverable-signature native), recover the compressed public key from
+    /// the keccak256 preimage, decompress, and take the last 20 bytes of
+    /// `keccak256(X ‖ Y)`.
+    fun recover_eth_address(signature: &vector<u8>, preimage: &vector<u8>): vector<u8> {
+        let v = *vector::borrow(signature, 64);
+        let normalized = if (v >= 27) {
+            v - 27
+        } else {
+            v
+        };
+        assert!(normalized <= 3, E_SIGNATURE);
+        let mut sig = *signature;
+        *vector::borrow_mut(&mut sig, 64) = normalized;
+        let compressed = ecdsa_k1::secp256k1_ecrecover(&sig, preimage, ECRECOVER_KECCAK256);
+        let uncompressed = ecdsa_k1::decompress_pubkey(&compressed);
+        // uncompressed is 0x04 ‖ X ‖ Y; the account digest covers X ‖ Y and
+        // the address is its last 20 bytes.
+        let digest = hash::keccak256(&range(&uncompressed, 1, 65));
+        range(&digest, 12, 32)
+    }
+
+    /// The EIP-191 personal-sign preimage: `b"\x19Ethereum Signed Message:\n"`
+    /// ‖ decimal ASCII byte length ‖ payload. Signing this with the L2 key
+    /// is what wallets produce with `personal_sign`.
+    fun eip191_preimage(payload: &vector<u8>): vector<u8> {
+        let mut out: vector<u8> = b"\x19Ethereum Signed Message:\n";
+        let mut digits: vector<u8> = vector[];
+        let mut n = vector::length(payload);
+        if (n == 0) {
+            vector::push_back(&mut digits, 0x30);
+        };
+        while (n > 0) {
+            vector::push_back(&mut digits, (0x30 + (n % 10) as u8));
+            n = n / 10;
+        };
+        // The loop collects least-significant first; append reversed.
+        let mut i = vector::length(&digits);
+        while (i > 0) {
+            i = i - 1;
+            vector::push_back(&mut out, *vector::borrow(&digits, i));
+        };
+        vector::append(&mut out, *payload);
+        out
     }
 
     // ---------- fixtures (generated by crates/sui/examples/mpt_fixture.rs) ----------
@@ -646,7 +846,7 @@ module podseq::exit_queue {
         while (i < n) {
             let address = *vector::borrow(&addresses, i);
             if (table::contains(&requests, address)) {
-                let ExitRequest { height: _, nonce: _, balance: _, seq: _ } =
+                let ExitRequest { height: _, nonce: _, balance: _, seq: _, paid: _ } =
                     table::remove(&mut requests, address);
             };
             i = i + 1;
@@ -1288,6 +1488,587 @@ module podseq::exit_queue {
         assert!(option::is_none(&request_at(&queue, SINGLE_ADDRESS)), E_TEST);
 
         teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    // ---------- redemption ----------
+    //
+    // Redeeming consumes a recorded request: the owner signs the payout
+    // (EIP-191 over domain ‖ address ‖ amount ‖ recipient) with their L2
+    // key, the recovered address must equal the recorded one, and the
+    // signed amount must equal the state-derived remainder. The returned
+    // claim releases the vault's coins without any sequencer capability.
+    // The signer fixtures use the framework's test-only Secp256k1 natives,
+    // so the addresses derive from the seeds at test time and no external
+    // fixture generation is involved.
+
+    #[test_only]
+    const SEED_A: vector<u8> = x"416c696365206578697420736565642030303030303030303030303030303030";
+    #[test_only]
+    const SEED_B: vector<u8> = x"426f622065786974207365656420303030303030303030303030303030303030";
+    #[test_only]
+    const VAULT_RECIPIENT: vector<u8> = x"1111111111111111111111111111111111111111";
+    #[test_only]
+    const SUI_RECIPIENT: address = @0xC0FFEE;
+    #[test_only]
+    const REDEEM_AMOUNT: u256 = 200;
+
+    #[test_only]
+    const SECP256K1_N: u256 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
+
+    /// Funds a fresh vault with `amount` of `T`.
+    #[test_only]
+    public fun funded_vault_for_testing<T>(ctx: &mut TxContext, amount: u64): Vault {
+        let mut vault = bridge::vault_for_testing(ctx);
+        let coin = coin::mint_for_testing<T>(amount, ctx);
+        bridge::deposit<T>(&mut vault, coin, VAULT_RECIPIENT, ctx);
+        vault
+    }
+
+    /// Tears a funded vault down: drops the `T` reserve (a test coin has
+    /// `drop`) and destroys the now-empty structures.
+    #[test_only]
+    public fun teardown_vault_for_testing<T>(vault: Vault) {
+        let mut v = vault;
+        bridge::drain_for_testing<T>(&mut v);
+        bridge::destroy_vault_for_testing(v);
+    }
+
+    /// Records a synthetic request (the redeem path consumes records; the
+    /// proof machinery that fills them is covered by the request tests).
+    #[test_only]
+    fun record_for_testing(queue: &mut ExitQueue, address: vector<u8>, balance: u256) {
+        let seq = queue.next_seq;
+        queue.next_seq = seq + 1;
+        table::add(&mut queue.requests, address, ExitRequest {
+            height: 1,
+            nonce: 0,
+            balance,
+            seq,
+            paid: 0,
+        });
+    }
+
+    /// Marks part of a request as already redeemed, standing in for a prior
+    /// redeem whose full flow needs a vault.
+    #[test_only]
+    fun mark_paid_for_testing(queue: &mut ExitQueue, address: vector<u8>, paid: u256) {
+        let request = *table::borrow(&queue.requests, address);
+        *table::borrow_mut(&mut queue.requests, address) = ExitRequest {
+            height: request.height,
+            nonce: request.nonce,
+            balance: request.balance,
+            seq: request.seq,
+            paid,
+        };
+    }
+
+    /// The Ethereum address of the key generated from `seed`.
+    #[test_only]
+    fun eth_address_for_testing(seed: vector<u8>): vector<u8> {
+        let kp = ecdsa_k1::secp256k1_keypair_from_seed(&seed);
+        let uncompressed = ecdsa_k1::decompress_pubkey(ecdsa_k1::public_key(&kp));
+        let digest = hash::keccak256(&range(&uncompressed, 1, 65));
+        range(&digest, 12, 32)
+    }
+
+    /// Signs the EIP-191 encoding of `payload` with the key from `seed` and
+    /// returns the 65-byte `(r, s, v)` signature.
+    #[test_only]
+    fun eth_sign_for_testing(seed: vector<u8>, payload: &vector<u8>): vector<u8> {
+        let kp = ecdsa_k1::secp256k1_keypair_from_seed(&seed);
+        ecdsa_k1::secp256k1_sign(
+            ecdsa_k1::private_key(&kp),
+            &eip191_preimage(payload),
+            ECRECOVER_KECCAK256,
+            true,
+        )
+    }
+
+    /// The canonical redemption payload: domain ‖ address ‖ amount ‖
+    /// recipient.
+    #[test_only]
+    fun payload_for_testing(addr: &vector<u8>, amount: u256, recipient: address): vector<u8> {
+        let mut p = PAYLOAD_DOMAIN;
+        vector::append(&mut p, *addr);
+        vector::append(&mut p, u256_to_32be(amount));
+        vector::append(&mut p, address::to_bytes(recipient));
+        p
+    }
+
+    /// `amount` as 32 big-endian bytes.
+    #[test_only]
+    fun u256_to_32be(amount: u256): vector<u8> {
+        let mut out: vector<u8> = vector[];
+        let mut rest = amount;
+        let mut j: u64 = 0;
+        while (j < 32) {
+            vector::push_back(&mut out, (rest % 256) as u8);
+            rest = rest / 256;
+            j = j + 1;
+        };
+        vector::reverse(&mut out);
+        out
+    }
+
+    /// The sibling signature: `s ← n − s` with the recovery id flipped,
+    /// which recovers the same key (the standard recid identity). Pins that
+    /// both recovery paths bind to the same owner.
+    #[test_only]
+    fun flipped_recovery_for_testing(sig: &vector<u8>): vector<u8> {
+        let s = be_u256(&range(sig, 32, 64));
+        let v = *vector::borrow(sig, 64);
+        let mut out = range(sig, 0, 32);
+        vector::append(&mut out, u256_to_32be(SECP256K1_N - s));
+        vector::push_back(&mut out, if (v == 0) 1 else 0);
+        out
+    }
+
+    /// A halted chain with a synthetic request for `address` holding
+    /// `balance` — the redeem path consumes records, and the request path's
+    /// proof machinery is already covered above.
+    #[test_only]
+    fun halted_queue_with_record_for_testing(
+        ctx: &mut TxContext,
+        address: vector<u8>,
+        balance: u256,
+    ): (Registry, Inbox, Clock, ExitQueue) {
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+        let mut queue = queue_for_testing(ctx);
+        let seq = queue.next_seq;
+        queue.next_seq = seq + 1;
+        table::add(&mut queue.requests, address, ExitRequest {
+            height: 1,
+            nonce: 0,
+            balance,
+            seq,
+            paid: 0,
+        });
+        (registry, inbox, clock, queue)
+    }
+
+    #[test_only]
+    fun teardown_with_queue(
+        registry: Registry,
+        inbox: Inbox,
+        clock: Clock,
+        queue: ExitQueue,
+        addresses: vector<vector<u8>>,
+    ) {
+        teardown_queue(queue, addresses);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun redeem_pays_the_remaining_balance_to_the_signed_recipient() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+
+        assert!(bridge::reserve<bridge::TestCoin>(&vault) == 300, E_TEST);
+        assert!(request_count(&queue) == 1, E_TEST);
+        let paid = paid_at(&queue, owner);
+        assert!(option::is_some(&paid), E_TEST);
+        assert!(option::destroy_some(paid) == REDEEM_AMOUNT, E_TEST);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test]
+    fun redeem_accepts_the_sibling_recovery_id() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = flipped_recovery_for_testing(&eth_sign_for_testing(SEED_A, &payload));
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+
+        assert!(bridge::reserve<bridge::TestCoin>(&vault) == 300, E_TEST);
+        let paid = paid_at(&queue, owner);
+        assert!(option::destroy_some(paid) == REDEEM_AMOUNT, E_TEST);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test]
+    fun redeem_accepts_ethereum_encoded_v() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let mut sig = eth_sign_for_testing(SEED_A, &payload);
+        let v = *vector::borrow(&sig, 64);
+        *vector::borrow_mut(&mut sig, 64) = v + 27;
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+
+        assert!(bridge::reserve<bridge::TestCoin>(&vault) == 300, E_TEST);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_HALTED, location = Self)]
+    fun redeem_refuses_a_healthy_chain() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        record_for_testing(&mut queue, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_NO_REQUEST, location = Self)]
+    fun redeem_refuses_an_unrequested_address() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[]);
+    }
+
+    #[test, expected_failure(abort_code = E_NOTHING_TO_REDEEM, location = Self)]
+    fun second_redeem_aborts_after_the_full_balance_is_paid() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+        // The same signature replayed: the remainder is now zero, so the
+        // replay aborts before the signature is even checked.
+        let claim2 = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim2, ctx);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_SIGNATURE, location = Self)]
+    fun redeem_refuses_a_foreign_signer() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let attacker = eth_address_for_testing(SEED_B);
+        // The payload binds the recorded address; the attacker's key signs
+        // it, so the recovered address is the attacker's, not the owner's.
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_B, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        assert!(attacker != owner, E_TEST);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_PAYLOAD, location = Self)]
+    fun redeem_refuses_a_recipient_not_bound_by_the_signature() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let other_recipient = @0xDEAD;
+        // Signed for SUI_RECIPIENT, redeemed to someone else: the payload
+        // no longer matches the call argument.
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, other_recipient, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_PAYLOAD, location = Self)]
+    fun redeem_refuses_an_amount_not_matching_the_record() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        // Signed for 999, recorded balance 200: the state-derived remainder
+        // is what redemption pays, and the signature must cover exactly it.
+        let payload = payload_for_testing(&owner, 999, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure]
+    fun redeem_refuses_a_tampered_signature() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let mut sig = eth_sign_for_testing(SEED_A, &payload);
+        *vector::borrow_mut(&mut sig, 5) = *vector::borrow(&sig, 5) ^ 1;
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_SIGNATURE, location = Self)]
+    fun redeem_refuses_a_short_signature() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let mut short = range(&sig, 0, 64);
+        vector::push_back(&mut short, 0);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, short);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_SIGNATURE, location = Self)]
+    fun redeem_refuses_an_unrecoverable_v() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let mut sig = eth_sign_for_testing(SEED_A, &payload);
+        // EIP-155-style v (chain-id encoded) is not an EIP-191 personal
+        // signature: after the 27-shift it is not a recovery id.
+        *vector::borrow_mut(&mut sig, 64) = 35;
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_PAYLOAD, location = Self)]
+    fun redeem_refuses_a_wrong_length_payload() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let mut payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        vector::pop_back(&mut payload);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = E_PAYLOAD, location = Self)]
+    fun redeem_refuses_a_foreign_domain() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        // The payload is well-formed otherwise, so this isolates the
+        // domain binding.
+        let mut payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        *vector::borrow_mut(&mut payload, 0) = 0x78;
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test, expected_failure(abort_code = 1, location = podseq::bridge)]
+    fun escape_release_refuses_when_the_vault_lacks_liquidity() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        // An empty vault: the claim mints, the release aborts, and the
+        // whole PTB (including the paid advance) rolls back.
+        let mut vault = bridge::vault_for_testing(ctx);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test]
+    fun escape_release_leaves_the_withdraw_nonce_untouched() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+
+        // Escape releases have no L2 nonce: they must not consume the
+        // sequencer's withdrawal sequence or its idempotency markers.
+        assert!(bridge::withdraw_nonce(&vault) == 0, E_TEST);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner]);
+    }
+
+    #[test]
+    fun payload_and_preimage_have_the_documented_shapes() {
+        let owner = x"0102030405060708090a0b0c0d0e0f1011121314";
+        let payload = payload_for_testing(&owner, 1234, SUI_RECIPIENT);
+        assert!(vector::length(&payload) == 99, E_TEST);
+        assert!(range(&payload, 0, 15) == PAYLOAD_DOMAIN, E_TEST);
+        assert!(range(&payload, 15, 35) == owner, E_TEST);
+        let mut expected_amount: vector<u8> = vector[];
+        let mut i = 30;
+        while (i > 0) {
+            i = i - 1;
+            vector::push_back(&mut expected_amount, 0);
+        };
+        vector::push_back(&mut expected_amount, 0x04);
+        vector::push_back(&mut expected_amount, 0xd2);
+        assert!(range(&payload, 35, 67) == expected_amount, E_TEST);
+        assert!(range(&payload, 67, 99) == address::to_bytes(SUI_RECIPIENT), E_TEST);
+
+        // EIP-191: prefix ‖ decimal ASCII length ‖ payload.
+        let preimage = eip191_preimage(&payload);
+        assert!(range(&preimage, 0, 26) == b"\x19Ethereum Signed Message:\n", E_TEST);
+        assert!(range(&preimage, 26, 28) == b"99", E_TEST);
+        assert!(range(&preimage, 28, 127) == payload, E_TEST);
+
+        // A 65-byte payload encodes its length as "65".
+        let mut short: vector<u8> = vector[];
+        let mut j: u64 = 0;
+        while (j < 65) {
+            vector::push_back(&mut short, 0xab);
+            j = j + 1;
+        };
+        let preimage65 = eip191_preimage(&short);
+        assert!(range(&preimage65, 26, 28) == b"65", E_TEST);
+        assert!(vector::length(&preimage65) == 26 + 2 + 65, E_TEST);
+    }
+
+    #[test]
+    fun reproof_preserves_the_redeemed_total() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        // Redeem 400 of the 999 proven balance, then re-prove at the same
+        // height: the idempotent re-record must carry the redeemed total.
+        mark_paid_for_testing(&mut queue, SINGLE_ADDRESS, 400);
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        let paid = paid_at(&queue, SINGLE_ADDRESS);
+        assert!(option::destroy_some(paid) == 400, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun earlier_height_replace_keeps_the_redeemed_total() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, REPLACE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            REPLACE_ADDRESS,
+            vector[REPLACE_NODE_0, REPLACE_NODE_1],
+        );
+        mark_paid_for_testing(&mut queue, REPLACE_ADDRESS, 400);
+        // An earlier-height proof replaces the record: balance 999 at
+        // height 1 now, redeemed total still 400, so 599 remains claimable.
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        let request = request_at(&queue, REPLACE_ADDRESS);
+        assert!(option::is_some(&request), E_TEST);
+        let recorded = *option::borrow(&request);
+        assert!(recorded.balance == SINGLE_BALANCE, E_TEST);
+        let paid = paid_at(&queue, REPLACE_ADDRESS);
+        assert!(option::destroy_some(paid) == 400, E_TEST);
+
+        teardown_queue(queue, vector[REPLACE_ADDRESS]);
         teardown(registry, inbox, clock);
     }
 }

@@ -90,6 +90,61 @@ module podseq::bridge {
         l2_nonce: u64,
     }
 
+    /// Emitted on every escape release: the payout left through the exit
+    /// queue's halt path, not through a sequencer release. `address` is the
+    /// 20-byte L2 address the balance was proven for.
+    public struct EscapeReleased has copy, drop {
+        address: vector<u8>,
+        coin_type: TypeName,
+        amount: u64,
+        recipient: address,
+    }
+
+    /// One proven escape payout, minted by [`podseq::exit_queue::redeem`]
+    /// and consumed by [`escape_release`]. A hot potato — no abilities — so
+    /// it cannot be dropped, copied, or stored: the PTB that mints it must
+    /// hand it to the vault, and nothing else accepts it.
+    public struct ExitClaim {
+        /// The 20-byte L2 address the balance was proven for.
+        addr: vector<u8>,
+        /// What the vault releases.
+        amount: u64,
+        /// Where the released coin goes.
+        recipient: address,
+    }
+
+    /// Mints an escape claim. `public(package)`: only this package's modules
+    /// — the exit queue, which holds the halt verdict and the signature
+    /// binding (address, amount, recipient) — may construct one.
+    public(package) fun escape_claim(addr: vector<u8>, amount: u64, recipient: address): ExitClaim {
+        ExitClaim { addr, amount, recipient }
+    }
+
+    /// Releases an escape payout from the vault without any sequencer
+    /// capability.
+    ///
+    /// The claim arrives from `exit_queue::redeem`, which checked the
+    /// inbox-derived halt and verified an L2 signature binding (address,
+    /// amount, recipient); the hot potato makes double-release impossible.
+    /// Deliberately does not touch `withdraw_nonce` or the per-burn
+    /// idempotency markers: escape releases have no L2 nonce, and their
+    /// dedup lives in the exit queue's `paid` accounting.
+    public fun escape_release<T>(vault: &mut Vault, claim: ExitClaim, ctx: &mut TxContext) {
+        let ExitClaim { addr, amount, recipient } = claim;
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        assert!(bag::contains(&vault.reserves, type_key<T>()), E_INSUFFICIENT_LIQUIDITY);
+        let held: &mut Coin<T> = bag::borrow_mut(&mut vault.reserves, type_key<T>());
+        assert!(coin::value(held) >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let coin = coin::split(held, amount, ctx);
+        event::emit(EscapeReleased {
+            address: addr,
+            coin_type: type_name::with_defining_ids<T>(),
+            amount,
+            recipient,
+        });
+        transfer::public_transfer(coin, recipient);
+    }
+
     /// Creates and shares the vault. Transfers `BridgeCap` to the caller.
     ///
     /// Call once at package publish or via a dedicated setup transaction.
@@ -434,6 +489,42 @@ module podseq::bridge {
         table::destroy_empty(deposits);
         table::destroy_empty(processed_withdrawals);
         object::delete(id);
+    }
+
+    /// A fresh empty vault for sibling-module tests.
+    #[test_only]
+    public fun vault_for_testing(ctx: &mut TxContext): Vault {
+        test_vault(ctx)
+    }
+
+    /// Drops the coin-type `T` reserve and the deposit records so the vault
+    /// can be destroyed empty.
+    #[test_only]
+    public fun drain_for_testing<T>(vault: &mut Vault) {
+        if (bag::contains(&vault.reserves, type_key<T>())) {
+            let held = bag::remove<vector<u8>, Coin<T>>(&mut vault.reserves, type_key<T>());
+            balance::destroy_for_testing(coin::into_balance(held));
+        };
+        let mut i: u64 = 0;
+        while (i < vault.deposit_nonce) {
+            let DepositRecord { amount: _, recipient_l2: _, coin_type: _ } =
+                table::remove(&mut vault.deposits, i);
+            i = i + 1;
+        };
+    }
+
+    /// Tears a vault down; every structure must be empty first.
+    #[test_only]
+    public fun destroy_vault_for_testing(vault: Vault) {
+        destroy_vault_empty(vault)
+    }
+
+    /// Consumes a claim in tests that expect `exit_queue::redeem` to abort
+    /// before returning one: the hot potato must be statically consumed on
+    /// every path, and this is the sink when the release never runs.
+    #[test_only]
+    public fun drop_claim_for_testing(claim: ExitClaim) {
+        let ExitClaim { addr: _, amount: _, recipient: _ } = claim;
     }
 
     #[test_only]

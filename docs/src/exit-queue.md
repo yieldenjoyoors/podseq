@@ -12,16 +12,18 @@ without the sequencer.
 
 ## Status
 
-The proof anchor, the balance verifier, the unlock condition, and the request
-record are implemented. Redemption — moving value on the bridge without the
-sequencer — and a live gas measurement of the proof walk are not.
+The proof anchor, the balance verifier, the unlock condition, the request
+record, and redemption are implemented. A live gas measurement of the proof
+walk is not.
 
 Implemented: `settlement::commit_state_root` anchors each settled block's
 state root in the Registry (see below); `exit_queue::verify_account` verifies
 a Merkle account proof against that anchor and returns the account's
 `(nonce, balance)`; `exit_queue::halt_expired_deadline` derives the halt
 verdict from inbox chain data; `exit_queue::request_exit` records a proven
-balance in the shared exit queue, ordered by `(height, seq)`.
+balance in the shared exit queue, ordered by `(height, seq)`; and
+`exit_queue::redeem` plus `bridge::escape_release` pay the remainder out of
+the vault without the sequencer (see below).
 
 ## Why state roots land on Sui
 
@@ -120,12 +122,73 @@ zero-balance account (an empty RLP integer). Negative tests tamper nodes,
 truncate and extend the proof, and aim the walk at a foreign address, a dead
 branch, and a non-trie root.
 
-Open: the gas number. Sui's gas model has no offline estimate, so the walk's
-cost is unmeasured until a testnet publish runs `verify_account` and
-`request_exit` against a real proof — the same bench the rotation ceremony
-used. The loop is bounded by the proof length, so nothing is unbounded, but
-the MIST number is the evidence the gas question needs, and it is queued with
-the redemption slice.
+## Redeeming
+
+`exit_queue::redeem` consumes a recorded request and pays out the remainder
+`balance - paid` without any sequencer capability. The request record alone
+is not enough: proofs are public chain data, so anyone can call `redeem`
+with a valid proof — the payout must land with the balance's owner, and only
+the owner can prove *that*. The owner signs with their L2 key, and the
+module recovers the signer in Move:
+
+```move
+public fun redeem(
+    queue: &mut ExitQueue,
+    inbox: &Inbox,
+    clock: &Clock,
+    address: vector<u8>,       // the recorded 20-byte L2 address
+    recipient: address,        // the Sui address that gets the coins
+    payload: vector<u8>,       // what the owner signed (99 bytes)
+    signature: vector<u8>,     // 65-byte (r, s, v) EIP-191 signature
+): bridge::ExitClaim
+```
+
+The payload binds everything a payout needs: the domain `podseq-exit:v1:`,
+the 20-byte L2 address, the 32-byte big-endian amount, and the 32-byte Sui
+recipient. The module builds the EIP-191 personal-sign preimage
+(`\x19Ethereum Signed Message:\n` ‖ decimal length ‖ payload — what wallets
+produce with `personal_sign`), recovers the public key with the framework's
+`secp256k1_ecrecover` (keccak256 hash mode; the Ethereum v byte 27/28 is
+normalized to the recovery id 0/1), and derives the Ethereum address as
+`keccak256(X ‖ Y)[12..32]`. Three checks then gate the payout:
+
+- the recovered address must equal the recorded L2 address — the owner
+  signed, nobody else;
+- the payload's amount must equal the state-derived remainder — so a
+  replayed signature covers a past amount and fails, because the record's
+  `paid` advanced; and
+- the payload's recipient must equal the call's recipient — the signature
+  decides where value goes, not whoever submits the PTB.
+
+The claim itself is a `bridge::ExitClaim` hot potato — no abilities, so it
+cannot be dropped, copied, or stored: the PTB that mints it must hand it to
+`bridge::escape_release`, which splits the vault's reserve and transfers to
+the recipient, emitting `EscapeReleased`. The release deliberately does not
+touch `withdraw_nonce` or the per-burn idempotency markers: escape releases
+have no L2 nonce, and their dedup lives in the queue's `paid` accounting.
+
+Accounting is cumulative per address. A redeem sets `paid` to the recorded
+balance; a second redeem of the same record aborts with
+`E_NOTHING_TO_REDEEM` (the remainder is zero) before any signature work.
+Reproofs carry `paid` forward, so the cumulative payout never exceeds the
+balance proven at some settled height — an earlier-height proof that shows a
+larger balance re-opens the delta, a later one cannot regress the record.
+
+Two limits are honest about what this path is. Payouts are first-come in
+Sui transaction order, not `(height, seq)` order: enforcing the L2 order
+would need an ordered index over the queue, and it would not change the
+outcome that matters — the vault either covers everyone or was already
+drained (the censoring-sequencer-drains-first residual risk). And the
+remainder must fit the vault's u64 coin amounts (`E_AMOUNT` otherwise):
+balances above that cannot arise from deposits made through this bridge.
+
+Open: the gas number. Sui's gas model has no offline estimate, so the
+walk's cost and the redemption path's (two `ecrecover`-adjacent natives per
+signature check) are unmeasured until a testnet publish runs the full
+`request_exit` → `redeem` → `escape_release` sequence against real proofs —
+the same bench the rotation ceremony used. The loops are bounded by the
+proof length, so nothing is unbounded, but the MIST number is the evidence
+the gas question needs, and it is the next slice.
 
 ## The unlock condition
 
@@ -200,10 +263,10 @@ now exist:
 2. The unlock condition is chain data: the inbox-derived verdict above, with
    the settlement contract's own deadline gate as the reason it holds.
 3. Exit requests take a queue position from the L2 height that produced the
-   balance, so reordering exits is as impossible as reordering blocks. The
-   `(height, seq)` records exist; the redemption entrypoint that consumes
-   them — releasing value on the bridge without the sequencer — is the
-   remaining work.
+   balance, so reordering exits is as impossible as reordering blocks.
+4. Redemption consumes the record: the owner signs the payout, the module
+   recovers the signer and pays the remainder out of the vault — without
+   the sequencer.
 
 A useful side effect of the anchor: a light client can verify one balance
 against Sui state without executing any L2 block, and a full node can compare
