@@ -20,12 +20,15 @@
 module podseq::exit_queue {
     use std::option::Self;
     use std::vector;
-    use sui::hash;
-    use podseq::settlement::{Self, Registry};
-    #[test_only]
-    use podseq::inbox::Inbox;
-    #[test_only]
     use sui::clock::{Self, Clock};
+    use sui::event;
+    use sui::hash;
+    use sui::object::{Self, UID};
+    use sui::table::{Self, Table};
+    use sui::transfer;
+    use sui::tx_context::{Self, TxContext};
+    use podseq::inbox::{Self, Inbox};
+    use podseq::settlement::{Self, Registry};
 
     /// Address is not 20 bytes.
     const E_ADDRESS: u64 = 1;
@@ -51,9 +54,22 @@ module podseq::exit_queue {
     const E_PATH: u64 = 10;
     /// The leaf value is not a four-item account RLP.
     const E_ACCOUNT: u64 = 11;
+    /// The chain is not in the inbox-derived halt state: no pending forced
+    /// transaction is past its deadline, so the escape path stays closed.
+    const E_NOT_HALTED: u64 = 12;
 
     /// Longest RLP length-of-length prefix accepted, matching Ethereum's 8.
     const MAX_LEN_BYTES: u64 = 8;
+
+    /// Grace period after the oldest pending deadline before the escape path
+    /// treats the chain as halted. Generous on purpose: a transaction included
+    /// on time stays pending on Sui until its block settles (the DA batch
+    /// flush alone can hold it for two minutes), and opening exits while
+    /// settlement merely lags is the dangerous direction — the margin must
+    /// dominate any legitimate settle lag. A genuine halt has the opposite
+    /// shape: every settle aborts at the inbox gate, `last_settled_ts`
+    /// freezes, and the entry stays pending forever.
+    const HALT_MARGIN_MS: u64 = 600_000;
 
     /// Failure marker for positive tests (the assertion that failed is named
     /// by the test, not the code).
@@ -319,6 +335,189 @@ module podseq::exit_queue {
         value
     }
 
+    // ---------- the escape queue ----------
+    //
+    // Force inclusion gets transactions in; this gets value out. The unlock
+    // is the inbox-derived halt the deadline machinery already implies: when
+    // the oldest pending forced transaction has been past its deadline for
+    // longer than the margin, every settle aborts and exits must work
+    // without the sequencer.
+
+    /// One proven escape request.
+    public struct ExitRequest has copy, drop, store {
+        /// Settled height whose anchored state root the balance was proven
+        /// against. This is the request's queue position.
+        height: u64,
+        /// Account nonce at that height.
+        nonce: u64,
+        /// Account balance at that height.
+        balance: u256,
+        /// Total order among requests at the same height.
+        seq: u64,
+    }
+
+    /// Shared record of escape requests. Singleton by convention, like the
+    /// `Inbox`: created once at package publish by [`initialize`], and the
+    /// canonical id is whatever exits are consumed against. Deployments that
+    /// predate the module create it by calling [`initialize`] in a
+    /// standalone PTB.
+    public struct ExitQueue has key {
+        id: UID,
+        /// L2 address (20 bytes) -> the account's request.
+        requests: Table<vector<u8>, ExitRequest>,
+        /// Sequence for the next distinct request.
+        next_seq: u64,
+    }
+
+    /// Emitted when an escape request is recorded or improved. A proof that
+    /// would regress the request's height is ignored silently: the state
+    /// does not change, so there is nothing to observe.
+    public struct ExitRequested has copy, drop {
+        /// The 20-byte L2 address the balance was proven for.
+        address: vector<u8>,
+        /// Settled height the balance was proven against.
+        height: u64,
+        /// Sequence the request holds.
+        seq: u64,
+        /// Proven account nonce.
+        nonce: u64,
+        /// Proven account balance.
+        balance: u256,
+        /// The expired oldest deadline that unlocked this request.
+        expired_deadline_ms: u64,
+    }
+
+    /// Creates and shares the exit queue. Call once at package publish,
+    /// alongside `inbox::initialize`.
+    public fun initialize(ctx: &mut TxContext) {
+        transfer::share_object(ExitQueue {
+            id: object::new(ctx),
+            requests: table::new(ctx),
+            next_seq: 0,
+        });
+    }
+
+    /// Returns [`HALT_MARGIN_MS`], the escape path's halt margin.
+    public fun halt_margin_ms(): u64 {
+        HALT_MARGIN_MS
+    }
+
+    /// The inbox-derived halt verdict, purely from chain data: the expired
+    /// oldest deadline once the oldest pending forced transaction has been
+    /// past its deadline for more than [`halt_margin_ms`], `none` otherwise
+    /// (nothing pending, the deadline still holds, or the margin has not
+    /// elapsed).
+    ///
+    /// The deadline comes from the inbox and the time from Sui's shared
+    /// `Clock` — the same chain data the full-node deadline monitor reads,
+    /// so anyone can evaluate the predicate in their own PTB without
+    /// trusting a sequencer endpoint. Strict `now > deadline + margin`: the
+    /// exact boundary is not a halt yet, mirroring the monitor's grace.
+    ///
+    /// The margin is 10 minutes where the monitor's is 1 second because the
+    /// two close different gaps. The monitor re-reads the inbox to confirm
+    /// a verdict against a settle that raced it; a PTB sees one snapshot
+    /// and cannot re-read, so this gate pays in margin instead — long
+    /// enough that an on-time inclusion has had its block settled and its
+    /// entry pruned, which is the false positive the margin exists to
+    /// prevent.
+    public fun halt_expired_deadline(inbox: &Inbox, clock: &Clock): Option<u64> {
+        let oldest = inbox::oldest_pending_deadline(inbox);
+        if (!option::is_some(&oldest)) {
+            return oldest
+        };
+        let deadline = option::destroy_some(oldest);
+        if (clock.timestamp_ms() > deadline + HALT_MARGIN_MS) {
+            option::some(deadline)
+        } else {
+            option::none()
+        }
+    }
+
+    /// The recorded request for `address`, `none` when it never requested.
+    public fun request_at(queue: &ExitQueue, address: vector<u8>): Option<ExitRequest> {
+        if (table::contains(&queue.requests, address)) {
+            option::some(*table::borrow(&queue.requests, address))
+        } else {
+            option::none()
+        }
+    }
+
+    /// How many accounts hold a recorded request.
+    public fun request_count(queue: &ExitQueue): u64 {
+        table::length(&queue.requests)
+    }
+
+    /// Records (or improves) an escape request — the escape entrypoint.
+    ///
+    /// Fires only in the inbox-derived halt state ([`halt_expired_deadline`]):
+    /// a sequencer censoring withdrawals drives the inbox past its deadline,
+    /// every settle aborts, and value leaves through proofs instead. The
+    /// balance is proven with [`verify_account`] against the state root
+    /// anchored at `height`, so the request carries only what settlement
+    /// committed.
+    ///
+    /// The request is keyed by the 20-byte L2 address. A first proof claims
+    /// `(height, seq)`. A later proof at an earlier height replaces the
+    /// record and keeps the sequence; at the same height it re-records the
+    /// same account (a trie is deterministic, so the values cannot differ);
+    /// at a later height it is ignored. Queue position never regresses, and
+    /// nobody can force it backward: proofs are public chain data, so anyone
+    /// can produce a valid proof at any later height, and the rule makes
+    /// that useless. Ordering is `(height, seq)`; redemption consumes the
+    /// queue in that order.
+    public fun request_exit(
+        queue: &mut ExitQueue,
+        registry: &Registry,
+        inbox: &Inbox,
+        clock: &Clock,
+        height: u64,
+        address: vector<u8>,
+        proof: vector<vector<u8>>,
+    ) {
+        let expired = halt_expired_deadline(inbox, clock);
+        assert!(option::is_some(&expired), E_NOT_HALTED);
+        let expired_deadline_ms = option::destroy_some(expired);
+        let (nonce, balance) = verify_account(registry, height, address, proof);
+
+        if (table::contains(&queue.requests, address)) {
+            let current = *table::borrow(&queue.requests, address);
+            if (height <= current.height) {
+                *table::borrow_mut(&mut queue.requests, address) = ExitRequest {
+                    height,
+                    nonce,
+                    balance,
+                    seq: current.seq,
+                };
+                event::emit(ExitRequested {
+                    address,
+                    height,
+                    seq: current.seq,
+                    nonce,
+                    balance,
+                    expired_deadline_ms,
+                });
+            };
+        } else {
+            let seq = queue.next_seq;
+            queue.next_seq = seq + 1;
+            table::add(&mut queue.requests, address, ExitRequest {
+                height,
+                nonce,
+                balance,
+                seq,
+            });
+            event::emit(ExitRequested {
+                address,
+                height,
+                seq,
+                nonce,
+                balance,
+                expired_deadline_ms,
+            });
+        };
+    }
+
     // ---------- fixtures (generated by crates/sui/examples/mpt_fixture.rs) ----------
     //
     // Account proofs built with alloy-trie (reth's node encoder) over small
@@ -389,6 +588,21 @@ module podseq::exit_queue {
     #[test_only]
     const MULTI_ZERO_BALANCE: u256 = 0;
 
+    #[test_only]
+    const REPLACE_ROOT: vector<u8> = x"2bc7d9af39a6374cb0b2a78b66985fc87beff1a489a1fe6003019ec7c1a48a7f";
+    #[test_only]
+    const REPLACE_NODE_0: vector<u8> = x"f8518080808080a0ccaf1e2e06721a37f67ca9af139ae6d0c0fa17ec4e9f9dc9f27a52645c36e64ea05b1394afef92834f645432f2269a921f82380f42ce6d7badb73a8db60778f1da80808080808080808080";
+    #[test_only]
+    const REPLACE_NODE_1: vector<u8> = x"f86ba033e6633aae56ed85af8af8ecbe4d12c899024ad68952400c0c68f52503333f78b848f846028201f4a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+    // Same address as SINGLE: the REPLACE trie carries that account at a
+    // later state, so one address has valid proofs at two anchored heights.
+    #[test_only]
+    const REPLACE_ADDRESS: vector<u8> = x"6f605da6fd75acb56dbc2461367fdc705972750b";
+    #[test_only]
+    const REPLACE_NONCE: u64 = 2;
+    #[test_only]
+    const REPLACE_BALANCE: u256 = 500;
+
     // ---------- tests ----------
 
     /// Anchors `root` at height 1 of a fresh single-height registry.
@@ -410,6 +624,50 @@ module podseq::exit_queue {
         settlement::destroy_rotation_for_testing(&mut registry);
         settlement::destroy_registry(registry);
         0
+    }
+
+    /// Builds an unshared exit queue for tests.
+    #[test_only]
+    public fun queue_for_testing(ctx: &mut TxContext): ExitQueue {
+        ExitQueue {
+            id: object::new(ctx),
+            requests: table::new(ctx),
+            next_seq: 0,
+        }
+    }
+
+    /// Destroys an exit queue; every recorded request's address must be
+    /// named and is removed first (the table has no iteration).
+    #[test_only]
+    public fun teardown_queue(queue: ExitQueue, addresses: vector<vector<u8>>) {
+        let ExitQueue { id, mut requests, next_seq: _ } = queue;
+        let mut i: u64 = 0;
+        let n = vector::length(&addresses);
+        while (i < n) {
+            let address = *vector::borrow(&addresses, i);
+            if (table::contains(&requests, address)) {
+                let ExitRequest { height: _, nonce: _, balance: _, seq: _ } =
+                    table::remove(&mut requests, address);
+            };
+            i = i + 1;
+        };
+        table::destroy_empty(requests);
+        id.delete();
+    }
+
+    /// Anchors `root_a` at height 1 and `root_b` at height 2 of a fresh
+    /// two-height registry.
+    #[test_only]
+    public fun two_height_registry_for_testing(
+        ctx: &mut TxContext,
+        root_a: vector<u8>,
+        root_b: vector<u8>,
+    ): (Registry, Inbox, Clock) {
+        let (mut registry, mut inbox, clock) = settlement::settled_registry_for_testing(ctx, 1);
+        settlement::commit_state_root(&mut registry, &clock, 1, root_a, ctx);
+        settlement::settle_as(&mut registry, &mut inbox, &clock, b"blob", 2, 2_000, 0, ctx);
+        settlement::commit_state_root(&mut registry, &clock, 2, root_b, ctx);
+        (registry, inbox, clock)
     }
 
     #[test]
@@ -666,5 +924,370 @@ module podseq::exit_queue {
     #[test, expected_failure(abort_code = E_ACCOUNT, location = Self)]
     fun decode_account_rejects_a_wrong_item_count() {
         decode_account(&x"c20102");
+    }
+
+    // ---------- the unlock and the escape request ----------
+    //
+    // The escape path opens only in the inbox-derived halt state: the oldest
+    // pending forced transaction past its deadline plus the halt margin. The
+    // fixtures above carry the balances; the inbox carries the halt.
+
+    #[test]
+    fun halt_verdict_is_none_for_an_empty_inbox() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, inbox, clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let queue = queue_for_testing(ctx);
+
+        assert!(option::is_none(&halt_expired_deadline(&inbox, &clock)), E_TEST);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun halt_verdict_is_none_while_the_deadline_holds() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let queue = queue_for_testing(ctx);
+
+        // Submitted at clock 0: the deadline is 600_000 and the margin ends
+        // at 1_200_000. One millisecond before that, the chain is not halted.
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_199_999);
+
+        assert!(option::is_none(&halt_expired_deadline(&inbox, &clock)), E_TEST);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun halt_verdict_stays_none_at_the_exact_margin_boundary() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_000);
+
+        assert!(option::is_none(&halt_expired_deadline(&inbox, &clock)), E_TEST);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun halt_verdict_fires_strictly_after_the_margin() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        let verdict = halt_expired_deadline(&inbox, &clock);
+        assert!(option::is_some(&verdict), E_TEST);
+        // The verdict carries the expired deadline, not the clock reading.
+        assert!(*option::borrow(&verdict) == 600_000, E_TEST);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun inclusion_clears_the_halt_verdict() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+        assert!(option::is_some(&halt_expired_deadline(&inbox, &clock)), E_TEST);
+
+        // A block stamped exactly at the deadline includes the transaction;
+        // settling it prunes the entry, and the verdict clears even though
+        // the wall clock is far past the margin.
+        inbox::enforce_settle(&mut inbox, 600_000, 1);
+        assert!(option::is_none(&halt_expired_deadline(&inbox, &clock)), E_TEST);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun halt_margin_matches_the_documented_value() {
+        assert!(halt_margin_ms() == 600_000, E_TEST);
+    }
+
+    #[test]
+    fun request_exit_records_the_proven_balance() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        let request = request_at(&queue, SINGLE_ADDRESS);
+        assert!(option::is_some(&request), E_TEST);
+        let recorded = *option::borrow(&request);
+        assert!(recorded.height == 1, E_TEST);
+        assert!(recorded.nonce == SINGLE_NONCE, E_TEST);
+        assert!(recorded.balance == SINGLE_BALANCE, E_TEST);
+        assert!(recorded.seq == 0, E_TEST);
+        assert!(request_count(&queue) == 1, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_HALTED, location = Self)]
+    fun request_exit_refuses_a_healthy_chain() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, inbox, clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_HALTED, location = Self)]
+    fun request_exit_refuses_before_the_margin_elapses() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_000);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test, expected_failure(abort_code = E_EMPTY_PROOF, location = Self)]
+    fun request_exit_requires_a_provable_proof() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(&mut queue, &registry, &inbox, &clock, 1, SINGLE_ADDRESS, vector[]);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun reproof_at_the_same_height_is_idempotent() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        let request = request_at(&queue, SINGLE_ADDRESS);
+        assert!(option::is_some(&request), E_TEST);
+        let recorded = *option::borrow(&request);
+        assert!(recorded.seq == 0, E_TEST);
+        assert!(request_count(&queue) == 1, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun later_height_never_regresses_the_claim() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, REPLACE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        // A valid proof at a later height — the shape an attacker with public
+        // chain data can always produce — must not push the request back.
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            REPLACE_ADDRESS,
+            vector[REPLACE_NODE_0, REPLACE_NODE_1],
+        );
+
+        let request = request_at(&queue, REPLACE_ADDRESS);
+        assert!(option::is_some(&request), E_TEST);
+        let recorded = *option::borrow(&request);
+        assert!(recorded.height == 1, E_TEST);
+        assert!(recorded.nonce == SINGLE_NONCE, E_TEST);
+        assert!(recorded.balance == SINGLE_BALANCE, E_TEST);
+        assert!(recorded.seq == 0, E_TEST);
+        assert!(request_count(&queue) == 1, E_TEST);
+
+        teardown_queue(queue, vector[REPLACE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun earlier_height_replaces_the_request_keeping_the_sequence() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, REPLACE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            REPLACE_ADDRESS,
+            vector[REPLACE_NODE_0, REPLACE_NODE_1],
+        );
+        let first = request_at(&queue, REPLACE_ADDRESS);
+        assert!(option::is_some(&first), E_TEST);
+        let claimed = *option::borrow(&first);
+        assert!(claimed.height == 2, E_TEST);
+        assert!(claimed.nonce == REPLACE_NONCE, E_TEST);
+        assert!(claimed.balance == REPLACE_BALANCE, E_TEST);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        let request = request_at(&queue, REPLACE_ADDRESS);
+        assert!(option::is_some(&request), E_TEST);
+        let recorded = *option::borrow(&request);
+        assert!(recorded.height == 1, E_TEST);
+        assert!(recorded.nonce == SINGLE_NONCE, E_TEST);
+        assert!(recorded.balance == SINGLE_BALANCE, E_TEST);
+        // The earlier claim keeps the sequence it already held.
+        assert!(recorded.seq == 0, E_TEST);
+        assert!(request_count(&queue) == 1, E_TEST);
+
+        teardown_queue(queue, vector[REPLACE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun second_address_claims_the_next_sequence() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, MULTI_ROOT);
+        let mut queue = queue_for_testing(ctx);
+
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            MULTI_ADDRESS,
+            vector[MULTI_NODE_0, MULTI_NODE_1, MULTI_NODE_2, MULTI_NODE_3],
+        );
+
+        let second = request_at(&queue, MULTI_ADDRESS);
+        assert!(option::is_some(&second), E_TEST);
+        assert!((*option::borrow(&second)).seq == 1, E_TEST);
+        assert!(request_count(&queue) == 2, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS, MULTI_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun request_at_is_none_for_an_unknown_address() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, inbox, clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let queue = queue_for_testing(ctx);
+
+        assert!(option::is_none(&request_at(&queue, SINGLE_ADDRESS)), E_TEST);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
     }
 }

@@ -12,14 +12,16 @@ without the sequencer.
 
 ## Status
 
-The proof anchor and the balance verifier are implemented. The unlock
-condition, the ordered queue on the bridge, and a live gas measurement of the
-proof walk are not.
+The proof anchor, the balance verifier, the unlock condition, and the request
+record are implemented. Redemption — moving value on the bridge without the
+sequencer — and a live gas measurement of the proof walk are not.
 
 Implemented: `settlement::commit_state_root` anchors each settled block's
-state root in the Registry (see below), and `exit_queue::verify_account`
-verifies a Merkle account proof against that anchor and returns the account's
-`(nonce, balance)`.
+state root in the Registry (see below); `exit_queue::verify_account` verifies
+a Merkle account proof against that anchor and returns the account's
+`(nonce, balance)`; `exit_queue::halt_expired_deadline` derives the halt
+verdict from inbox chain data; `exit_queue::request_exit` records a proven
+balance in the shared exit queue, ordered by `(height, seq)`.
 
 ## Why state roots land on Sui
 
@@ -119,25 +121,89 @@ truncate and extend the proof, and aim the walk at a foreign address, a dead
 branch, and a non-trie root.
 
 Open: the gas number. Sui's gas model has no offline estimate, so the walk's
-cost is unmeasured until a testnet publish runs `verify_account` against a
-real proof — the same bench the rotation ceremony used. The loop is bounded
-by the proof length, so nothing is unbounded, but the MIST number is the
-evidence the gas question needs, and it is the next slice's first item.
+cost is unmeasured until a testnet publish runs `verify_account` and
+`request_exit` against a real proof — the same bench the rotation ceremony
+used. The loop is bounded by the proof length, so nothing is unbounded, but
+the MIST number is the evidence the gas question needs, and it is queued with
+the redemption slice.
+
+## The unlock condition
+
+The escape path opens only when the chain is in the halt its own rules
+produce. `exit_queue::halt_expired_deadline` reads the inbox and Sui's shared
+`Clock` — nothing else:
+
+```move
+public fun halt_expired_deadline(inbox: &Inbox, clock: &Clock): Option<u64>
+```
+
+It returns the expired oldest deadline once the oldest pending forced
+transaction has been past its deadline for more than `halt_margin_ms()`
+(10 minutes), and `none` otherwise. That is the same chain data the full-node
+deadline monitor reads, so anyone can evaluate the predicate in their own PTB;
+a censoring sequencer that refuses withdrawals drives the inbox past its
+deadline, every settle aborts at the inbox gate, and the verdict stands until
+the overdue transaction is included — settling a block that covers it prunes
+the entry and clears the verdict.
+
+The margin is 10 minutes where the monitor's is 1 second, because the two
+close different gaps. The monitor re-reads the inbox to confirm a verdict
+against a settle that raced it; a PTB sees one execution snapshot and cannot
+re-read, so the on-chain gate pays in margin instead. The false positive it
+prevents: a transaction included on time still sits unpruned on Sui until its
+block settles — the DA batch flush alone can hold it for two minutes — and
+during that lag the inbox looks halted to a single snapshot. Ten minutes
+dominates any legitimate settle lag, so by the time the gate opens, an
+on-time inclusion has long since settled and pruned. Unlocking late is the
+safe direction; unlocking early would open exits on a healthy chain.
+
+## Requesting an exit
+
+`exit_queue::request_exit` is the escape entrypoint: it aborts with
+`E_NOT_HALTED` unless the unlock condition holds, verifies the account proof
+against the root anchored at `height`, and records the result in the shared
+`ExitQueue` object the deploy ceremony creates (existing deployments call
+`exit_queue::initialize` in a standalone PTB; the queue is a singleton by
+convention, like the Inbox):
+
+```move
+public fun request_exit(
+    queue: &mut ExitQueue,
+    registry: &Registry,
+    inbox: &Inbox,
+    clock: &Clock,
+    height: u64,
+    address: vector<u8>,
+    proof: vector<vector<u8>>,
+)
+```
+
+One request per L2 address, keyed by the 20 bytes. A first proof claims
+`(height, seq)` — the height that produced the balance, plus a sequence for
+total order within a height; redemption consumes the queue in that order. A
+later proof at an earlier height replaces the record and keeps the sequence;
+at the same height it re-records the same account (a trie is deterministic,
+so the values cannot differ); at a later height it is ignored. The rule is
+load-bearing because proofs are public chain data: anyone can produce a valid
+proof at any later height, and the rule makes that useless — a queue position
+can only improve, never be forced backward. Proofs that would regress are
+silent no-ops, with no event, because the state did not change.
 
 ## How the exit path completes
 
-The remaining pieces, against the anchor and verifier that now exist:
+The remaining pieces, against the anchor, verifier, unlock, and record that
+now exist:
 
 1. A user's L2 balance is included in the state of some settled height H,
    and anyone can prove it with `verify_account` against the root anchored
    at H.
-2. The escape entrypoint unlocks only when the inbox-derived halt condition
-   holds: the oldest pending forced transaction is past its deadline while
-   settlement does not advance. That is the same chain data the K3 deadline
-   monitor reads, so the unlock is verifiable without trusting any sequencer
-   endpoint.
+2. The unlock condition is chain data: the inbox-derived verdict above, with
+   the settlement contract's own deadline gate as the reason it holds.
 3. Exit requests take a queue position from the L2 height that produced the
-   balance, so reordering exits is as impossible as reordering blocks.
+   balance, so reordering exits is as impossible as reordering blocks. The
+   `(height, seq)` records exist; the redemption entrypoint that consumes
+   them — releasing value on the bridge without the sequencer — is the
+   remaining work.
 
 A useful side effect of the anchor: a light client can verify one balance
 against Sui state without executing any L2 block, and a full node can compare

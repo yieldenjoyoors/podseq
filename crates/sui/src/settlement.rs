@@ -137,6 +137,10 @@ pub struct DeployedContract {
     pub settler_cap_id: String,
     pub registry_id: String,
     pub inbox_id: String,
+    /// The shared exit queue created by `exit_queue::initialize` — the record
+    /// escape requests land in once the inbox-derived halt opens the path.
+    /// Singleton by convention; redemption consumes requests against this id.
+    pub exit_queue_id: String,
     /// The package's `UpgradeCap`, entombed in the Registry by the deploy
     /// ceremony. Kept for the record: upgrades go through
     /// [`upgrade_package`], steered by the Registry's `OpsCap`.
@@ -540,11 +544,34 @@ impl Settlement {
 
         info!(inbox_id = %inbox_id, "force-inclusion inbox initialized");
 
+        // 4. Initialize the exit queue in its own transaction: the only
+        // shared object it creates is the ExitQueue, so discovery by owner
+        // kind stays unambiguous. The queue is the record side of the escape
+        // path — request_exit writes it, and the Move gate refuses writes
+        // until the inbox-derived halt — so a fresh deployment always has
+        // the object its escape hatch needs.
+        let exit_changes = call_initialize(
+            &mut rpc,
+            &key,
+            sender,
+            package_addr,
+            "exit_queue",
+            "exit queue init",
+        )
+        .await?;
+        let exit_queue_id = find_created_object(&exit_changes, owner::OwnerKind::Shared)
+            .ok_or_else(|| {
+                SettlementError::Execution("ExitQueue not found in exit queue init response".into())
+            })?;
+
+        info!(exit_queue_id = %exit_queue_id, "exit queue initialized");
+
         Ok(DeployedContract {
             package_id,
             settler_cap_id,
             registry_id,
             inbox_id,
+            exit_queue_id,
             upgrade_cap_id,
             ops_cap_id,
         })

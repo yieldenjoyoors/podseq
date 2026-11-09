@@ -216,4 +216,23 @@ fn main() {
     let (root, proofs) = build_trie(&multi, &[5, 3]);
     print_fixture("MULTI", &multi, 5, root, &proofs[0]);
     print_fixture("MULTI_ZERO", &multi, 3, root, &proofs[1]);
+
+    // REPLACE: the same address as SINGLE at a later state (nonce 2, balance
+    // 500), over two accounts. An exit request carrying this proof at a later
+    // settled height must not regress a claim already made at the earlier
+    // height, so the request tests need both proofs for one address.
+    let replace = vec![
+        Account {
+            address: Address::from_word(keccak256(b"single")),
+            nonce: 2,
+            balance: U256::from(500u64),
+        },
+        Account {
+            address: Address::from_word(keccak256(b"replace-filler")),
+            nonce: 0,
+            balance: U256::from(1u64),
+        },
+    ];
+    let (root, proofs) = build_trie(&replace, &[0]);
+    print_fixture("REPLACE", &replace, 0, root, &proofs[0]);
 }

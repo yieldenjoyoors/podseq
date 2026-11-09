@@ -76,7 +76,10 @@ committed in the blob, which makes the mismatch an attributable equivocation.
 The anchored root is the proof anchor for balance proofs (see
 [exit queue](./exit-queue.md)): `exit_queue::verify_account` verifies an L2
 balance against the root committed at the height whose state included it,
-without executing blocks.
+without executing blocks. The escape path itself unlocks on the inbox-derived
+halt (`exit_queue::halt_expired_deadline`) and records proven balances in the
+shared exit queue (`exit_queue::request_exit`, ordered by `(height, seq)`);
+the deploy ceremony creates the queue alongside the inbox.
 
 ## Access control
 
