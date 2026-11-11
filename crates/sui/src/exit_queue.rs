@@ -12,6 +12,8 @@
 //!
 //! Docs: `docs/src/exit-queue.md`.
 
+use alloy_primitives::keccak256;
+use k256::ecdsa::SigningKey;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_sdk_types::Address;
 use sui_sdk_types::TypeTag;
@@ -69,6 +71,49 @@ pub fn exit_payload(address: [u8; 20], amount_be: [u8; 32], recipient: Address) 
     payload.extend_from_slice(&amount_be);
     payload.extend_from_slice(recipient.as_ref());
     payload
+}
+
+/// The EIP-191 personal-sign preimage for `payload`: the 25-byte header
+/// (`\x19Ethereum Signed Message:\n` ‖ decimal ASCII length) followed by the
+/// payload — the byte string a wallet hashes into `personal_sign`.
+fn eip191_preimage(payload: &[u8]) -> Vec<u8> {
+    let mut out = b"\x19Ethereum Signed Message:\n".to_vec();
+    out.extend_from_slice(payload.len().to_string().as_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+/// The Ethereum address behind an L2 key: the last 20 bytes of
+/// `keccak256(X ‖ Y)` over the uncompressed public key — the same derivation
+/// the Move module redoes when it verifies a redemption signature.
+pub fn eth_address(key: &SigningKey) -> [u8; 20] {
+    let point = key.verifying_key().to_encoded_point(false);
+    let digest = keccak256(&point.as_bytes()[1..]);
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&digest[12..]);
+    out
+}
+
+/// Signs [`exit_payload`] the way wallets sign with `personal_sign`: EIP-191
+/// over the 99-byte payload, hashed with keccak256, ECDSA secp256k1, and a
+/// 65-byte `(r, s, v)` whose v byte is the Ethereum encoding (27 + recovery
+/// id; the Move module normalizes both forms). Returns the payload that was
+/// signed alongside the signature, so callers bind what they broadcast.
+pub fn sign_exit_payload(
+    key: &SigningKey,
+    address: [u8; 20],
+    amount_be: [u8; 32],
+    recipient: Address,
+) -> Result<(Vec<u8>, [u8; 65]), SettlementError> {
+    let payload = exit_payload(address, amount_be, recipient);
+    let digest = keccak256(eip191_preimage(&payload));
+    let (signature, recid) = key
+        .sign_prehash_recoverable(digest.as_slice())
+        .map_err(|e| SettlementError::Signing(format!("secp256k1 signing failed: {e}")))?;
+    let mut out = [0u8; 65];
+    out[..64].copy_from_slice(&signature.to_bytes());
+    out[64] = 27 + recid.to_byte();
+    Ok((payload, out))
 }
 
 /// Appends `exit_queue::request_exit` to `builder`.
@@ -223,6 +268,59 @@ pub async fn submit_redeem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use alloy_primitives::keccak256;
+    use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
+
+    /// Mirrors the Move module's `recover_eth_address`: normalize the v byte,
+    /// recover from keccak256 over the EIP-191 preimage, and take the last 20
+    /// bytes of keccak256(X ‖ Y). The owner-side signer must produce exactly
+    /// what this recovery accepts — the live bench redeem depends on it.
+    fn recovered_address(signature: &[u8; 65], payload: &[u8]) -> [u8; 20] {
+        let preimage = eip191_preimage(payload);
+        let digest = keccak256(&preimage);
+        let v = signature[64];
+        let normalized = if v >= 27 { v - 27 } else { v };
+        let recid = RecoveryId::from_byte(normalized).expect("normalized v is 0..4");
+        let mut rs = [0u8; 64];
+        rs.copy_from_slice(&signature[..64]);
+        let sig = Signature::from_slice(&rs).expect("r ‖ s parses");
+        let recovered = VerifyingKey::recover_from_prehash(digest.as_slice(), &sig, recid)
+            .expect("recovers under the module's conventions");
+        let point = recovered.to_encoded_point(false);
+        let addr_digest = keccak256(&point.as_bytes()[1..]);
+        let mut out = [0u8; 20];
+        out.copy_from_slice(&addr_digest[12..]);
+        out
+    }
+
+    #[test]
+    fn sign_exit_payload_recovers_the_owner_like_the_module() {
+        let key = SigningKey::from_slice(&[0x42; 32]).expect("valid scalar");
+        let owner = eth_address(&key);
+        let mut amount_be = [0u8; 32];
+        amount_be[31] = 200;
+        let recipient = Address::new([0xEE; 32]);
+
+        let (payload, signature) =
+            sign_exit_payload(&key, owner, amount_be, recipient).expect("signs");
+
+        // The signature is 65 bytes with the Ethereum v encoding the module
+        // normalizes (27/28 → recovery id 0/1).
+        assert_eq!(signature.len(), 65);
+        assert!(
+            (27..=28).contains(&signature[64]),
+            "v byte {} is not the Ethereum encoding",
+            signature[64]
+        );
+
+        // The signed payload is the canonical one, and the module's recovery
+        // lands on the owner address the payload names.
+        let mut amount_be_again = [0u8; 32];
+        amount_be_again[31] = 200;
+        assert_eq!(payload, exit_payload(owner, amount_be_again, recipient));
+        assert_eq!(recovered_address(&signature, &payload), owner);
+    }
 
     #[test]
     fn request_exit_append_records_without_a_network_round_trip() {

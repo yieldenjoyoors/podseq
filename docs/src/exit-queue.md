@@ -13,8 +13,7 @@ without the sequencer.
 ## Status
 
 The proof anchor, the balance verifier, the unlock condition, the request
-record, and redemption are implemented. A live gas measurement of the proof
-walk is not.
+record, redemption, and the live gas measurement are implemented.
 
 Implemented: `settlement::commit_state_root` anchors each settled block's
 state root in the Registry (see below); `exit_queue::verify_account` verifies
@@ -182,13 +181,37 @@ drained (the censoring-sequencer-drains-first residual risk). And the
 remainder must fit the vault's u64 coin amounts (`E_AMOUNT` otherwise):
 balances above that cannot arise from deposits made through this bridge.
 
-Open: the gas number. Sui's gas model has no offline estimate, so the
-walk's cost and the redemption path's (two `ecrecover`-adjacent natives per
-signature check) are unmeasured until a testnet publish runs the full
-`request_exit` → `redeem` → `escape_release` sequence against real proofs —
-the same bench the rotation ceremony used. The loops are bounded by the
-proof length, so nothing is unbounded, but the MIST number is the evidence
-the gas question needs, and it is the next slice.
+Measured, not estimated: a testnet publish ran the full
+`request_exit` → `redeem` → `escape_release` sequence against real proofs
+(the same bench the rotation ceremony used; `crates/sui/examples/exit_gas_bench.rs`).
+Net MIST per step (computation + storage − rebate), testnet epoch 1279,
+accumulator gas:
+
+| step | net MIST | note |
+| --------------------------------- | ---------: | ------------------------------------------ |
+| settle + anchor (per height)      | 4,549,545  | `settle_as` + `commit_state_root`, one PTB |
+| deposit into the vault reserve    | 6,479,831  | coin split + `bridge::deposit`             |
+| narrow the window to the floor    | 2,786,499  | `request_window_change`, OpsCap-steered    |
+| submit the forced transaction     | 2,877,376  | `inbox::submit`                            |
+| `request_exit`, 1-node proof      | 1,000,170  | idempotent re-record: computation only     |
+| `request_exit`, 2-node proof      | 3,606,970  | new record: the storage deposit dominates  |
+| `redeem` + `escape_release`       | 1,988,949  | `ecrecover` + reserve split + payout       |
+| replayed redemption (aborts 17)   | 1,000,401  | the advanced `paid` counter rejects        |
+
+Computation sits at the 1,000,000 MIST floor in every row: under the
+accumulator gas model testnet charges with a computation floor, so the
+proof walk (keccak + RLP per node, loops bounded by the proof length) does
+not surface above it at these depths — what varies between the two
+`request_exit` rows is the storage deposit for a new queue record, most of
+which is rebated at redemption. The redemption row is the whole path's
+owner-side cost — one `ecrecover`-adjacent native, the record update, and
+the vault split — about half the settle+anchor cost (≈0.002 SUI). The
+closed-gate rejection was observed live as an
+`E_NOT_HALTED` abort (code 12) in `exit_queue::request_exit` while the
+oldest pending transaction sat inside its window-plus-margin, and the
+verdict opened on schedule past the margin; a replayed redemption aborts
+`E_NOTHING_TO_REDEEM` (17) exactly when `paid` reaches the recorded
+balance.
 
 ## The unlock condition
 

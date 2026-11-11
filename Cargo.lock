@@ -4390,6 +4390,7 @@ dependencies = [
  "base64 0.23.1",
  "bcs 0.2.1",
  "futures",
+ "k256",
  "podseq-core",
  "reqwest 0.12.28",
  "serde",
