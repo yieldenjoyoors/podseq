@@ -19,16 +19,18 @@ simple while making the chain trust-minimized and developer-friendly.
 
 ## Phase 2: Trust Minimization
 
-- [ ] **Force inclusion**: a Sui-side inbox where users submit L2 transactions
+- [x] **Force inclusion**: a Sui-side inbox where users submit L2 transactions
       directly. The sequencer must include them within N blocks or halt. Gives every
-      user an escape hatch from censorship.
-- [ ] **Exit queue**: withdrawals are ordered by L2 block height so the
-      sequencer cannot reorder exits to front-run users. If the sequencer stops
-      processing the queue for > T seconds, any user can submit a Merkle proof of
-      their L2 balance to the Sui bridge and exit without the sequencer.
-- [ ] **Sequencer failure detection**: full nodes monitor settlement height
-      and exit queue liveness. If the sequencer stalls, an alert fires and the
-      forced exit path unlocks.
+      user an escape hatch from censorship. See [force inclusion](./force-inclusion.md).
+- [x] **Exit queue**: if the sequencer halts or censors, any user can submit a
+      Merkle proof of their L2 balance to the Sui bridge and exit without the
+      sequencer, paying out with an owner-signed redemption. Records are ordered
+      by `(height, seq)`; payouts are first-come in Sui transaction order.
+      See [exit queue](./exit-queue.md).
+- [x] **Sequencer failure detection**: full nodes verify the force-inclusion
+      deadline from Sui state alone, halt locally on a violated gate, and export
+      the verdict plus settlement lag as metrics with example alert rules. See
+      [metrics](./metrics.md).
 
 ## Phase 3: Developer & User UX
 
@@ -49,6 +51,8 @@ simple while making the chain trust-minimized and developer-friendly.
       production (Engine API has its own port).
 - [ ] **Hot-swap settlement key**: rotate the `SettlerCap` / `BridgeCap`
       without downtime. The new key is pre-authorized on Sui; the node switches
-      on an admin signal.
+      on an admin signal. Landed in the protocol and node runtime — see
+      [cap rotation](./cap-rotation.md); the roadmap box stays open until the
+      steering ceremony is exercised on a live deployment.
 - [ ] **Automatic Sui gas top-up**: monitor the settlement key's Sui balance.
       If it drops below a threshold, transfer from a funded reserve address.

@@ -3,7 +3,8 @@
 //! Polls the Sui settlement Registry for finalized blobs, fetches each batch
 //! from Walrus, verifies the sequencer signature, and feeds blocks to Reth.
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::B256;
 use alloy_rpc_types_engine::ForkchoiceState;
@@ -18,6 +19,7 @@ use podseq_sui::{
     Client as SuiClient,
 };
 
+use crate::metrics::PodseqMetrics;
 use crate::store::StateStore;
 use std::str::FromStr;
 use tokio::signal;
@@ -55,6 +57,10 @@ pub struct FullNode {
     /// reader it is fed from. `None` when `p2p.registry_admission` is off
     /// or the package/registry ids are not configured.
     admission: Option<(AdmissionHandle, PeerBookReader<SuiInboxTransport>)>,
+    /// Shared Prometheus instruments. Gauges are written even when the
+    /// `[metrics]` endpoint is disabled, so a later scrape config change
+    /// finds live values.
+    metrics: Arc<PodseqMetrics>,
 }
 
 impl FullNode {
@@ -65,6 +71,7 @@ impl FullNode {
         config: &Config,
         p2p_receiver: Option<BlockReceiver>,
         admission_handle: Option<AdmissionHandle>,
+        metrics: Arc<PodseqMetrics>,
     ) -> Result<Self> {
         crate::store::init(&config.data_dir)
             .with_context(|| format!("initializing storage under {}", config.data_dir.display()))?;
@@ -148,6 +155,7 @@ impl FullNode {
             deadline,
             halt_gate: HaltGate::default(),
             admission,
+            metrics,
         })
     }
 
@@ -194,7 +202,9 @@ impl FullNode {
             tokio::select! {
                 _ = ticker.tick() => {
                     if let Some(monitor) = &self.deadline {
-                        if self.halt_gate.update(monitor.status().await) {
+                        let outcome = monitor.status().await;
+                        record_deadline(&self.metrics, &outcome, unix_now_ms());
+                        if self.halt_gate.update(outcome) {
                             continue;
                         }
                     }
@@ -218,6 +228,10 @@ impl FullNode {
     async fn sync_from_settlement(&mut self) -> Result<()> {
         let latest =
             podseq_sui::settlement::latest_height(&self.rpc_url, &self.registry_id).await?;
+        // Written before the up-to-date early return: the settled height is
+        // the settled height whether or not new blocks were waiting, and an
+        // alert wants to see it stop advancing.
+        self.metrics.settlement_height.set(latest as i64);
 
         if latest <= self.synced_height {
             return Ok(());
@@ -347,6 +361,7 @@ impl FullNode {
 
         self.head = block_hash;
         self.head_height = block.header.height;
+        self.metrics.block_height.set(block.header.height as i64);
 
         let fc_state = ForkchoiceState {
             head_block_hash: self.head,
@@ -598,6 +613,53 @@ fn build_admission(
         package,
     );
     Some((handle, reader))
+}
+
+/// Prometheus enum code for one deadline-status read, written to
+/// `podseq_deadline_status`. 0 (the gauge's zero value) means deadline
+/// verification is disabled (no `sui.inbox_id`).
+fn deadline_status_code(read: &Result<DeadlineStatus, DeadlineError>) -> i64 {
+    match read {
+        Ok(DeadlineStatus::Active) => 1,
+        Ok(DeadlineStatus::Halted { .. }) => 2,
+        Ok(DeadlineStatus::Violated { .. }) => 3,
+        Err(_) => 4,
+    }
+}
+
+/// Seconds the oldest pending forced transaction is past its deadline at
+/// `now_ms`, floored from milliseconds; 0 unless the read is a halt or
+/// violation (an active chain has nothing overdue, and a failed read has no
+/// depth to report).
+fn deadline_overdue_seconds(read: &Result<DeadlineStatus, DeadlineError>, now_ms: u64) -> i64 {
+    let deadline_ms = match read {
+        Ok(DeadlineStatus::Halted { deadline_ms, .. })
+        | Ok(DeadlineStatus::Violated { deadline_ms, .. }) => *deadline_ms,
+        _ => return 0,
+    };
+    (now_ms.saturating_sub(deadline_ms) / 1_000) as i64
+}
+
+/// Writes the deadline gauges for one poll. Wall-clock time is fine here:
+/// the gauge feeds alerts, not consensus — the Sui Clock remains the only
+/// deadline authority.
+fn record_deadline(
+    metrics: &PodseqMetrics,
+    read: &Result<DeadlineStatus, DeadlineError>,
+    now_ms: u64,
+) {
+    metrics.deadline_status.set(deadline_status_code(read));
+    metrics
+        .deadline_overdue_seconds
+        .set(deadline_overdue_seconds(read, now_ms));
+}
+
+/// Wall-clock milliseconds since the Unix epoch.
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_millis() as u64
 }
 
 /// Turns deadline-status reads into a pause decision for the sync loop.
@@ -939,5 +1001,118 @@ mod deadline_monitor_tests {
         let config = config_with(Some("not-an-address"));
 
         assert!(build_deadline_monitor(&config).is_none());
+    }
+}
+
+#[cfg(test)]
+mod halt_metrics_tests {
+    use super::*;
+
+    use podseq_sui::deadline::DeadlineError;
+    use podseq_sui::inbox::InboxError;
+    use prometheus_client::encoding::text::encode;
+
+    fn active() -> Result<DeadlineStatus, DeadlineError> {
+        Ok(DeadlineStatus::Active)
+    }
+
+    fn halted(deadline_ms: u64) -> Result<DeadlineStatus, DeadlineError> {
+        Ok(DeadlineStatus::Halted {
+            nonce: 3,
+            deadline_ms,
+        })
+    }
+
+    fn violated(deadline_ms: u64, settled_ts_ms: u64) -> Result<DeadlineStatus, DeadlineError> {
+        Ok(DeadlineStatus::Violated {
+            nonce: 3,
+            deadline_ms,
+            settled_ts_ms,
+        })
+    }
+
+    fn broken() -> Result<DeadlineStatus, DeadlineError> {
+        Err(DeadlineError::Inbox(InboxError::Parse("bad".into())))
+    }
+
+    #[test]
+    fn active_reads_code_one() {
+        assert_eq!(deadline_status_code(&active()), 1);
+    }
+
+    #[test]
+    fn halted_reads_code_two() {
+        assert_eq!(deadline_status_code(&halted(1_000)), 2);
+    }
+
+    #[test]
+    fn violated_reads_code_three() {
+        assert_eq!(deadline_status_code(&violated(1_000, 2_000)), 3);
+    }
+
+    #[test]
+    fn read_errors_code_four() {
+        assert_eq!(deadline_status_code(&broken()), 4);
+    }
+
+    #[test]
+    fn disabled_verification_leaves_the_gauge_at_zero() {
+        // The gauge's zero value is the documented "disabled" state.
+        let m = PodseqMetrics::new();
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+        assert!(buffer.contains("podseq_deadline_status 0"));
+    }
+
+    #[test]
+    fn overdue_seconds_floor_from_milliseconds() {
+        // 2.5 s past the deadline reads as 2 overdue seconds.
+        assert_eq!(deadline_overdue_seconds(&halted(8_000), 10_500), 2);
+    }
+
+    #[test]
+    fn overdue_is_zero_at_the_deadline() {
+        assert_eq!(deadline_overdue_seconds(&halted(10_000), 10_000), 0);
+    }
+
+    #[test]
+    fn overdue_is_zero_when_the_deadline_is_in_the_future() {
+        assert_eq!(deadline_overdue_seconds(&violated(10_000, 1_000), 9_999), 0);
+    }
+
+    #[test]
+    fn active_and_error_reads_have_no_overdue_depth() {
+        assert_eq!(deadline_overdue_seconds(&active(), 99_000), 0);
+        assert_eq!(deadline_overdue_seconds(&broken(), 99_000), 0);
+    }
+
+    #[test]
+    fn recording_writes_status_and_overdue_gauges() {
+        let m = PodseqMetrics::new();
+
+        record_deadline(&m, &halted(2_500), 5_000);
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+        assert!(buffer.contains("podseq_deadline_status 2"));
+        assert!(buffer.contains("podseq_deadline_overdue_seconds 2"));
+
+        // A later active read rewrites both: the halt is over and the
+        // overdue depth is back to zero.
+        record_deadline(&m, &active(), 5_000);
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+        assert!(buffer.contains("podseq_deadline_status 1"));
+        assert!(buffer.contains("podseq_deadline_overdue_seconds 0"));
+    }
+
+    #[test]
+    fn recording_an_error_keeps_the_status_visible() {
+        let m = PodseqMetrics::new();
+
+        record_deadline(&m, &broken(), 5_000);
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+        assert!(buffer.contains("podseq_deadline_status 4"));
+        assert!(buffer.contains("podseq_deadline_overdue_seconds 0"));
     }
 }

@@ -667,6 +667,7 @@ pub async fn settle_with_gate(
                     metrics
                         .settlement_duration
                         .observe(started.elapsed().as_secs_f64());
+                    metrics.settlement_height.set(height as i64);
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),

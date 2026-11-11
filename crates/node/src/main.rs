@@ -623,7 +623,14 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
     })
     .context("building Sui-layer client")?;
 
-    let node = full_node::FullNode::new(engine, sui_client, &config, receiver, admission_handle)?;
+    let node = full_node::FullNode::new(
+        engine,
+        sui_client,
+        &config,
+        receiver,
+        admission_handle,
+        podseq_metrics,
+    )?;
     info!("starting full node sync (Ctrl+C to stop)");
     let result = node.run().await;
 

@@ -50,6 +50,15 @@ pub struct PodseqMetrics {
     pub bridge_withdrawals_total: Counter,
     /// Canonical L2 tokens created through the factory by this relayer.
     pub bridge_tokens_created_total: Counter,
+    /// Force-inclusion deadline verdict a full node last read from Sui:
+    /// 0 disabled, 1 active, 2 halted, 3 violated, 4 read error.
+    pub deadline_status: Gauge,
+    /// Seconds the oldest pending forced transaction is past its deadline;
+    /// 0 unless the verdict is halted or violated.
+    pub deadline_overdue_seconds: Gauge,
+    /// Latest block height settled on Sui (read per sync poll on full nodes,
+    /// per settle on the sequencer).
+    pub settlement_height: Gauge,
 }
 
 impl PodseqMetrics {
@@ -134,6 +143,28 @@ impl PodseqMetrics {
             bridge_tokens_created_total.clone(),
         );
 
+        let deadline_status = Gauge::default();
+        registry.register(
+            "podseq_deadline_status",
+            "Force-inclusion deadline verdict: 0 disabled, 1 active, 2 halted, \
+             3 violated, 4 read error",
+            deadline_status.clone(),
+        );
+
+        let deadline_overdue_seconds = Gauge::default();
+        registry.register(
+            "podseq_deadline_overdue_seconds",
+            "Seconds the oldest pending forced transaction is past its deadline",
+            deadline_overdue_seconds.clone(),
+        );
+
+        let settlement_height = Gauge::default();
+        registry.register(
+            "podseq_settlement_height",
+            "Latest block height settled on Sui",
+            settlement_height.clone(),
+        );
+
         Self {
             registry,
             block_height,
@@ -147,6 +178,9 @@ impl PodseqMetrics {
             bridge_deposits_total,
             bridge_withdrawals_total,
             bridge_tokens_created_total,
+            deadline_status,
+            deadline_overdue_seconds,
+            settlement_height,
         }
     }
 }
@@ -277,5 +311,17 @@ mod tests {
     fn default_creates_usable_instance() {
         let m = PodseqMetrics::default();
         m.block_height.set(1);
+    }
+
+    #[test]
+    fn full_node_gauges_are_registered() {
+        let m = PodseqMetrics::new();
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+
+        assert!(buffer.contains("# TYPE podseq_deadline_status gauge"));
+        assert!(buffer.contains("# TYPE podseq_deadline_overdue_seconds gauge"));
+        assert!(buffer.contains("# TYPE podseq_settlement_height gauge"));
     }
 }
