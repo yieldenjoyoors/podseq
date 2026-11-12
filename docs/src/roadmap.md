@@ -54,5 +54,7 @@ simple while making the chain trust-minimized and developer-friendly.
       on an admin signal. Landed in the protocol and node runtime — see
       [cap rotation](./cap-rotation.md); the roadmap box stays open until the
       steering ceremony is exercised on a live deployment.
-- [ ] **Automatic Sui gas top-up**: monitor the settlement key's Sui balance.
+- [x] **Automatic Sui gas top-up**: monitor the settlement key's Sui balance.
       If it drops below a threshold, transfer from a funded reserve address.
+      Landed in the node's gas watcher — see
+      [metrics](./metrics.md#keeping-the-settlement-key-funded).

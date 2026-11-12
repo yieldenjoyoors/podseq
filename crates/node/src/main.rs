@@ -5,6 +5,7 @@
 mod bridge;
 mod config;
 mod full_node;
+mod gas;
 mod inbox;
 mod keyring;
 mod mcp;
@@ -215,28 +216,6 @@ async fn shutdown_metrics(
     shutdown.notify_waiters();
     if let Some(handle) = handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
-    }
-}
-
-/// Polls the settlement key's SUI balance every 15 min and updates the gauge.
-/// Runs until `shutdown` is notified.
-async fn refresh_sui_gas_balance(
-    metrics: Arc<metrics::PodseqMetrics>,
-    sui: podseq_sui::Client,
-    shutdown: Arc<tokio::sync::Notify>,
-) {
-    loop {
-        match sui.sui_balance().await {
-            Ok(Some(mist)) => {
-                metrics.sui_gas_balance.set(mist as i64);
-            }
-            Ok(None) => break, // no settlement signer attached
-            Err(e) => warn!(error = %e, "failed to refresh SUI gas balance"),
-        }
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(900)) => {},
-            _ = shutdown.notified() => break,
-        }
     }
 }
 
@@ -467,12 +446,16 @@ async fn start_sequencer(
         .context("settlement address snapshot missing after attach")?;
     let rotation_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Refresh the SUI gas balance gauge periodically.
+    // Gas watcher: balance gauges every cycle, and a reserve-funded top-up
+    // when sui.reserve_key_path is configured.
     {
-        let metrics = Arc::clone(&podseq_metrics);
-        let sui = sui_client.clone();
         let shutdown = Arc::clone(&metrics_shutdown);
-        tokio::spawn(refresh_sui_gas_balance(metrics, sui, shutdown));
+        gas::spawn(
+            &config,
+            sui_client.clone(),
+            Arc::clone(&podseq_metrics),
+            shutdown,
+        );
     }
 
     let genesis_hash = config

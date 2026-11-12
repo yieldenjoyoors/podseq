@@ -175,6 +175,34 @@ pub struct SuiConfig {
     /// the whole settle PTB.
     #[serde(default = "default_true")]
     pub commit_state_roots: bool,
+    /// Path to the funded reserve key (suiprivkey) that tops up the
+    /// settlement key's gas. Unset keeps the balance gauges but never moves
+    /// coins.
+    #[serde(default)]
+    pub reserve_key_path: Option<PathBuf>,
+    /// Top up once the settlement key's balance falls strictly below this
+    /// (mist).
+    #[serde(default = "default_gas_min_balance")]
+    pub gas_min_balance_mist: u64,
+    /// Amount moved per top-up (mist).
+    #[serde(default = "default_gas_topup_amount")]
+    pub gas_topup_amount_mist: u64,
+    /// The reserve never dips below this (mist): a dose that would
+    /// undercut the floor is refused.
+    #[serde(default = "default_gas_reserve_floor")]
+    pub gas_reserve_floor_mist: u64,
+}
+
+fn default_gas_min_balance() -> u64 {
+    podseq_sui::gas::TopUpPolicy::default().min_balance_mist
+}
+
+fn default_gas_topup_amount() -> u64 {
+    podseq_sui::gas::TopUpPolicy::default().topup_amount_mist
+}
+
+fn default_gas_reserve_floor() -> u64 {
+    podseq_sui::gas::TopUpPolicy::default().reserve_floor_mist
 }
 
 fn default_sui_rpc() -> String {
@@ -200,6 +228,10 @@ impl Default for SuiConfig {
             inbox_id: None,
             rotation_key_path: None,
             commit_state_roots: true,
+            reserve_key_path: None,
+            gas_min_balance_mist: default_gas_min_balance(),
+            gas_topup_amount_mist: default_gas_topup_amount(),
+            gas_reserve_floor_mist: default_gas_reserve_floor(),
         }
     }
 }
@@ -495,6 +527,31 @@ key_path = "sequencer.key"
         )
         .unwrap();
         assert!(!config.sui.commit_state_roots);
+    }
+
+    #[test]
+    fn gas_topup_fields_default_to_the_policy_defaults() {
+        let config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        let policy = podseq_sui::gas::TopUpPolicy::default();
+        assert_eq!(config.sui.reserve_key_path, None);
+        assert_eq!(config.sui.gas_min_balance_mist, policy.min_balance_mist);
+        assert_eq!(config.sui.gas_topup_amount_mist, policy.topup_amount_mist);
+        assert_eq!(config.sui.gas_reserve_floor_mist, policy.reserve_floor_mist);
+    }
+
+    #[test]
+    fn gas_topup_fields_parse_from_toml() {
+        let config = Config::from_str(
+            "[reth]\njwt_path = \"jwt.hex\"\n\n[sui]\nreserve_key_path = \"reserve.key\"\ngas_min_balance_mist = 1000\ngas_topup_amount_mist = 2000\ngas_reserve_floor_mist = 500\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.sui.reserve_key_path,
+            Some(PathBuf::from("reserve.key"))
+        );
+        assert_eq!(config.sui.gas_min_balance_mist, 1000);
+        assert_eq!(config.sui.gas_topup_amount_mist, 2000);
+        assert_eq!(config.sui.gas_reserve_floor_mist, 500);
     }
 
     #[test]

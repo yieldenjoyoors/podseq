@@ -59,6 +59,10 @@ pub struct PodseqMetrics {
     /// Latest block height settled on Sui (read per sync poll on full nodes,
     /// per settle on the sequencer).
     pub settlement_height: Gauge,
+    /// The gas reserve's SUI balance in mist (0 until the first read).
+    pub reserve_sui_balance: Gauge,
+    /// Completed settlement-key gas top-ups.
+    pub gas_topups_total: Counter,
 }
 
 impl PodseqMetrics {
@@ -165,6 +169,20 @@ impl PodseqMetrics {
             settlement_height.clone(),
         );
 
+        let reserve_sui_balance = Gauge::default();
+        registry.register(
+            "podseq_reserve_sui_balance_mist",
+            "The gas reserve's SUI balance in mist",
+            reserve_sui_balance.clone(),
+        );
+
+        let gas_topups_total = Counter::default();
+        registry.register(
+            "podseq_gas_topups_total",
+            "Completed settlement-key gas top-ups",
+            gas_topups_total.clone(),
+        );
+
         Self {
             registry,
             block_height,
@@ -181,6 +199,8 @@ impl PodseqMetrics {
             deadline_status,
             deadline_overdue_seconds,
             settlement_height,
+            reserve_sui_balance,
+            gas_topups_total,
         }
     }
 }
@@ -323,5 +343,16 @@ mod tests {
         assert!(buffer.contains("# TYPE podseq_deadline_status gauge"));
         assert!(buffer.contains("# TYPE podseq_deadline_overdue_seconds gauge"));
         assert!(buffer.contains("# TYPE podseq_settlement_height gauge"));
+    }
+
+    #[test]
+    fn gas_topup_instruments_are_registered() {
+        let m = PodseqMetrics::new();
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+
+        assert!(buffer.contains("# TYPE podseq_reserve_sui_balance_mist gauge"));
+        assert!(buffer.contains("# TYPE podseq_gas_topups_total counter"));
     }
 }
