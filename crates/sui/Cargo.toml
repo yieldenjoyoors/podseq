@@ -20,7 +20,7 @@ serde_json.workspace = true
 bcs = "0.2"
 base64.workspace = true
 alloy-primitives.workspace = true
-k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+k256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
