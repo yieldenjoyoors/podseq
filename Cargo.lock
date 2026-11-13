@@ -4272,6 +4272,7 @@ dependencies = [
  "alloy-signer-local",
  "alloy-sol-types",
  "anyhow",
+ "axum",
  "bcs 0.2.1",
  "clap",
  "commonware-cryptography",

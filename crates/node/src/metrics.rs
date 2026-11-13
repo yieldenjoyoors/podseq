@@ -63,6 +63,12 @@ pub struct PodseqMetrics {
     pub reserve_sui_balance: Gauge,
     /// Completed settlement-key gas top-ups.
     pub gas_topups_total: Counter,
+    /// JSON-RPC requests forwarded by the RPC proxy to the upstream.
+    pub rpc_proxy_requests_total: Counter,
+    /// JSON-RPC requests rejected by the RPC proxy's rate limit (HTTP 429).
+    pub rpc_proxy_limited_total: Counter,
+    /// Upstream round-trip latency for proxied JSON-RPC requests.
+    pub rpc_proxy_request_duration: Histogram,
 }
 
 impl PodseqMetrics {
@@ -183,6 +189,27 @@ impl PodseqMetrics {
             gas_topups_total.clone(),
         );
 
+        let rpc_proxy_requests_total = Counter::default();
+        registry.register(
+            "podseq_rpc_proxy_requests",
+            "JSON-RPC requests forwarded by the RPC proxy",
+            rpc_proxy_requests_total.clone(),
+        );
+
+        let rpc_proxy_limited_total = Counter::default();
+        registry.register(
+            "podseq_rpc_proxy_limited",
+            "JSON-RPC requests rejected by the RPC proxy rate limit",
+            rpc_proxy_limited_total.clone(),
+        );
+
+        let rpc_proxy_request_duration = Histogram::new(exponential_buckets(0.001, 2.0, 13));
+        registry.register(
+            "podseq_rpc_proxy_request_duration_seconds",
+            "Upstream round-trip latency for proxied JSON-RPC requests",
+            rpc_proxy_request_duration.clone(),
+        );
+
         Self {
             registry,
             block_height,
@@ -201,6 +228,9 @@ impl PodseqMetrics {
             settlement_height,
             reserve_sui_balance,
             gas_topups_total,
+            rpc_proxy_requests_total,
+            rpc_proxy_limited_total,
+            rpc_proxy_request_duration,
         }
     }
 }

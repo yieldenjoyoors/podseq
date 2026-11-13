@@ -129,6 +129,38 @@ address and public key in a banner:
 Copy the `sequencer pubkey` value into the `signer.sequencer_pubkey` field of any
 full node that should verify this sequencer's blocks.
 
+## Rate limiting the public RPC
+
+Reth serves the public JSON-RPC on port 8545 and the JWT-authenticated Engine
+API on 8551. The node ships a rate-limiting proxy that sits in front of the
+public port: it forwards POST requests to Reth on loopback and caps each client
+IP with a token bucket (default 10 requests/s sustained, burst of 25). Over
+budget requests get `429` with a `Retry-After` header. Bodies over
+`max_body_bytes` get `413` without touching Reth, and once `max_in_flight`
+upstream calls are in progress further requests get `503` until Reth drains.
+
+Enable it in the config:
+
+```toml
+[rpc_proxy]
+enabled = true
+listen_addr = "0.0.0.0:18545"
+upstream = "http://127.0.0.1:8545"
+# requests_per_second = 10.0
+# burst = 25
+# max_body_bytes = 1048576
+# max_in_flight = 256
+# trusted_proxies = []   # LB IPs whose X-Forwarded-For is believed
+```
+
+Point users at port 18545 and keep Reth's 8545 bound to loopback. Behind a
+load balancer, add its IP to `trusted_proxies`: the proxy only reads
+`X-Forwarded-For` from peers on that list, so a direct client cannot choose its
+own bucket by forging the header. The counters are on the metrics endpoint
+(`podseq_rpc_proxy_requests_total`, `podseq_rpc_proxy_limited_total`); a
+limited counter that climbs under normal traffic means the defaults are too
+tight.
+
 ## Full node
 
 A full node reconstructs the chain from DA + settlement, verifies every block

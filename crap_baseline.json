@@ -1085,7 +1085,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "BridgeConfig::default",
-      "line": 338,
+      "line": 340,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1093,7 +1093,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::from_str",
-      "line": 440,
+      "line": 522,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1101,7 +1101,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::load",
-      "line": 433,
+      "line": 515,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -1109,7 +1109,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::save",
-      "line": 451,
+      "line": 533,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1117,7 +1117,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::testnet",
-      "line": 472,
+      "line": 554,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1125,7 +1125,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::to_toml",
-      "line": 445,
+      "line": 527,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1133,21 +1133,21 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "Config::write",
-      "line": 455,
+      "line": 537,
       "cyclomatic": 5.0,
       "coverage": 76.92307692307693,
       "crap": 5.3072371415566675,
       "uncovered": [
         {
-          "start": 461,
-          "end": 465
+          "start": 543,
+          "end": 547
         }
       ]
     },
     {
       "file": "./crates/node/src/config.rs",
       "function": "MetricsConfig::default",
-      "line": 391,
+      "line": 393,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1155,7 +1155,15 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "P2pConfig::default",
-      "line": 350,
+      "line": 352,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "RpcProxyConfig::default",
+      "line": 467,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1163,7 +1171,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "SequencerConfig::default",
-      "line": 422,
+      "line": 504,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1171,7 +1179,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "SignerConfig::default",
-      "line": 251,
+      "line": 253,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1179,7 +1187,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "SuiConfig::default",
-      "line": 221,
+      "line": 223,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1187,7 +1195,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "WalrusConfig::default",
-      "line": 130,
+      "line": 132,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1195,7 +1203,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_aggregator",
-      "line": 110,
+      "line": 112,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1203,7 +1211,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_batch_flush_ms",
-      "line": 125,
+      "line": 127,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1211,7 +1219,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_batch_size_bytes",
-      "line": 118,
+      "line": 120,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1219,7 +1227,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_block_time_ms",
-      "line": 413,
+      "line": 495,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1227,7 +1235,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_bridge_poll_ms",
-      "line": 329,
+      "line": 331,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1235,7 +1243,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_data_dir",
-      "line": 49,
+      "line": 51,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1243,7 +1251,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_engine_url",
-      "line": 74,
+      "line": 76,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1251,7 +1259,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_epochs",
-      "line": 114,
+      "line": 116,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1259,7 +1267,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_fee_recipient",
-      "line": 417,
+      "line": 499,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1267,7 +1275,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_gas_min_balance",
-      "line": 196,
+      "line": 198,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1275,7 +1283,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_gas_reserve_floor",
-      "line": 204,
+      "line": 206,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1283,7 +1291,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_gas_topup_amount",
-      "line": 200,
+      "line": 202,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1291,7 +1299,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_metrics_enabled",
-      "line": 382,
+      "line": 384,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1299,7 +1307,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_metrics_listen",
-      "line": 386,
+      "line": 388,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1307,7 +1315,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_mode",
-      "line": 53,
+      "line": 55,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1315,7 +1323,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_move_dir",
-      "line": 216,
+      "line": 218,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1323,21 +1331,21 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_p2p_advertise",
-      "line": 294,
+      "line": 296,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 294,
-          "end": 296
+          "start": 296,
+          "end": 298
         }
       ]
     },
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_p2p_key_path",
-      "line": 363,
+      "line": 365,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1345,7 +1353,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_p2p_listen",
-      "line": 367,
+      "line": 369,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1353,7 +1361,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_publisher",
-      "line": 106,
+      "line": 108,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1361,7 +1369,63 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_relayer_key_path",
-      "line": 333,
+      "line": 335,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_rpc_proxy_burst",
+      "line": 454,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_rpc_proxy_enabled",
+      "line": 438,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_rpc_proxy_listen",
+      "line": 442,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_rpc_proxy_max_body",
+      "line": 458,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_rpc_proxy_max_in_flight",
+      "line": 462,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_rpc_proxy_rate",
+      "line": 450,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/config.rs",
+      "function": "default_rpc_proxy_upstream",
+      "line": 446,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1369,7 +1433,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_rpc_url",
-      "line": 70,
+      "line": 72,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1377,7 +1441,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_signer_key_path",
-      "line": 259,
+      "line": 261,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1385,7 +1449,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_sui_rpc",
-      "line": 208,
+      "line": 210,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -1393,7 +1457,7 @@
     {
       "file": "./crates/node/src/config.rs",
       "function": "default_true",
-      "line": 212,
+      "line": 214,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -2041,172 +2105,200 @@
     {
       "file": "./crates/node/src/main.rs",
       "function": "advertise_targets",
-      "line": 224,
+      "line": 278,
       "cyclomatic": 7.0,
       "coverage": 78.04878048780488,
       "crap": 7.51828905558538,
       "uncovered": [
         {
-          "start": 250,
-          "end": 252
+          "start": 304,
+          "end": 306
         },
         {
-          "start": 262,
-          "end": 270
+          "start": 316,
+          "end": 324
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "build_p2p",
-      "line": 339,
+      "line": 393,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0,
       "uncovered": [
         {
-          "start": 339,
-          "end": 385
+          "start": 393,
+          "end": 439
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "full_node_p2p_parts",
-      "line": 570,
+      "line": 626,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 570,
-          "end": 584
+          "start": 626,
+          "end": 640
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "load_config",
-      "line": 175,
+      "line": 176,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 175,
-          "end": 180
+          "start": 176,
+          "end": 181
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "main",
-      "line": 88,
+      "line": 89,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 88,
-          "end": 97
+          "start": 89,
+          "end": 98
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "maybe_spawn_advertise",
-      "line": 319,
+      "line": 373,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 319,
-          "end": 336
+          "start": 373,
+          "end": 390
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "run",
-      "line": 101,
+      "line": 102,
       "cyclomatic": 30.0,
       "coverage": 0.0,
       "crap": 930.0,
       "uncovered": [
         {
-          "start": 101,
-          "end": 173
+          "start": 102,
+          "end": 174
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "shutdown_metrics",
-      "line": 212,
+      "line": 213,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 212,
-          "end": 220
+          "start": 213,
+          "end": 221
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/main.rs",
+      "function": "shutdown_rpc_proxy",
+      "line": 266,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "uncovered": [
+        {
+          "start": 266,
+          "end": 274
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "spawn_advertise",
-      "line": 285,
+      "line": 339,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
       "uncovered": [
         {
-          "start": 285,
-          "end": 315
+          "start": 339,
+          "end": 369
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "start_full_node",
-      "line": 586,
-      "cyclomatic": 7.0,
+      "line": 642,
+      "cyclomatic": 8.0,
       "coverage": 0.0,
-      "crap": 56.0,
+      "crap": 72.0,
       "uncovered": [
         {
-          "start": 586,
-          "end": 623
+          "start": 642,
+          "end": 681
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "start_metrics_endpoint",
-      "line": 187,
+      "line": 188,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
       "uncovered": [
         {
-          "start": 187,
-          "end": 209
+          "start": 188,
+          "end": 210
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/main.rs",
+      "function": "start_rpc_proxy",
+      "line": 227,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "uncovered": [
+        {
+          "start": 227,
+          "end": 263
         }
       ]
     },
     {
       "file": "./crates/node/src/main.rs",
       "function": "start_sequencer",
-      "line": 387,
-      "cyclomatic": 20.0,
+      "line": 441,
+      "cyclomatic": 21.0,
       "coverage": 0.0,
-      "crap": 420.0,
+      "crap": 462.0,
       "uncovered": [
         {
-          "start": 387,
-          "end": 566
+          "start": 441,
+          "end": 622
         }
       ]
     },
@@ -2561,7 +2653,7 @@
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "PodseqMetrics::default",
-      "line": 209,
+      "line": 239,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -2569,7 +2661,7 @@
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "PodseqMetrics::new",
-      "line": 70,
+      "line": 76,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -2577,28 +2669,28 @@
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "handle_connection",
-      "line": 256,
+      "line": 286,
       "cyclomatic": 8.0,
       "coverage": 0.0,
       "crap": 72.0,
       "uncovered": [
         {
-          "start": 256,
-          "end": 291
+          "start": 286,
+          "end": 321
         }
       ]
     },
     {
       "file": "./crates/node/src/metrics.rs",
       "function": "serve",
-      "line": 219,
+      "line": 249,
       "cyclomatic": 7.0,
       "coverage": 0.0,
       "crap": 56.0,
       "uncovered": [
         {
-          "start": 219,
-          "end": 254
+          "start": 249,
+          "end": 284
         }
       ]
     },
@@ -2781,6 +2873,150 @@
         {
           "start": 341,
           "end": 450
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "ProxyState::fmt",
+      "line": 215,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "uncovered": [
+        {
+          "start": 215,
+          "end": 221
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "ProxyState::new",
+      "line": 227,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "RateLimiter::check",
+      "line": 104,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "RateLimiter::len",
+      "line": 137,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "RateLimiter::new",
+      "line": 92,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "RateLimiter::sweep",
+      "line": 127,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "RateLimits::from_config",
+      "line": 183,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "TokenBucket::new",
+      "line": 44,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "TokenBucket::try_take",
+      "line": 55,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "build_router",
+      "line": 262,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "client_ip",
+      "line": 151,
+      "cyclomatic": 4.0,
+      "coverage": 93.33333333333333,
+      "crap": 4.004740740740741,
+      "uncovered": [
+        {
+          "start": 160,
+          "end": 160
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "handler",
+      "line": 335,
+      "cyclomatic": 12.0,
+      "coverage": 94.8051948051948,
+      "crap": 12.02018693062714,
+      "uncovered": [
+        {
+          "start": 444,
+          "end": 449
+        }
+      ]
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "json_error",
+      "line": 314,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "mono_now_ms",
+      "line": 23,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/node/src/rpc_proxy.rs",
+      "function": "serve",
+      "line": 274,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "uncovered": [
+        {
+          "start": 274,
+          "end": 312
         }
       ]
     },
@@ -6622,9 +6858,9 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 48,
-    "lcov_files": 39,
-    "matched_files": 38,
+    "analyzed_files": 49,
+    "lcov_files": 40,
+    "matched_files": 39,
     "source_only": {
       "count": 10,
       "examples": [

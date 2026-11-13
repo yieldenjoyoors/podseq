@@ -38,6 +38,8 @@ pub struct Config {
     pub p2p: P2pConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
+    #[serde(default)]
+    pub rpc_proxy: RpcProxyConfig,
     /// Directory for persistent chain state and blocks.
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
@@ -396,6 +398,86 @@ impl Default for MetricsConfig {
     }
 }
 
+/// Rate-limiting reverse proxy in front of Reth's public JSON-RPC.
+///
+/// The proxy listens on the public interface and forwards to the upstream
+/// (Reth on loopback) so untrusted traffic is bounded before it reaches the
+/// node. Block production is unaffected: the sequencer's Engine API drive
+/// uses Reth's separate JWT-authenticated port directly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RpcProxyConfig {
+    /// Expose the rate-limited public RPC proxy.
+    #[serde(default = "default_rpc_proxy_enabled")]
+    pub enabled: bool,
+    /// Address to bind the proxy (the publicly reachable one).
+    #[serde(default = "default_rpc_proxy_listen")]
+    pub listen_addr: String,
+    /// Upstream JSON-RPC URL to forward to (Reth on loopback).
+    #[serde(default = "default_rpc_proxy_upstream")]
+    pub upstream: String,
+    /// Sustained requests per second per client IP.
+    #[serde(default = "default_rpc_proxy_rate")]
+    pub requests_per_second: f64,
+    /// Bucket capacity: requests a fresh client can burst.
+    #[serde(default = "default_rpc_proxy_burst")]
+    pub burst: u32,
+    /// Largest accepted request body in bytes; larger bodies are rejected
+    /// with 413 before any upstream work.
+    #[serde(default = "default_rpc_proxy_max_body")]
+    pub max_body_bytes: usize,
+    /// Concurrent upstream requests the proxy will have in flight; beyond
+    /// it, new requests get 503 instead of queueing unboundedly.
+    #[serde(default = "default_rpc_proxy_max_in_flight")]
+    pub max_in_flight: usize,
+    /// Proxy hops whose `X-Forwarded-For` is believed. Empty means every
+    /// request's client is the direct peer address.
+    #[serde(default)]
+    pub trusted_proxies: Vec<std::net::IpAddr>,
+}
+
+fn default_rpc_proxy_enabled() -> bool {
+    false
+}
+
+fn default_rpc_proxy_listen() -> String {
+    "0.0.0.0:18545".into()
+}
+
+fn default_rpc_proxy_upstream() -> String {
+    "http://127.0.0.1:8545".into()
+}
+
+fn default_rpc_proxy_rate() -> f64 {
+    10.0
+}
+
+fn default_rpc_proxy_burst() -> u32 {
+    25
+}
+
+fn default_rpc_proxy_max_body() -> usize {
+    1024 * 1024
+}
+
+fn default_rpc_proxy_max_in_flight() -> usize {
+    256
+}
+
+impl Default for RpcProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_rpc_proxy_enabled(),
+            listen_addr: default_rpc_proxy_listen(),
+            upstream: default_rpc_proxy_upstream(),
+            requests_per_second: default_rpc_proxy_rate(),
+            burst: default_rpc_proxy_burst(),
+            max_body_bytes: default_rpc_proxy_max_body(),
+            max_in_flight: default_rpc_proxy_max_in_flight(),
+            trusted_proxies: Vec::new(),
+        }
+    }
+}
+
 /// Sequencer block-production settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
@@ -483,6 +565,7 @@ impl Config {
             bridge: BridgeConfig::default(),
             p2p: P2pConfig::default(),
             metrics: MetricsConfig::default(),
+            rpc_proxy: RpcProxyConfig::default(),
             data_dir: default_data_dir(),
             mode: default_mode(),
         }
@@ -646,6 +729,62 @@ listen_addr = "127.0.0.1:9100"
         let parsed = Config::from_str(&serialized).unwrap();
         assert_eq!(parsed.metrics.enabled, config.metrics.enabled);
         assert_eq!(parsed.metrics.listen_addr, config.metrics.listen_addr);
+    }
+
+    #[test]
+    fn rpc_proxy_defaults_when_missing() {
+        let config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        let proxy = &config.rpc_proxy;
+        assert!(!proxy.enabled);
+        assert_eq!(proxy.listen_addr, "0.0.0.0:18545");
+        assert_eq!(proxy.upstream, "http://127.0.0.1:8545");
+        assert_eq!(proxy.requests_per_second, 10.0);
+        assert_eq!(proxy.burst, 25);
+        assert_eq!(proxy.max_body_bytes, 1024 * 1024);
+        assert_eq!(proxy.max_in_flight, 256);
+        assert!(proxy.trusted_proxies.is_empty());
+    }
+
+    #[test]
+    fn parses_rpc_proxy_config() {
+        let toml = r#"
+[reth]
+jwt_path = "jwt.hex"
+
+[rpc_proxy]
+enabled = true
+listen_addr = "0.0.0.0:18545"
+upstream = "http://127.0.0.1:8545"
+requests_per_second = 5.5
+burst = 10
+max_body_bytes = 4096
+max_in_flight = 8
+trusted_proxies = ["10.0.0.1", "10.0.0.2"]
+"#;
+        let config = Config::from_str(toml).unwrap();
+        let proxy = &config.rpc_proxy;
+        assert!(proxy.enabled);
+        assert_eq!(proxy.listen_addr, "0.0.0.0:18545");
+        assert_eq!(proxy.upstream, "http://127.0.0.1:8545");
+        assert_eq!(proxy.requests_per_second, 5.5);
+        assert_eq!(proxy.burst, 10);
+        assert_eq!(proxy.max_body_bytes, 4096);
+        assert_eq!(proxy.max_in_flight, 8);
+        assert_eq!(
+            proxy.trusted_proxies,
+            vec![
+                "10.0.0.1".parse::<std::net::IpAddr>().unwrap(),
+                "10.0.0.2".parse::<std::net::IpAddr>().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rpc_proxy_roundtrips_through_serialize() {
+        let config = Config::testnet();
+        let serialized = toml::to_string(&config).unwrap();
+        let parsed = Config::from_str(&serialized).unwrap();
+        assert_eq!(parsed.rpc_proxy, config.rpc_proxy);
     }
 
     fn tmp_dir() -> PathBuf {

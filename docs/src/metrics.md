@@ -39,6 +39,9 @@ When `enabled = false`, no HTTP server is started.
 | `podseq_deadline_overdue_seconds`    | Gauge     | Seconds the oldest pending forced transaction is past its deadline    |
 | `podseq_reserve_sui_balance_mist`    | Gauge     | Gas reserve SUI balance in mistos (0 until the first read)            |
 | `podseq_gas_topups_total`            | Counter   | Completed gas top-ups moved to the settlement key                     |
+| `podseq_rpc_proxy_requests_total`    | Counter   | JSON-RPC requests forwarded by the RPC proxy                          |
+| `podseq_rpc_proxy_limited_total`     | Counter   | JSON-RPC requests rejected by the RPC proxy rate limit                |
+| `podseq_rpc_proxy_request_duration_seconds` | Histogram | Upstream round-trip latency for proxied JSON-RPC requests      |
 
 > Sequencer-only metrics (`blocks_built`, `sui_gas_balance`, `bridge_*`, `da_*`,
 > `pending_blocks`, `reserve_sui_balance`, `gas_topups`) read 0 on full nodes.
@@ -87,6 +90,16 @@ at a 2 s cadence, so the defaults (floor 500 SUI, dose 2000 SUI) hold days of
 headroom and each refill lasts over a week. `podseq_gas_topups_total` counts
 completed refills. A settlement balance pinned below the floor with a flat
 counter means the reserve is drained and needs a human.
+
+## RPC proxy
+
+With `[rpc_proxy]` enabled (see
+[setup](./setup.md#rate-limiting-the-public-rpc)), the proxy counts what it
+forwards and what it rejects: `podseq_rpc_proxy_requests_total` increments per
+forwarded call, `podseq_rpc_proxy_limited_total` per `429`. A limited counter
+that grows under normal traffic means the rate defaults are too tight for real
+users. A request duration pinned near 30 s means Reth is the bottleneck, not
+the clients.
 
 Example rules:
 

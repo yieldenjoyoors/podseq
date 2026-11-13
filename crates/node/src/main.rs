@@ -11,6 +11,7 @@ mod keyring;
 mod mcp;
 mod metrics;
 mod rotation;
+mod rpc_proxy;
 mod runner;
 mod settlement;
 mod store;
@@ -219,6 +220,59 @@ async fn shutdown_metrics(
     }
 }
 
+/// Spawns the rate-limiting RPC proxy when `[rpc_proxy] enabled = true`.
+///
+/// Configuration errors abort startup: a mis-quoted rate or upstream must
+/// not silently disable the only protection in front of the public RPC.
+fn start_rpc_proxy(
+    config: &Config,
+    metrics: &Arc<metrics::PodseqMetrics>,
+) -> Result<(
+    Option<tokio::task::JoinHandle<()>>,
+    Arc<tokio::sync::Notify>,
+)> {
+    let shutdown = Arc::new(tokio::sync::Notify::new());
+    if !config.rpc_proxy.enabled {
+        return Ok((None, shutdown));
+    }
+    let limits = rpc_proxy::RateLimits::from_config(
+        config.rpc_proxy.requests_per_second,
+        config.rpc_proxy.burst,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let addr: std::net::SocketAddr = config
+        .rpc_proxy
+        .listen_addr
+        .parse()
+        .context("invalid rpc_proxy.listen_addr")?;
+    let state = rpc_proxy::ProxyState::new(
+        limits,
+        config.rpc_proxy.upstream.clone(),
+        config.rpc_proxy.max_body_bytes,
+        config.rpc_proxy.max_in_flight,
+        config.rpc_proxy.trusted_proxies.clone(),
+        Arc::clone(metrics),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let handle = tokio::spawn(rpc_proxy::serve(
+        Arc::new(state),
+        addr,
+        Arc::clone(&shutdown),
+    ));
+    Ok((Some(handle), shutdown))
+}
+
+/// Signals shutdown and awaits the RPC proxy exit (best-effort).
+async fn shutdown_rpc_proxy(
+    handle: Option<tokio::task::JoinHandle<()>>,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    shutdown.notify_waiters();
+    if let Some(handle) = handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
+}
+
 /// Resolves the advertise target set from config, or explains why it is
 /// disabled.
 fn advertise_targets(
@@ -399,6 +453,7 @@ async fn start_sequencer(
     // Metrics: construct and optionally start the HTTP endpoint.
     let podseq_metrics = Arc::new(metrics::PodseqMetrics::new());
     let (metrics_handle, metrics_shutdown) = start_metrics_endpoint(&config, &podseq_metrics)?;
+    let (proxy_handle, proxy_shutdown) = start_rpc_proxy(&config, &podseq_metrics)?;
 
     let signer_key_path = config
         .signer
@@ -547,6 +602,7 @@ async fn start_sequencer(
         handle.abort();
     }
 
+    shutdown_rpc_proxy(proxy_handle, proxy_shutdown).await;
     shutdown_metrics(metrics_handle, metrics_shutdown).await;
 
     if let Some((mut handle, shutdown)) = bridge_handle {
@@ -589,6 +645,7 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
     // Metrics: construct and optionally start the HTTP endpoint.
     let podseq_metrics = Arc::new(metrics::PodseqMetrics::new());
     let (metrics_handle, metrics_shutdown) = start_metrics_endpoint(&config, &podseq_metrics)?;
+    let (proxy_handle, proxy_shutdown) = start_rpc_proxy(&config, &podseq_metrics)?;
 
     let (receiver, admission_handle) = full_node_p2p_parts(&context, &config).await?;
 
@@ -617,6 +674,7 @@ async fn start_full_node(config: Config, context: podseq_core::runtime::Context)
     info!("starting full node sync (Ctrl+C to stop)");
     let result = node.run().await;
 
+    shutdown_rpc_proxy(proxy_handle, proxy_shutdown).await;
     shutdown_metrics(metrics_handle, metrics_shutdown).await;
 
     result

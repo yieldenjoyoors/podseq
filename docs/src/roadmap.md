@@ -46,9 +46,11 @@ simple while making the chain trust-minimized and developer-friendly.
 - [x] **Sequencer health dashboard**: Prometheus metrics endpoint with block
       height, DA latency, settlement duration, Sui gas balance, and bridge
       throughput. Grafana dashboard template included.
-- [ ] **Rate limiting on RPC**: token-bucket limiter for public RPC
+- [x] **Rate limiting on RPC**: token-bucket limiter for public RPC
       endpoints. Protects the sequencer from DDoS without affecting block
-      production (Engine API has its own port).
+      production (Engine API has its own port). The node's proxy fronts
+      Reth's public port with per-client-IP token buckets — see
+      [setup](./setup.md#rate-limiting-the-public-rpc).
 - [ ] **Hot-swap settlement key**: rotate the `SettlerCap` / `BridgeCap`
       without downtime. The new key is pre-authorized on Sui; the node switches
       on an admin signal. Landed in the protocol and node runtime — see
