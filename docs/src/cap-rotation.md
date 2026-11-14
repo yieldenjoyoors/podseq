@@ -466,7 +466,8 @@ still spends upgrades — the same exposure every Sui deployment has by default.
 
 ## Verification
 
-Adversarial tests, fuzzing, and gas measurement against the implementation. The
+Adversarial tests, fuzzing, gas measurement, and a live steering exercise
+against the implementation. The
 closing question: whether a Cap swap can proceed atomically with an in-flight
 settlement batch, without a race with the old owner. Answer: yes — every
 interleaving of old-key and new-key calls inside the rotation window is either a
@@ -535,37 +536,73 @@ budget of 120 s per target:
 The one crash the campaign surfaced was in the harness itself (a length guard in
 the rotation target read past short inputs), fixed before the recorded runs.
 
+### Live steering exercise (testnet, 2026-11-14)
+
+The steering ceremony executed end to end against current testnet (protocol
+142): fresh deploy — publish, both cap-entombment ceremonies, the UpgradeCap
+entombment, and the exit queue, all inside `Settlement::deploy` /
+`initialize_with_key` — then a baseline settle, an `OpsCap`-steered
+`request_rotation_ops` (both objects, one PTB), the full 10-minute timelock,
+the `claim_rotation` cut-over, a `settle_as` on the new authority, and the
+one-way `retire_previous`. Then a second full cycle: staged by the cold cap
+holder, claimed by a fresh payer, settled and retired under the new authority.
+Digests in the run's `bench_state.gas.csv`.
+
+Two findings the live run pinned:
+
+- **Steering stayed cold across the swap.** The first authority cannot stage
+  its own successor: the request aborts in the chain's owned-object check
+  (`Object <OpsCap> is owned by account address <deployer>, but given
+  owner/signer address is <authority>`), because the caps never left the
+  deployer wallet. The second cycle's request went through signed by the cap
+  holder — the same wallet that ran deploy — and the fresh payer then claimed.
+  Custody discipline works as designed, on chain, not just in tests.
+- **The crash-safe re-submit is a live no-op.** Re-committing an
+  already-settled height with the identical blob on the new authority charged
+  computation only (net 1,000,444 vs 2,451,945 for a fresh anchor) — the
+  idempotent re-submit K2 leans on, observed across a completed swap.
+
 ### Gas (Sui testnet, live execution)
 
 Measured by executing the node's real PTBs against testnet
 (`crates/sui/examples/rotation_gas_bench.rs`; digests in
 `bench_state.gas.csv` next to the run state). MIST, 1 SUI = 10⁹ MIST;
-net = computation + storage − rebate. The numbers predate the ops gate; the
-request PTB now carries one extra object input per move-call (the two
-`OpsCap`s), a cost inside the noise for this table.
+net = computation + storage − rebate. Cycle 1 steers and claims from the
+deploy ceremony's keys; cycle 2 is steered by the cold cap holder and claimed
+by a fresh payer. The deploy-internal entombment ceremonies are not in the
+table (they run inside `deploy()`); the October migration measurement of the
+same PTB shape — ≈4.47 M MIST each — remains the reference for the manual
+ceremony.
 
 | Transaction | Computation | Storage | Rebate | Net |
 | --- | --- | --- | --- | --- |
 | `settle_as` (baseline, one block anchor) | 1,000,000 | 4,902,000 | 3,450,055 | **2,451,945** |
-| `request_rotation_ops` (both objects, one PTB) | 1,000,000 | 9,462,000 | 8,853,115 | **1,608,885** |
-| `claim_rotation` (both objects, one PTB) | 1,000,000 | 9,462,000 | 10,068,993 | **393,007** |
+| `request_rotation_ops` (both objects, one PTB) | 1,000,000 | 12,547,600 | 11,938,406 | **1,609,194** |
+| `claim_rotation` (both objects, one PTB) | 1,000,000 | 9,462,000 | 9,461,054 | **1,000,946** |
 | `retire_previous` (both objects, one PTB) | 1,000,000 | 8,854,000 | 9,461,054 | **392,946** |
 | `settle_as` on the new authority (post-swap) | 1,000,000 | 4,902,000 | 3,450,055 | **2,451,945** |
-| `entomb_settler_cap` (one-time migration) | 1,000,000 | 6,513,200 | 3,039,696 | **4,473,504** |
-| `entomb_bridge_cap` (one-time migration) | 1,000,000 | 7,090,800 | 3,617,238 | **4,473,562** |
+| cycle 2: `request_rotation_ops` | 1,000,000 | 12,547,600 | 11,938,406 | **1,609,194** |
+| cycle 2: `claim_rotation` (fresh payer) | 1,000,000 | 10,450,000 | 11,436,856 | **13,144** |
+| cycle 2: idempotent re-commit of a settled height | 1,000,000 | 4,438,400 | 4,437,956 | **1,000,444** |
+| cycle 2: `retire_previous` | 1,000,000 | 9,842,000 | 10,448,955 | **393,045** |
 
 Reading the table:
 
 - Computation is flat at the 1 M MIST floor for every call — the Move logic
-  (deadline check, sender check, state transition) is noise next to storage.
-- Storage is deposited for the records a transaction creates and refunded when
-  a later transaction removes them: the claim *deletes* the pending records, so
-  its rebate exceeds its storage and its net cost (393 k MIST ≈ 0.0004 SUI) is
-  the cheapest step in the whole protocol. A full rotation (request + claim +
-  retire) nets ≈ 2.4 M MIST — about the price of a single block-anchor settle.
-- Settlement is reproducible to the MIST across payers and heights (the two
-  `settle_as` rows are byte-identical), so the numbers above are stable
+  (deadline check, authority check, state transition) is noise next to
+  storage.
+- Storage is deposited for the records a transaction creates and refunded
+  when a later transaction removes them: the claim *deletes* pending records,
+  so its rebate tracks what it removes. The second cycle's claim also deletes
+  the previous authority's record left by cycle 1 — one more record deleted
+  than written — and nets 13,144 MIST, a near-total refund; the first cycle
+  had no previous-authority record to delete yet and keeps ≈1 M net.
+- Settlement is reproducible to the MIST: the baseline and post-swap
+  `settle_as` rows are byte-identical across payers and heights, and the
+  request row is byte-identical across the two cycles. These are stable
   references, not samples.
+- A full rotation (request + claim + retire) nets ≈ 3.0 M MIST, about the
+  price of a single block-anchor settle.
 - The plan's first risk — whether Move + Sui gas economics can express
   deadline/halt/rotation efficiently — resolves to yes: deadline and authority
   checks add nothing measurable to computation, rotation state lives in

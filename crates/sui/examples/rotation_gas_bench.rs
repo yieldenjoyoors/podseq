@@ -2,7 +2,7 @@
 //!
 //! Deploys the current package (or resumes a half-run bench state), then
 //! measures the exact PTBs the rotation flow submits — `request_rotation_ops`
-//! (steered by the `OpsCap` minted at entombment), `claim_rotation`, and
+//! (steered by the `OpsCap`s the deploy ceremony mints), `claim_rotation`, and
 //! `retire_previous`, each covering the Registry and the Vault in one
 //! transaction — against the `settle_as` baseline. Gas is read from the
 //! executed effects and appended to `<state>.gas.csv`.
@@ -33,10 +33,7 @@ use podseq_sui::rotation::MIN_DELAY_MS;
 use podseq_sui::settlement::Settlement;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
-use sui_rpc::proto::sui::rpc::v2::changed_object;
-use sui_rpc::proto::sui::rpc::v2::owner;
 use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest;
-use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionResponse;
 use sui_rpc::Client as RpcClient;
 use sui_sdk_types::{Address, Identifier};
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
@@ -98,14 +95,13 @@ impl GasRow {
     }
 }
 
-/// Builds, signs, executes, and measures one transaction, returning the full
-/// response so callers can read created objects from the effects.
-async fn execute_measured(
+/// Builds, signs, executes, and measures one transaction.
+async fn measure(
     label: &'static str,
     rpc_url: &str,
     key: &Ed25519PrivateKey,
     build: impl FnOnce(&mut TransactionBuilder),
-) -> Result<(GasRow, ExecuteTransactionResponse)> {
+) -> Result<GasRow> {
     let sender = key.public_key().derive_address();
     let mut builder = TransactionBuilder::new();
     builder.set_sender(sender);
@@ -124,54 +120,15 @@ async fn execute_measured(
         .await
         .context("executing PTB")?;
     let inner = response.into_inner();
-    let effects = inner.transaction().effects();
-    let summary = effects.gas_used();
-    let row = GasRow {
+    let summary = inner.transaction().effects().gas_used();
+    Ok(GasRow {
         label,
         digest,
         computation: summary.computation_cost(),
         storage: summary.storage_cost(),
         rebate: summary.storage_rebate(),
         non_refundable: summary.non_refundable_storage_fee(),
-    };
-    Ok((row, inner))
-}
-
-/// Builds, signs, executes, and measures one transaction.
-async fn measure(
-    label: &'static str,
-    rpc_url: &str,
-    key: &Ed25519PrivateKey,
-    build: impl FnOnce(&mut TransactionBuilder),
-) -> Result<GasRow> {
-    execute_measured(label, rpc_url, key, build)
-        .await
-        .map(|(row, _)| row)
-}
-
-/// The object id the entombment minted to the signer: the only changed
-/// object that did not exist before the transaction and is address-owned
-/// afterwards (the entombed cap and the dynamic-field children are
-/// object-owned; the gas coin predates the transaction).
-fn minted_ops_cap(response: &ExecuteTransactionResponse) -> Result<Address> {
-    let effects = response.transaction().effects();
-    let created: Vec<&str> = effects
-        .changed_objects()
-        .iter()
-        .filter(|c| {
-            c.input_state() == changed_object::InputObjectState::DoesNotExist
-                && c.output_state() == changed_object::OutputObjectState::ObjectWrite
-                && c.output_owner().kind() == owner::OwnerKind::Address
-        })
-        .filter_map(|c| c.object_id.as_deref())
-        .collect();
-    if created.len() != 1 {
-        bail!(
-            "expected exactly one minted ops cap in the entombment effects, found {}",
-            created.len()
-        );
-    }
-    created[0].parse().context("parsing minted ops cap id")
+    })
 }
 
 /// The shared-object arguments every rotation PTB touches.
@@ -215,13 +172,15 @@ async fn main() -> Result<()> {
         // already landed, so only the new-authority settle and the retire
         // remain.
         "post" => post(&rpc_url, &staged, &state_path, &gas_csv).await,
-        // The current authority (args[3]) pre-authorizes and funds the next
-        // key, for a second measured claim cycle with a fresh payer.
+        // The ops caps stayed with the deployer across the first rotation
+        // (steering is cold custody by design — the authority cannot stage
+        // its own successor), so the cap holder signs the second request and
+        // funds the next key; the claim cycle then runs with a fresh payer.
         "handoff" => {
             let next_path = PathBuf::from(&args[6]);
             let next = load_key(&next_path)?;
             let next_addr = next.public_key().derive_address();
-            handoff(&rpc_url, &staged, next_addr, &state_path).await
+            handoff(&rpc_url, &deployer, next_addr, &state_path).await
         }
         other => bail!("unknown phase {other} (expected fresh, claim, post, or handoff)"),
     }
@@ -269,11 +228,6 @@ async fn fresh(
     let bridge =
         BridgeClient::initialize_with_key(deployer.clone(), rpc_url, &contract.package_id).await?;
     let vault: Address = bridge.vault_id.parse().context("parsing vault")?;
-    let bridge_cap: Address = bridge.cap_id.parse().context("parsing bridge cap")?;
-    let settler_cap: Address = contract
-        .settler_cap_id
-        .parse()
-        .context("parsing settler cap")?;
 
     let targets = BenchTargets {
         package,
@@ -282,31 +236,19 @@ async fn fresh(
         inbox,
     };
 
-    // Entombment: the caps move into the shared objects' dynamic fields and
-    // each object's OpsCap is minted to the deployer — the ids land in the
-    // state file for the later request phase.
-    let (row, response) = execute_measured("entomb_settler", rpc_url, deployer, |b| {
-        let cap = b.object(ObjectInput::new(settler_cap));
-        let registry = b.object(ObjectInput::new(targets.registry));
-        b.move_call(
-            module_fn(targets.package, "settlement", "entomb_settler_cap_ops"),
-            vec![cap, registry],
-        );
-    })
-    .await?;
-    row.append_csv(gas_csv)?;
-    let settler_ops_cap: Address = minted_ops_cap(&response)?;
-    let (row, response) = execute_measured("entomb_bridge", rpc_url, deployer, |b| {
-        let cap = b.object(ObjectInput::new(bridge_cap));
-        let vault = b.object(ObjectInput::new(targets.vault));
-        b.move_call(
-            module_fn(targets.package, "bridge", "entomb_bridge_cap_ops"),
-            vec![cap, vault],
-        );
-    })
-    .await?;
-    row.append_csv(gas_csv)?;
-    let bridge_ops_cap: Address = minted_ops_cap(&response)?;
+    // The entombment ceremonies ran inside `deploy()` and
+    // `initialize_with_key`: both caps live in the shared objects' dynamic
+    // fields and each object's OpsCap was minted to the deployer. The minted
+    // ids come back on the deploy results and land in the state file for the
+    // later request phases.
+    let settler_ops_cap: Address = contract
+        .ops_cap_id
+        .parse()
+        .context("parsing settler ops cap id")?;
+    let bridge_ops_cap: Address = bridge
+        .ops_cap_id
+        .parse()
+        .context("parsing bridge ops cap id")?;
 
     // The settle baseline: one anchor through the settle gate.
     measure("settle_baseline", rpc_url, deployer, |b| {
@@ -515,10 +457,13 @@ fn module_fn(package: Address, module: &str, name: &str) -> Function {
     )
 }
 
-/// The current authority pre-authorizes and funds the next key, so a second
+/// The ops-cap holder pre-authorizes and funds the next key, so a second
 /// rotation cycle measures the claim with a fresh payer. One transaction
 /// does both: split the funding from gas, transfer it, and issue the
-/// request on both objects.
+/// request on both objects. Steering stays with the cold custody that has
+/// held the caps since deploy — the live run confirmed the authority
+/// cannot steer its own successor (`request_rotation_ops` reads the
+/// owner, and the caps never moved).
 async fn handoff(
     rpc_url: &str,
     authority: &Ed25519PrivateKey,
