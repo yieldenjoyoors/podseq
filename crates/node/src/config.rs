@@ -177,6 +177,13 @@ pub struct SuiConfig {
     /// the whole settle PTB.
     #[serde(default = "default_true")]
     pub commit_state_roots: bool,
+    /// Verifies each settled block's state root against this node's own
+    /// execution and the on-chain anchor (`settlement::commit_state_root`)
+    /// before finalizing further heights. On by default: an anchor that
+    /// disagrees with the executed chain is a provable sequencer failure,
+    /// and finalizing past it would launder the divergence.
+    #[serde(default = "default_true")]
+    pub verify_state_roots: bool,
     /// Path to the funded reserve key (suiprivkey) that tops up the
     /// settlement key's gas. Unset keeps the balance gauges but never moves
     /// coins.
@@ -230,6 +237,7 @@ impl Default for SuiConfig {
             inbox_id: None,
             rotation_key_path: None,
             commit_state_roots: true,
+            verify_state_roots: true,
             reserve_key_path: None,
             gas_min_balance_mist: default_gas_min_balance(),
             gas_topup_amount_mist: default_gas_topup_amount(),
@@ -610,6 +618,18 @@ key_path = "sequencer.key"
         )
         .unwrap();
         assert!(!config.sui.commit_state_roots);
+    }
+
+    #[test]
+    fn sui_verify_state_roots_defaults_on_and_pins_off() {
+        let config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        assert!(config.sui.verify_state_roots);
+
+        let config = Config::from_str(
+            "[reth]\njwt_path = \"jwt.hex\"\n\n[sui]\nverify_state_roots = false\n",
+        )
+        .unwrap();
+        assert!(!config.sui.verify_state_roots);
     }
 
     #[test]

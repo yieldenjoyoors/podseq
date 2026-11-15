@@ -191,6 +191,10 @@ The node refuses to start if `sequencer_pubkey` or `registry_id` is missing.
 Full-node mode only needs `[reth]`, `[signer] sequencer_pubkey`, and
 `[sui] registry_id` — `signer.key_path`, `sui.settler_cap_id`,
 `sui.settlement_package_id`, and `walrus.publisher_url` are sequencer-only.
+Set `sui.settlement_package_id` on a full node to enable settled-state-root
+verification (`sui.verify_state_roots`, on by default — see
+[contract](./contract.md#state-roots)); without the package id the node skips
+the check and warns.
 The sequencer can also carry a funded reserve key (`sui.reserve_key_path`,
 plus `sui.gas_min_balance_mist`, `sui.gas_topup_amount_mist`,
 `sui.gas_reserve_floor_mist`) that tops up the settlement key's gas

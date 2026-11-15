@@ -59,6 +59,11 @@ pub struct PodseqMetrics {
     /// Latest block height settled on Sui (read per sync poll on full nodes,
     /// per settle on the sequencer).
     pub settlement_height: Gauge,
+    /// Settled-state-root verification verdict on a full node: 0 disabled,
+    /// 1 verified, 2 no anchor, 3 mismatch, 4 read error.
+    pub state_root_status: Gauge,
+    /// Settled-state-root mismatches this full node has detected.
+    pub state_root_mismatches_total: Counter,
     /// The gas reserve's SUI balance in mist (0 until the first read).
     pub reserve_sui_balance: Gauge,
     /// Completed settlement-key gas top-ups.
@@ -175,6 +180,21 @@ impl PodseqMetrics {
             settlement_height.clone(),
         );
 
+        let state_root_status = Gauge::default();
+        registry.register(
+            "podseq_state_root_status",
+            "Settled-state-root verification verdict: 0 disabled, 1 verified, \
+             2 no anchor, 3 mismatch, 4 read error",
+            state_root_status.clone(),
+        );
+
+        let state_root_mismatches_total = Counter::default();
+        registry.register(
+            "podseq_state_root_mismatches",
+            "Settled-state-root mismatches detected by this full node",
+            state_root_mismatches_total.clone(),
+        );
+
         let reserve_sui_balance = Gauge::default();
         registry.register(
             "podseq_reserve_sui_balance_mist",
@@ -226,6 +246,8 @@ impl PodseqMetrics {
             deadline_status,
             deadline_overdue_seconds,
             settlement_height,
+            state_root_status,
+            state_root_mismatches_total,
             reserve_sui_balance,
             gas_topups_total,
             rpc_proxy_requests_total,
@@ -373,6 +395,18 @@ mod tests {
         assert!(buffer.contains("# TYPE podseq_deadline_status gauge"));
         assert!(buffer.contains("# TYPE podseq_deadline_overdue_seconds gauge"));
         assert!(buffer.contains("# TYPE podseq_settlement_height gauge"));
+    }
+
+    #[test]
+    fn state_root_instruments_are_registered() {
+        let m = PodseqMetrics::new();
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+
+        assert!(buffer.contains("# TYPE podseq_state_root_status gauge"));
+        assert!(buffer.contains("# TYPE podseq_state_root_mismatches counter"));
+        assert!(buffer.contains("podseq_state_root_mismatches_total 0"));
     }
 
     #[test]

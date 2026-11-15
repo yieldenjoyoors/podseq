@@ -30,7 +30,10 @@ simple while making the chain trust-minimized and developer-friendly.
 - [x] **Sequencer failure detection**: full nodes verify the force-inclusion
       deadline from Sui state alone, halt locally on a violated gate, and export
       the verdict plus settlement lag as metrics with example alert rules. See
-      [metrics](./metrics.md).
+      [metrics](./metrics.md). They also verify each settled height's state root
+      against their own execution and the on-chain anchor
+      (`sui.verify_state_roots`), so a dishonest root halts finalization with a
+      mismatch counter — see [contract](./contract.md#state-roots).
 
 ## Phase 3: Developer & User UX
 

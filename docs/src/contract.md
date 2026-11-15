@@ -81,6 +81,17 @@ halt (`exit_queue::halt_expired_deadline`) and records proven balances in the
 shared exit queue (`exit_queue::request_exit`, ordered by `(height, seq)`);
 the deploy ceremony creates the queue alongside the inbox.
 
+Full nodes close the verification loop without trusting the sequencer: after
+finalizing each settled height, a full node compares the DA header's state root
+against its own Reth execution at that height and against the anchored root on
+Sui (`sui.verify_state_roots`, on by default). A disagreement is a provable
+sequencer failure: the node logs the three roots, counts
+`podseq_state_root_mismatches_total`, and stops finalizing further heights
+until an operator intervenes. Missing anchors (heights settled before the
+entrypoint existed, or `commit_state_roots` pinned off) are skipped rather than
+failed, and read errors never pause the node — the same transport-error posture
+as the deadline monitor.
+
 ## Access control
 
 Only the sequencer can call `settle`. This is enforced by the `SettlerCap`, an owned

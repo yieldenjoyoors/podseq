@@ -141,6 +141,41 @@ impl Client {
         }
     }
 
+    /// Returns the canonical state root of the block at `number`, or `None`
+    /// when the chain has no such block yet.
+    ///
+    /// # Errors
+    ///
+    /// RPC failure, or a response whose `stateRoot` is missing or not a
+    /// 32-byte hex hash.
+    pub async fn block_state_root(&self, number: u64) -> Result<Option<B256>, EngineError> {
+        let hex_num = format!("0x{number:x}");
+        let block: Option<Value> = self
+            .call(
+                "eth_getBlockByNumber",
+                vec![
+                    serde_json::to_value(&hex_num)?,
+                    serde_json::to_value(false)?,
+                ],
+            )
+            .await?;
+        match block {
+            Some(obj) => {
+                let state_root: String =
+                    serde_json::from_value(obj.get("stateRoot").cloned().unwrap_or(Value::Null))
+                        .map_err(|e| EngineError::Rpc {
+                            code: -3,
+                            message: format!("invalid block state root: {e}"),
+                        })?;
+                Ok(Some(state_root.parse().map_err(|e| EngineError::Rpc {
+                    code: -3,
+                    message: format!("invalid state root format: {e}"),
+                })?))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn call<R: DeserializeOwned>(
         &self,
         method: &str,

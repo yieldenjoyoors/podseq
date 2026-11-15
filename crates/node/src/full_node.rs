@@ -3,6 +3,8 @@
 //! Polls the Sui settlement Registry for finalized blobs, fetches each batch
 //! from Walrus, verifies the sequencer signature, and feeds blocks to Reth.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -10,10 +12,11 @@ use alloy_primitives::B256;
 use alloy_rpc_types_engine::ForkchoiceState;
 use anyhow::{Context, Result};
 use podseq_core::DataAvailability;
-use podseq_engine::{Engine, PARENT_BEACON_BLOCK_ROOT};
+use podseq_engine::{Engine, EngineError, PARENT_BEACON_BLOCK_ROOT};
 use podseq_p2p::{AdmissionHandle, BlockReceiver};
 use podseq_sui::inbox::{InboxError, InboxTransport, SuiInboxTransport};
 use podseq_sui::peers::PeerBookReader;
+use podseq_sui::state_root::StateRootReader;
 use podseq_sui::{
     deadline::{DeadlineError, DeadlineStatus},
     Client as SuiClient,
@@ -57,6 +60,13 @@ pub struct FullNode {
     /// reader it is fed from. `None` when `p2p.registry_admission` is off
     /// or the package/registry ids are not configured.
     admission: Option<(AdmissionHandle, PeerBookReader<SuiInboxTransport>)>,
+    /// Settled-state-root verification: the on-chain anchor reader per
+    /// settled height. `None` when `sui.verify_state_roots` is off or the
+    /// registry/package ids are missing or invalid.
+    state_root_reader: Option<StateRootReader<SuiInboxTransport>>,
+    /// Latched by a proven settled-root mismatch: finalization stops until
+    /// an operator intervenes (a wrong anchor cannot self-heal).
+    state_root_gate: StateRootGate,
     /// Shared Prometheus instruments. Gauges are written even when the
     /// `[metrics]` endpoint is disabled, so a later scrape config change
     /// finds live values.
@@ -155,6 +165,8 @@ impl FullNode {
             deadline,
             halt_gate: HaltGate::default(),
             admission,
+            state_root_reader: build_state_root_reader(config),
+            state_root_gate: StateRootGate::default(),
             metrics,
         })
     }
@@ -207,6 +219,9 @@ impl FullNode {
                         if self.halt_gate.update(outcome) {
                             continue;
                         }
+                    }
+                    if self.state_root_gate.latched() {
+                        continue;
                     }
                     if let Err(e) = self.sync_from_settlement().await {
                         error!(error = ?e, "full node: DA sync failed");
@@ -286,8 +301,57 @@ impl FullNode {
 
             self.verify_signature(&block)?;
             self.apply_and_finalize(&block).await?;
+            self.verify_and_record_state_root(height, &block.header.state_root)
+                .await?;
         }
 
+        Ok(())
+    }
+
+    /// Verifies the settled height's state root against the on-chain anchor
+    /// and this node's own execution. A mismatch latches the gate and stops
+    /// the sync; read errors are logged and never pause (same posture as the
+    /// deadline gate).
+    async fn verify_and_record_state_root(
+        &mut self,
+        height: u64,
+        da_root: &[u8; 32],
+    ) -> Result<()> {
+        let outcome = match self.state_root_reader.as_ref() {
+            Some(reader) => verify_settled_root(&self.engine, reader, height, da_root).await,
+            None => return Ok(()),
+        };
+        record_state_root(&self.metrics, &outcome);
+        match outcome {
+            Ok(StateRootVerdict::Verified) => {
+                debug!(height, "full node: settled state root verified");
+            }
+            Ok(StateRootVerdict::NoAnchor) => {
+                debug!(height, "full node: no state root anchored for height");
+            }
+            Ok(StateRootVerdict::Mismatch {
+                anchored,
+                canonical,
+            }) => {
+                error!(
+                    height,
+                    da = %B256::from(*da_root),
+                    canonical = %canonical,
+                    anchored = ?anchored.map(B256::from),
+                    "full node: STATE ROOT MISMATCH — the settled anchor or the signed \
+                     block disagrees with this node's execution; halting finalization"
+                );
+                self.state_root_gate.latch();
+                anyhow::bail!("state root mismatch at settled height {height}");
+            }
+            Err(e) => {
+                warn!(
+                    height,
+                    error = %e,
+                    "full node: state-root verification read failed; continuing"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -515,6 +579,167 @@ fn build_deadline_monitor(
 /// Cadence for registry-committee admission polls. The book changes at
 /// human/operational speed; one read every 10s is cheap and fresh.
 const ADMISSION_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Reads the canonical state root of a height from the local execution
+/// layer. The seam keeps settled-root verification unit-testable without a
+/// live Reth.
+trait CanonicalRoot: Send + Sync + 'static {
+    fn state_root_at<'a>(
+        &'a self,
+        height: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<B256>, EngineError>> + Send + 'a>>;
+}
+
+impl CanonicalRoot for Engine {
+    fn state_root_at<'a>(
+        &'a self,
+        height: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<B256>, EngineError>> + Send + 'a>> {
+        Box::pin(async move { self.rpc().block_state_root(height).await })
+    }
+}
+
+/// What a settled height's three-way root comparison found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StateRootVerdict {
+    /// Sui anchor, DA header, and local execution all agree.
+    Verified,
+    /// Nothing anchored for this height (a height settled before anchoring
+    /// existed, or the sequencer pinned `commit_state_roots` off); DA and
+    /// execution agree.
+    NoAnchor,
+    /// A provable disagreement between the on-chain anchor, the signed DA
+    /// header, and this node's own execution.
+    Mismatch {
+        anchored: Option<[u8; 32]>,
+        canonical: B256,
+    },
+}
+
+/// Errors from settled-root verification. Both sources must answer for a
+/// verdict; a settled height with no canonical block is an error too, not a
+/// pass.
+#[derive(Debug, thiserror::Error)]
+enum StateRootVerifyError {
+    #[error(transparent)]
+    Inbox(#[from] InboxError),
+    #[error(transparent)]
+    Engine(#[from] EngineError),
+    #[error("no canonical block at settled height {0}")]
+    MissingCanonical(u64),
+}
+
+/// Three-way comparison at a settled height: the DA header's state root
+/// against the node's own execution, and against the Sui anchor the
+/// sequencer committed at settle. Both sources are always read so a
+/// mismatch carries the full evidence — the comparison halts the node
+/// anyway, so attribution is worth more than the saved read.
+async fn verify_settled_root<R: CanonicalRoot, T: InboxTransport>(
+    canonical: &R,
+    anchored: &StateRootReader<T>,
+    height: u64,
+    da_root: &[u8; 32],
+) -> Result<StateRootVerdict, StateRootVerifyError> {
+    let anchored_root = anchored.at(height).await?;
+    let canonical_root = canonical
+        .state_root_at(height)
+        .await?
+        .ok_or(StateRootVerifyError::MissingCanonical(height))?;
+    let canonical_bytes: [u8; 32] = canonical_root.into();
+    if *da_root != canonical_bytes {
+        return Ok(StateRootVerdict::Mismatch {
+            anchored: anchored_root,
+            canonical: canonical_root,
+        });
+    }
+    match anchored_root {
+        Some(anchor) if anchor == *da_root => Ok(StateRootVerdict::Verified),
+        Some(anchor) => Ok(StateRootVerdict::Mismatch {
+            anchored: Some(anchor),
+            canonical: canonical_root,
+        }),
+        None => Ok(StateRootVerdict::NoAnchor),
+    }
+}
+
+/// Latched by a proven settled-root mismatch. Unlike a missed deadline, a
+/// wrong anchor cannot self-heal — the node stops finalizing further
+/// heights until an operator intervenes.
+#[derive(Debug, Default)]
+struct StateRootGate {
+    mismatched: bool,
+}
+
+impl StateRootGate {
+    fn latch(&mut self) {
+        self.mismatched = true;
+    }
+
+    fn latched(&self) -> bool {
+        self.mismatched
+    }
+}
+
+/// Scraped status code for a settled-root verification outcome.
+fn state_root_status_code(outcome: &Result<StateRootVerdict, StateRootVerifyError>) -> i64 {
+    match outcome {
+        Ok(StateRootVerdict::Verified) => 1,
+        Ok(StateRootVerdict::NoAnchor) => 2,
+        Ok(StateRootVerdict::Mismatch { .. }) => 3,
+        Err(_) => 4,
+    }
+}
+
+/// Writes the verification gauge and the mismatch counter.
+fn record_state_root(
+    metrics: &PodseqMetrics,
+    outcome: &Result<StateRootVerdict, StateRootVerifyError>,
+) {
+    metrics
+        .state_root_status
+        .set(state_root_status_code(outcome));
+    if matches!(outcome, Ok(StateRootVerdict::Mismatch { .. })) {
+        metrics.state_root_mismatches_total.inc();
+    }
+}
+
+/// Builds the anchor reader for settled-root verification. `None` disables
+/// it: the flag pinned off, or a registry/package id that is missing, blank,
+/// or unparseable (same posture as the other optional Sui readers).
+fn build_state_root_reader(config: &Config) -> Option<StateRootReader<SuiInboxTransport>> {
+    if !config.sui.verify_state_roots {
+        info!("full node: sui.verify_state_roots off — settled-root verification disabled");
+        return None;
+    }
+    let registry = config
+        .sui
+        .registry_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| podseq_sui::settlement::parse_address(s, "sui.registry_id").ok());
+    let package = config
+        .sui
+        .settlement_package_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| podseq_sui::settlement::parse_address(s, "sui.settlement_package_id").ok());
+    match (registry, package) {
+        (Some(registry), Some(package)) => {
+            info!("full node: settled-root verification enabled");
+            Some(StateRootReader::new(
+                SuiInboxTransport::new(&config.sui.rpc_url),
+                registry,
+                package,
+            ))
+        }
+        _ => {
+            warn!(
+                "full node: sui.registry_id/sui.settlement_package_id unset or invalid — settled-root verification disabled (the node will not detect a dishonest settled root)"
+            );
+            None
+        }
+    }
+}
 
 /// Spawns the committee admission poll task, if configured.
 fn spawn_admission_poll(
@@ -1114,5 +1339,348 @@ mod halt_metrics_tests {
         encode(&mut buffer, &m.registry).unwrap();
         assert!(buffer.contains("podseq_deadline_status 4"));
         assert!(buffer.contains("podseq_deadline_overdue_seconds 0"));
+    }
+}
+
+#[cfg(test)]
+mod state_root_verification_tests {
+    use super::*;
+    use podseq_sui::state_root::{StateRootReader, STATE_ROOT_LEN};
+    use prometheus_client::encoding::text::encode;
+    use std::future::Future;
+    use std::pin::Pin;
+    use sui_sdk_types::Address;
+
+    const REGISTRY: Address = Address::new([0x33; 32]);
+    const PACKAGE: Address = Address::new([0x44; 32]);
+    const HEIGHT: u64 = 7;
+
+    /// Canonical-root source answering every height with a fixed value.
+    enum FixedCanonical {
+        Root(Option<B256>),
+        Error(&'static str),
+    }
+
+    impl CanonicalRoot for FixedCanonical {
+        fn state_root_at<'a>(
+            &'a self,
+            _height: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<B256>, EngineError>> + Send + 'a>> {
+            match self {
+                FixedCanonical::Root(state_root) => Box::pin(async move { Ok(*state_root) }),
+                FixedCanonical::Error(message) => Box::pin(async move {
+                    Err(EngineError::Rpc {
+                        code: -3,
+                        message: (*message).to_string(),
+                    })
+                }),
+            }
+        }
+    }
+
+    /// Transport answering every object read with a fixed outcome.
+    enum FixedObject {
+        Bytes(Vec<u8>),
+        Missing,
+        Broken,
+    }
+
+    impl InboxTransport for FixedObject {
+        fn object_contents<'a>(
+            &'a self,
+            _id: &'a Address,
+        ) -> podseq_sui::inbox::InboxFuture<'a, Result<Vec<u8>, InboxError>> {
+            match self {
+                FixedObject::Bytes(bytes) => {
+                    let bytes = bytes.clone();
+                    Box::pin(async move { Ok(bytes) })
+                }
+                FixedObject::Missing => {
+                    Box::pin(async move { Err(InboxError::NotFound("missing".into())) })
+                }
+                FixedObject::Broken => {
+                    Box::pin(async move { Err(InboxError::Parse("bad".into())) })
+                }
+            }
+        }
+
+        fn field_contents<'a>(
+            &'a self,
+            _table: &'a Address,
+            _key: u64,
+        ) -> podseq_sui::inbox::InboxFuture<'a, Result<Option<Vec<u8>>, InboxError>> {
+            Box::pin(async move { Ok(None) })
+        }
+    }
+
+    fn root(n: u8) -> [u8; STATE_ROOT_LEN] {
+        let mut r = [0u8; STATE_ROOT_LEN];
+        r[31] = n;
+        r
+    }
+
+    /// BCS for `Field<StateRootKey, vector<u8>>`, the shape
+    /// `parse_state_root_field` decodes.
+    fn anchored_field_bcs(value: &[u8; STATE_ROOT_LEN]) -> Vec<u8> {
+        #[derive(serde::Serialize)]
+        struct FieldBcs {
+            id: Address,
+            name: u64,
+            value: Vec<u8>,
+        }
+        bcs::to_bytes(&FieldBcs {
+            id: Address::new([0; 32]),
+            name: HEIGHT,
+            value: value.to_vec(),
+        })
+        .unwrap()
+    }
+
+    fn anchored_reader(transport: FixedObject) -> StateRootReader<FixedObject> {
+        StateRootReader::new(transport, REGISTRY, PACKAGE)
+    }
+
+    #[tokio::test]
+    async fn agreeing_anchor_da_and_execution_verify() {
+        let canonical = FixedCanonical::Root(Some(B256::from(root(9))));
+        let anchored = anchored_reader(FixedObject::Bytes(anchored_field_bcs(&root(9))));
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, StateRootVerdict::Verified);
+    }
+
+    #[tokio::test]
+    async fn missing_anchor_is_not_a_mismatch() {
+        let canonical = FixedCanonical::Root(Some(B256::from(root(9))));
+        let anchored = anchored_reader(FixedObject::Missing);
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, StateRootVerdict::NoAnchor);
+    }
+
+    #[tokio::test]
+    async fn da_root_disagreeing_with_execution_is_a_mismatch() {
+        let canonical = FixedCanonical::Root(Some(B256::from(root(5))));
+        let anchored = anchored_reader(FixedObject::Bytes(anchored_field_bcs(&root(9))));
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            StateRootVerdict::Mismatch {
+                anchored: Some(root(9)),
+                canonical: B256::from(root(5)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn anchor_disagreeing_with_the_da_header_is_a_mismatch() {
+        let canonical = FixedCanonical::Root(Some(B256::from(root(9))));
+        let anchored = anchored_reader(FixedObject::Bytes(anchored_field_bcs(&root(4))));
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            StateRootVerdict::Mismatch {
+                anchored: Some(root(4)),
+                canonical: B256::from(root(9)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_anchor_with_diverging_execution_still_mismatches() {
+        let canonical = FixedCanonical::Root(Some(B256::from(root(5))));
+        let anchored = anchored_reader(FixedObject::Missing);
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            StateRootVerdict::Mismatch {
+                anchored: None,
+                canonical: B256::from(root(5)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_canonical_block_is_an_error() {
+        let canonical = FixedCanonical::Root(None);
+        let anchored = anchored_reader(FixedObject::Missing);
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9)).await;
+
+        assert!(matches!(
+            outcome,
+            Err(StateRootVerifyError::MissingCanonical(HEIGHT))
+        ));
+    }
+
+    #[tokio::test]
+    async fn canonical_read_errors_propagate() {
+        let canonical = FixedCanonical::Error("reth unreachable");
+        let anchored = anchored_reader(FixedObject::Missing);
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9)).await;
+
+        assert!(matches!(outcome, Err(StateRootVerifyError::Engine(_))));
+    }
+
+    #[tokio::test]
+    async fn anchor_read_errors_propagate() {
+        let canonical = FixedCanonical::Root(Some(B256::from(root(9))));
+        let anchored = anchored_reader(FixedObject::Broken);
+
+        let outcome = verify_settled_root(&canonical, &anchored, HEIGHT, &root(9)).await;
+
+        assert!(matches!(outcome, Err(StateRootVerifyError::Inbox(_))));
+    }
+
+    #[test]
+    fn gate_starts_unlatched_and_latches_one_way() {
+        let mut gate = StateRootGate::default();
+        assert!(!gate.latched());
+
+        gate.latch();
+
+        assert!(gate.latched());
+    }
+
+    fn verified() -> Result<StateRootVerdict, StateRootVerifyError> {
+        Ok(StateRootVerdict::Verified)
+    }
+
+    fn no_anchor() -> Result<StateRootVerdict, StateRootVerifyError> {
+        Ok(StateRootVerdict::NoAnchor)
+    }
+
+    fn mismatch() -> Result<StateRootVerdict, StateRootVerifyError> {
+        Ok(StateRootVerdict::Mismatch {
+            anchored: Some(root(1)),
+            canonical: B256::from(root(2)),
+        })
+    }
+
+    fn broken() -> Result<StateRootVerdict, StateRootVerifyError> {
+        Err(StateRootVerifyError::Inbox(InboxError::Parse("bad".into())))
+    }
+
+    #[test]
+    fn verified_reads_code_one() {
+        assert_eq!(state_root_status_code(&verified()), 1);
+    }
+
+    #[test]
+    fn no_anchor_reads_code_two() {
+        assert_eq!(state_root_status_code(&no_anchor()), 2);
+    }
+
+    #[test]
+    fn mismatch_reads_code_three() {
+        assert_eq!(state_root_status_code(&mismatch()), 3);
+    }
+
+    #[test]
+    fn read_errors_code_four() {
+        assert_eq!(state_root_status_code(&broken()), 4);
+    }
+
+    #[test]
+    fn record_writes_the_gauge_and_counts_mismatches() {
+        let m = PodseqMetrics::new();
+        record_state_root(&m, &mismatch());
+        record_state_root(&m, &mismatch());
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+
+        assert!(buffer.contains("podseq_state_root_status 3"));
+        assert!(buffer.contains("podseq_state_root_mismatches_total 2"));
+    }
+
+    #[test]
+    fn non_mismatch_outcomes_do_not_count() {
+        let m = PodseqMetrics::new();
+        record_state_root(&m, &verified());
+        record_state_root(&m, &broken());
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+
+        assert!(buffer.contains("podseq_state_root_status 4"));
+        assert!(buffer.contains("podseq_state_root_mismatches_total 0"));
+    }
+
+    fn config_with_ids(flag: bool, registry: &str, package: &str) -> Config {
+        let mut config = Config::from_str("[reth]\njwt_path = \"jwt.hex\"\n").unwrap();
+        config.sui.verify_state_roots = flag;
+        config.sui.registry_id = Some(registry.into());
+        config.sui.settlement_package_id = Some(package.into());
+        config
+    }
+
+    #[test]
+    fn builds_a_reader_from_valid_ids() {
+        let config = config_with_ids(
+            true,
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "0x4444444444444444444444444444444444444444444444444444444444444444",
+        );
+        assert!(build_state_root_reader(&config).is_some());
+    }
+
+    #[test]
+    fn pinned_off_disables_verification() {
+        let config = config_with_ids(
+            false,
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "0x4444444444444444444444444444444444444444444444444444444444444444",
+        );
+        assert!(build_state_root_reader(&config).is_none());
+    }
+
+    #[test]
+    fn blank_package_id_disables_verification() {
+        let config = config_with_ids(
+            true,
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "  ",
+        );
+        assert!(build_state_root_reader(&config).is_none());
+    }
+
+    #[test]
+    fn unparseable_package_id_disables_verification() {
+        let config = config_with_ids(
+            true,
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "not-an-address",
+        );
+        assert!(build_state_root_reader(&config).is_none());
+    }
+
+    #[test]
+    fn blank_registry_id_disables_verification() {
+        let config = config_with_ids(
+            true,
+            "  ",
+            "0x4444444444444444444444444444444444444444444444444444444444444444",
+        );
+        assert!(build_state_root_reader(&config).is_none());
     }
 }

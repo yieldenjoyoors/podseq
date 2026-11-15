@@ -37,6 +37,8 @@ When `enabled = false`, no HTTP server is started.
 | `podseq_bridge_withdrawals_total`    | Counter   | Bridge withdrawals released on Sui                                    |
 | `podseq_deadline_status`             | Gauge     | Force-inclusion deadline verdict: 0 disabled, 1 active, 2 halted, 3 violated, 4 read error |
 | `podseq_deadline_overdue_seconds`    | Gauge     | Seconds the oldest pending forced transaction is past its deadline    |
+| `podseq_state_root_status`           | Gauge     | Settled-state-root verification verdict: 0 disabled, 1 verified, 2 no anchor, 3 mismatch, 4 read error |
+| `podseq_state_root_mismatches_total` | Counter   | Settled-state-root mismatches detected by this full node              |
 | `podseq_reserve_sui_balance_mist`    | Gauge     | Gas reserve SUI balance in mistos (0 until the first read)            |
 | `podseq_gas_topups_total`            | Counter   | Completed gas top-ups moved to the settlement key                     |
 | `podseq_rpc_proxy_requests_total`    | Counter   | JSON-RPC requests forwarded by the RPC proxy                          |
@@ -46,8 +48,8 @@ When `enabled = false`, no HTTP server is started.
 > Sequencer-only metrics (`blocks_built`, `sui_gas_balance`, `bridge_*`, `da_*`,
 > `pending_blocks`, `reserve_sui_balance`, `gas_topups`) read 0 on full nodes.
 > `podseq_block_height` and `podseq_settlement_height` are written by both modes:
-> the sequencer after each settle, the full node per sync poll. The deadline
-> gauges are full-node reads of the shared inbox and stay 0 on a sequencer.
+> the sequencer after each settle, the full node per sync poll. The deadline and
+> state-root gauges are full-node reads and stay 0 on a sequencer.
 
 ## Alerting on sequencer failure
 
@@ -66,6 +68,13 @@ endpoint. Three states are worth a page:
 - The monitor goes blind: `podseq_deadline_status == 4` for a few minutes means
   Sui reads keep failing. The node keeps applying blocks but nothing is
   verifying them. `0` on a node meant to verify means `sui.inbox_id` is unset.
+- The state-root verdict reports a mismatch: `podseq_state_root_status == 3`
+  means a settled root disagrees with the node's own execution or with the
+  on-chain anchor — a provable sequencer failure, not a stall. The node stops
+  finalizing further heights (`podseq_block_height` goes flat while
+  `podseq_settlement_height` keeps advancing) and nothing self-heals: an
+  operator must resolve the divergence before the node (and the exit queue,
+  which verifies against the anchored root) can be trusted again.
 
 `podseq_deadline_overdue_seconds` gives the paging depth: it only grows past
 the 10-minute margin while settlement stays stuck, so it separates a fresh
