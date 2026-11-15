@@ -51,11 +51,13 @@ simple while making the chain trust-minimized and developer-friendly.
       production (Engine API has its own port). The node's proxy fronts
       Reth's public port with per-client-IP token buckets — see
       [setup](./setup.md#rate-limiting-the-public-rpc).
-- [ ] **Hot-swap settlement key**: rotate the `SettlerCap` / `BridgeCap`
+- [x] **Hot-swap settlement key**: rotate the `SettlerCap` / `BridgeCap`
       without downtime. The new key is pre-authorized on Sui; the node switches
-      on an admin signal. Landed in the protocol and node runtime — see
-      [cap rotation](./cap-rotation.md); the roadmap box stays open until the
-      steering ceremony is exercised on a live deployment.
+      on an admin signal. Landed in the protocol and node runtime, and the
+      steering ceremony is exercised on a live deployment: two full rotation
+      cycles against testnet, the second staged by the cold `OpsCap` holder
+      and claimed by a fresh payer — see
+      [cap rotation](./cap-rotation.md#live-steering-exercise-testnet-2026-11-14).
 - [x] **Automatic Sui gas top-up**: monitor the settlement key's Sui balance.
       If it drops below a threshold, transfer from a funded reserve address.
       Landed in the node's gas watcher — see

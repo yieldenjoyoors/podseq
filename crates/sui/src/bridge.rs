@@ -221,11 +221,13 @@ impl BridgeClient {
         Ok(())
     }
 
-    /// Calls `bridge::initialize` on an already-published package and returns the
-    /// created object IDs. Mirrors settlement auto-deploy: the `bridge` module is
+    /// Calls `bridge::initialize` on an already-published package and returns
+    /// the created object IDs including the `OpsCap` the entombment mints to
+    /// the signer. Mirrors settlement auto-deploy: the `bridge` module is
     /// in the same package as `settlement`, so it is on-chain after settlement's
-    /// publish — this just creates the shared `Vault` and transfers `BridgeCap` to
-    /// the signer. Run once on first start; persist the IDs to config.
+    /// publish — this just creates the shared `Vault`, transfers `BridgeCap`,
+    /// and seeds the Vault's rotation state. Run once on first start; persist
+    /// the IDs to config.
     pub async fn initialize(
         key_path: &Path,
         rpc_url: &str,
@@ -276,7 +278,7 @@ impl BridgeClient {
         // release aborts in `dynamic_field::borrow_child_object` — the Vault
         // counterpart of the settlement deploy fix. Signed by the cap owner
         // (the initializer), who is also the initial withdrawal authority.
-        {
+        let ops_cap_id = {
             let mut builder = TransactionBuilder::new();
             let cap_arg =
                 builder.object(ObjectInput::new(parse_address(&cap_id, "bridge cap id")?));
@@ -290,11 +292,21 @@ impl BridgeClient {
                 .build(&mut rpc)
                 .await
                 .map_err(|e| BridgeError::Build(format!("entomb bridge cap: {e}")))?;
-            sign_and_execute(&mut rpc, &key, tx, "entomb bridge cap", DEPLOY_TX_WAIT).await?;
+            let entombed =
+                sign_and_execute(&mut rpc, &key, tx, "entomb bridge cap", DEPLOY_TX_WAIT).await?;
+            let minted = minted_ops_cap_id(entombed.transaction().effects().changed_objects())
+                .ok_or_else(|| {
+                    BridgeError::Execution("OpsCap not found in entombment response".into())
+                })?;
             info!(%vault_id, "bridge cap entombed; vault rotation state seeded, ops cap minted");
-        }
+            minted
+        };
 
-        Ok(DeployedBridge { vault_id, cap_id })
+        Ok(DeployedBridge {
+            vault_id,
+            cap_id,
+            ops_cap_id,
+        })
     }
 }
 
@@ -308,11 +320,22 @@ fn bridge_function(package: Address, name: &str) -> Function {
     )
 }
 
-/// Object IDs created by `bridge::initialize`.
+/// Object IDs created by `bridge::initialize` and its entombment ceremony.
 #[derive(Debug, Clone)]
 pub struct DeployedBridge {
     pub vault_id: String,
     pub cap_id: String,
+    /// The `OpsCap` minted to the signer by the Vault entombment — the
+    /// steering custody for the Vault's rotation window (move it to cold
+    /// custody before going live, like the Registry's).
+    pub ops_cap_id: String,
+}
+
+/// The id of the `OpsCap` the entombment mints to the sender: the only
+/// address-owned creation in the ceremony's effects (the entombed cap and
+/// the rotation state are object-owned children).
+fn minted_ops_cap_id(changes: &[sui_rpc::proto::sui::rpc::v2::ChangedObject]) -> Option<String> {
+    find_created_object(changes, owner::OwnerKind::Address)
 }
 
 /// Vault state the relayer and tests read, decoded from the shared object's BCS.
@@ -423,6 +446,57 @@ impl From<BridgeError> for CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The entomb tx's changed objects: the entombed cap and the rotation
+    /// state land as object-owned children, the minted `OpsCap` is the only
+    /// address-owned creation.
+    fn entomb_effects() -> Vec<sui_rpc::proto::sui::rpc::v2::ChangedObject> {
+        use sui_rpc::proto::sui::rpc::v2::changed_object::{
+            IdOperation, InputObjectState, OutputObjectState,
+        };
+        use sui_rpc::proto::sui::rpc::v2::{ChangedObject, Owner};
+        fn created(id: &str, kind: owner::OwnerKind) -> ChangedObject {
+            let mut out = ChangedObject::default();
+            out.object_id = Some(id.to_string());
+            out.input_state = Some(InputObjectState::DoesNotExist as i32);
+            out.output_state = Some(OutputObjectState::ObjectWrite as i32);
+            let mut holder = Owner::default();
+            holder.kind = Some(kind as i32);
+            holder.address = Some(id.to_string());
+            out.output_owner = Some(holder);
+            out.id_operation = Some(IdOperation::Created as i32);
+            out
+        }
+        vec![
+            created(
+                "0x1111111111111111111111111111111111111111111111111111111111111111",
+                owner::OwnerKind::Object,
+            ),
+            created(
+                "0x2222222222222222222222222222222222222222222222222222222222222222",
+                owner::OwnerKind::Object,
+            ),
+            created(
+                "0x3333333333333333333333333333333333333333333333333333333333333333",
+                owner::OwnerKind::Address,
+            ),
+        ]
+    }
+
+    #[test]
+    fn minted_ops_cap_id_picks_the_address_owned_created_object() {
+        let changes = entomb_effects();
+        let minted = minted_ops_cap_id(&changes).expect("ops cap minted");
+        assert_eq!(
+            minted,
+            "0x3333333333333333333333333333333333333333333333333333333333333333"
+        );
+    }
+
+    #[test]
+    fn minted_ops_cap_id_is_none_without_an_address_owned_creation() {
+        assert!(minted_ops_cap_id(&[]).is_none());
+    }
 
     #[test]
     fn rejects_invalid_key() {

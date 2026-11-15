@@ -4135,7 +4135,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "GasRow::append_csv",
-      "line": 70,
+      "line": 67,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -4143,7 +4143,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "GasRow::net",
-      "line": 66,
+      "line": 63,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -4151,31 +4151,23 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "claim",
-      "line": 368,
+      "line": 310,
       "cyclomatic": 10.0,
       "coverage": null,
       "crap": 110.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
-      "function": "execute_measured",
-      "line": 103,
-      "cyclomatic": 5.0,
-      "coverage": null,
-      "crap": 30.0
-    },
-    {
-      "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "fresh",
-      "line": 239,
-      "cyclomatic": 24.0,
+      "line": 198,
+      "cyclomatic": 18.0,
       "coverage": null,
-      "crap": 600.0
+      "crap": 342.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "handoff",
-      "line": 522,
+      "line": 467,
       "cyclomatic": 13.0,
       "coverage": null,
       "crap": 182.0
@@ -4183,7 +4175,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "load_key",
-      "line": 230,
+      "line": 189,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -4191,7 +4183,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "main",
-      "line": 186,
+      "line": 143,
       "cyclomatic": 12.0,
       "coverage": null,
       "crap": 156.0
@@ -4199,23 +4191,15 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "measure",
-      "line": 141,
-      "cyclomatic": 1.0,
+      "line": 99,
+      "cyclomatic": 5.0,
       "coverage": null,
-      "crap": 2.0
-    },
-    {
-      "file": "./crates/sui/examples/rotation_gas_bench.rs",
-      "function": "minted_ops_cap",
-      "line": 156,
-      "cyclomatic": 2.0,
-      "coverage": null,
-      "crap": 6.0
+      "crap": 30.0
     },
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "module_fn",
-      "line": 510,
+      "line": 452,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -4223,7 +4207,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "post",
-      "line": 417,
+      "line": 359,
       "cyclomatic": 12.0,
       "coverage": null,
       "crap": 156.0
@@ -4231,7 +4215,7 @@
     {
       "file": "./crates/sui/examples/rotation_gas_bench.rs",
       "function": "request_ptb",
-      "line": 482,
+      "line": 424,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -4311,28 +4295,28 @@
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "BridgeClient::initialize",
-      "line": 229,
+      "line": 231,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 229,
-          "end": 236
+          "start": 231,
+          "end": 238
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "BridgeClient::initialize_with_key",
-      "line": 241,
-      "cyclomatic": 11.0,
+      "line": 243,
+      "cyclomatic": 12.0,
       "coverage": 0.0,
-      "crap": 132.0,
+      "crap": 156.0,
       "uncovered": [
         {
-          "start": 241,
-          "end": 298
+          "start": 243,
+          "end": 310
         }
       ]
     },
@@ -4431,49 +4415,57 @@
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "CoreError::from",
-      "line": 418,
+      "line": 441,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 418,
-          "end": 420
+          "start": 441,
+          "end": 443
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "bridge_function",
-      "line": 303,
+      "line": 315,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
       "uncovered": [
         {
-          "start": 303,
-          "end": 309
+          "start": 315,
+          "end": 321
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "deposit_at",
-      "line": 385,
+      "line": 408,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
       "uncovered": [
         {
-          "start": 385,
-          "end": 394
+          "start": 408,
+          "end": 417
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
+      "function": "minted_ops_cap_id",
+      "line": 337,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    },
+    {
+      "file": "./crates/sui/src/bridge.rs",
       "function": "parse_field_deposit",
-      "line": 405,
+      "line": 428,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -4481,7 +4473,7 @@
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "parse_vault_status",
-      "line": 371,
+      "line": 394,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0
@@ -4489,28 +4481,28 @@
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "vault_contents",
-      "line": 337,
+      "line": 360,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 337,
-          "end": 342
+          "start": 360,
+          "end": 365
         }
       ]
     },
     {
       "file": "./crates/sui/src/bridge.rs",
       "function": "vault_status",
-      "line": 331,
+      "line": 354,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
       "uncovered": [
         {
-          "start": 331,
-          "end": 334
+          "start": 354,
+          "end": 357
         }
       ]
     },
@@ -5769,12 +5761,12 @@
       "function": "find_created_object",
       "line": 1036,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 90.0,
+      "crap": 1.001,
       "uncovered": [
         {
-          "start": 1036,
-          "end": 1045
+          "start": 1040,
+          "end": 1040
         }
       ]
     },
