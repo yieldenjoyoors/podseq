@@ -5,12 +5,14 @@ The sui crate owns Walrus data availability and Sui settlement. It implements bo
 
 ## Dependencies
 
-Two lightweight libraries, no monorepo:
+One lightweight library, no monorepo:
 
-- [`walrus-core`](https://github.com/MystenLabs/walrus/tree/main/crates/walrus-core): blob
-  types and Red Stuff erasure encoding (without the `sui-types` feature).
 - [`sui-rust-sdk`](https://github.com/MystenLabs/sui-rust-sdk): `sui-transaction-builder`
   for constructing transactions, `sui-crypto` for ed25519 signing, `sui-rpc` for submission.
+
+Walrus is reached over plain HTTP (`reqwest`): the publisher stores blobs,
+the aggregator reads them back. Blob IDs come from the crate's own `blob_id`
+module (base64url encode/decode); no Walrus client library is in the tree.
 
 ## DA and settlement share a wallet
 

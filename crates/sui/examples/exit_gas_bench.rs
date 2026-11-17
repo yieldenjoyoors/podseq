@@ -821,7 +821,7 @@ async fn halt(
     // redeem + escape_release pair pays the vault reserve to the recipient.
     let mut amount_be = [0u8; 32];
     amount_be[24..].copy_from_slice(&balance_a.to_be_bytes());
-    let (payload, signature) = sign_exit_payload(&owner_a, addr_a, amount_be, recipient)?;
+    let (payload, signature) = sign_exit_payload(&owner_a, addr_a, amount_be, recipient);
     let redeem = RedeemRequest {
         address: addr_a,
         recipient,

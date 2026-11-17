@@ -38,8 +38,6 @@ pub enum BridgeError {
     Execution(String),
     #[error("parse error: {0}")]
     Parse(String),
-    #[error("signing error: {0}")]
-    Signing(String),
 }
 
 impl From<SettlementError> for BridgeError {
@@ -51,7 +49,6 @@ impl From<SettlementError> for BridgeError {
             crate::settlement::SettlementError::Build(s) => BridgeError::Build(s),
             crate::settlement::SettlementError::Execution(s) => BridgeError::Execution(s),
             crate::settlement::SettlementError::Parse(s) => BridgeError::Parse(s),
-            crate::settlement::SettlementError::Signing(s) => BridgeError::Signing(s),
         }
     }
 }

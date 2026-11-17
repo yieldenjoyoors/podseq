@@ -13,6 +13,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+alloy-primitives = "1"
+k256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da9e032255cfdc371657f84d76d30c061", features = [
     "hash",
     "serde",
@@ -41,6 +43,13 @@ bench = false
 [[bin]]
 name = "da_wire"
 path = "fuzz_targets/da_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "exit_sign"
+path = "fuzz_targets/exit_sign.rs"
 test = false
 doc = false
 bench = false

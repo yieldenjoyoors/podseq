@@ -213,6 +213,24 @@ verdict opened on schedule past the margin; a replayed redemption aborts
 `E_NOTHING_TO_REDEEM` (17) exactly when `paid` reaches the recorded
 balance.
 
+### Fuzzing the signing seam
+
+`exit_sign` (in `fuzz/`, libFuzzer + ASan) pins the redemption signature to
+the Move module's conventions with independently computed oracles: the
+99-byte payload layout including the `podseq-exit:v1:` domain the module
+rebuilds its preimage from, the EIP-191 header for arbitrary input lengths,
+the Ethereum v byte (27/28), and sign→recover reproducing the signer's
+address. A drift in any of these makes `redeem` reject every wallet
+signature, so each is asserted, not printed. Its one initial crash was in
+the harness itself: it compared the canonical payload against a signature
+built for the signer-derived address instead of the claimed one. That
+distinction is the seam's contract: the owner signs the claimed record, and
+the module checks the recovered key against the record. So the harness
+signs the claimed address and asserts recovery against the signer. First
+campaign: 1,210,393 execs, 0 crashes (the wrapper's budget cap, not a
+failure), corpus 33; the existing three targets re-ran clean alongside it
+(60,000 execs each).
+
 ## The unlock condition
 
 The escape path opens only when the chain is in the halt its own rules

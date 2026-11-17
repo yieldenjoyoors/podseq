@@ -128,8 +128,6 @@ pub enum SettlementError {
     Execution(String),
     #[error("parse error: {0}")]
     Parse(String),
-    #[error("signing error: {0}")]
-    Signing(String),
 }
 
 /// Object IDs produced by deploying the settlement package.

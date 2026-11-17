@@ -73,10 +73,12 @@ pub fn exit_payload(address: [u8; 20], amount_be: [u8; 32], recipient: Address) 
     payload
 }
 
-/// The EIP-191 personal-sign preimage for `payload`: the 25-byte header
-/// (`\x19Ethereum Signed Message:\n` ‖ decimal ASCII length) followed by the
-/// payload — the byte string a wallet hashes into `personal_sign`.
-fn eip191_preimage(payload: &[u8]) -> Vec<u8> {
+/// The EIP-191 personal-sign preimage for `payload`: the header
+/// (`\x19Ethereum Signed Message:\n` ‖ decimal ASCII byte length) followed
+/// by the payload — the byte string a wallet hashes into `personal_sign`.
+/// Public so tools and the fuzz oracle hash the exact bytes the signer
+/// hashed.
+pub fn eip191_preimage(payload: &[u8]) -> Vec<u8> {
     let mut out = b"\x19Ethereum Signed Message:\n".to_vec();
     out.extend_from_slice(payload.len().to_string().as_bytes());
     out.extend_from_slice(payload);
@@ -87,7 +89,7 @@ fn eip191_preimage(payload: &[u8]) -> Vec<u8> {
 /// `keccak256(X ‖ Y)` over the uncompressed public key — the same derivation
 /// the Move module redoes when it verifies a redemption signature.
 pub fn eth_address(key: &SigningKey) -> [u8; 20] {
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     let digest = keccak256(&point.as_bytes()[1..]);
     let mut out = [0u8; 20];
     out.copy_from_slice(&digest[12..]);
@@ -104,16 +106,14 @@ pub fn sign_exit_payload(
     address: [u8; 20],
     amount_be: [u8; 32],
     recipient: Address,
-) -> Result<(Vec<u8>, [u8; 65]), SettlementError> {
+) -> (Vec<u8>, [u8; 65]) {
     let payload = exit_payload(address, amount_be, recipient);
     let digest = keccak256(eip191_preimage(&payload));
-    let (signature, recid) = key
-        .sign_prehash_recoverable(digest.as_slice())
-        .map_err(|e| SettlementError::Signing(format!("secp256k1 signing failed: {e}")))?;
+    let (signature, recid) = key.sign_prehash_recoverable(digest.as_slice());
     let mut out = [0u8; 65];
     out[..64].copy_from_slice(&signature.to_bytes());
     out[64] = 27 + recid.to_byte();
-    Ok((payload, out))
+    (payload, out)
 }
 
 /// Appends `exit_queue::request_exit` to `builder`.
@@ -287,7 +287,7 @@ mod tests {
         let sig = Signature::from_slice(&rs).expect("r ‖ s parses");
         let recovered = VerifyingKey::recover_from_prehash(digest.as_slice(), &sig, recid)
             .expect("recovers under the module's conventions");
-        let point = recovered.to_encoded_point(false);
+        let point = recovered.to_sec1_point(false);
         let addr_digest = keccak256(&point.as_bytes()[1..]);
         let mut out = [0u8; 20];
         out.copy_from_slice(&addr_digest[12..]);
@@ -302,9 +302,7 @@ mod tests {
         amount_be[31] = 200;
         let recipient = Address::new([0xEE; 32]);
 
-        let (payload, signature) =
-            sign_exit_payload(&key, owner, amount_be, recipient).expect("signs");
-
+        let (payload, signature) = sign_exit_payload(&key, owner, amount_be, recipient);
         // The signature is 65 bytes with the Ethereum v encoding the module
         // normalizes (27/28 → recovery id 0/1).
         assert_eq!(signature.len(), 65);
