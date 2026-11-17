@@ -63,7 +63,7 @@ sui-crypto = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea34
 sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk", rev = "51ea346da9e032255cfdc371657f84d76d30c061" }
 
 # Observability
-prometheus-client = "0.25"
+prometheus-client = "0.26"
 
 # Commonware (p2p, storage, runtime)
 commonware-runtime = "2026.9"
