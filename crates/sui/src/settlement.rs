@@ -163,8 +163,12 @@ pub const UPGRADE_POLICY_DEP_ONLY: u8 = 192;
 /// Result of a live package upgrade through the steering ceremony
 /// ([`upgrade_package`]).
 pub struct UpgradeOutcome {
-    /// The new (latest) package id after the upgrade. Calls against the
-    /// original package id keep routing to the latest version.
+    /// The new (latest) package id after the upgrade. Calls resolve only on
+    /// this id — the original package id does not route to later versions
+    /// (pinned live: a call on the original id aborts with
+    /// FUNCTION_NOT_FOUND), so a node's `sui.package_id` config must
+    /// repoint after every upgrade. Objects are unaffected: their types
+    /// stay linked to the origin id.
     pub new_package_id: String,
     /// The digest of the upgrade transaction.
     pub tx_digest: String,
