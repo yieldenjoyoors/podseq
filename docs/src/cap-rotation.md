@@ -422,6 +422,10 @@ The policy has three moves:
   through `package::make_immutable` — one way, event on chain. The ladder ends in a
   package that can no longer be upgraded at all, for operators done iterating.
 
+This whole path ran against live testnet on 2026-11-17 — restrict to additive, two
+expected-abort probes, a real additive upgrade, and a post-upgrade settle — see
+[the exercise below](#live-upgrade-exercise-testnet-2026-11-17).
+
 Two checks the Move side cannot make, and what covers them:
 
 - *Does the cap match this package?* Move cannot read its own package id. The deploy
@@ -561,6 +565,63 @@ Two findings the live run pinned:
   already-settled height with the identical blob on the new authority charged
   computation only (net 1,000,444 vs 2,451,945 for a fresh anchor) — the
   idempotent re-submit K2 leans on, observed across a completed swap.
+
+### Live upgrade exercise (testnet, 2026-11-17)
+
+The UpgradeCap custody ladder executed end to end against current testnet:
+fresh deploy (the full ceremony, cap entombed at publish), `restrict_package_upgrades`
+to the additive tier, two expected-abort upgrade probes, a real additive
+upgrade — the package gained a throwaway `upgrade_probe()` function, session-local
+to the run — and a post-upgrade settle plus probe call
+(`crates/sui/examples/upgrade_exercise.rs`; digests in the run's
+`upgrade_exercise_state.gas.csv`). Package `0x7453…665c` → `0xfbc4…0d4c` in one
+PTB, `authorize → Upgrade → commit`, steered by the Registry's `OpsCap` against
+the entombed cap.
+
+Three findings the live run pinned:
+
+- **Calls do not route from the original package id to the latest version.**
+  After the upgrade, `sui client call` against the original id could not resolve
+  the added function, while the same call against the new id succeeded
+  (transaction `Eee655DC…KTPB`). So an upgrade moves the address callers must
+  use: a node's `sui.package_id` config and every tool's package id have to
+  repoint at the latest id after an upgrade, or they keep talking to the old
+  version's function set. (Objects are unaffected — their types stay linked to
+  the origin id.) This was assumed cheaply true before; it is now checked, and
+  it fails.
+- **Aborted transactions still advance their input objects' versions.** Each
+  expected-abort probe invalidated the pinned `OpsCap` version for the next
+  PTB (`object … version 0x8 … is unavailable for consumption, current version:
+  0x9`, immediately after an abort that cannot have moved the object). A run
+  that pins owned objects must re-fetch the pin between transactions, not
+  between successful ones.
+- **The ladder holds at every rung, on chain.** A looser `restrict` aborts
+  `E_TOO_PERMISSIVE` (abort code 9, in `settlement::restrict_package_upgrades`);
+  an upgrade requesting a policy looser than the cap's aborts `ETooPermissive`
+  (code 1, in `0x2::package::authorize_upgrade`); a right policy with a wrong
+  digest aborts `PackageUpgradeError::DigestDoesNotMatch` at the `Upgrade`
+  command. And after the upgrade, `settle_as` on the new package id cost
+  exactly the pre-upgrade baseline (net 2,451,945 MIST, the same number as the
+  steering exercise's table below) — an additive upgrade leaves the settlement
+  path untouched.
+
+Gas for the ladder (MIST; net = computation + storage − rebate):
+
+| Transaction | Computation | Storage | Rebate | Net |
+| --- | --- | --- | --- | --- |
+| `restrict_package_upgrades` (additive) | 1,000,000 | 3,237,600 | 3,237,276 | **1,000,324** |
+| looser-policy restrict (aborts) | 1,000,000 | 3,237,600 | 3,237,276 | **1,000,324** |
+| upgrade, policy looser than cap's (aborts) | 1,530,000 | 3,237,600 | 3,237,276 | **1,530,324** |
+| upgrade, wrong digest (aborts) | 1,530,000 | 3,237,600 | 3,237,276 | **1,530,324** |
+| `upgrade_package` (additive, the real one) | 1,530,000 | 170,802,400 | 5,957,804 | **166,374,596** |
+| probe call on the upgraded package | 1,000,000 | 0 | 0 | **1,000,000** |
+| missing-function call (aborts) | 1,000,000 | 0 | 0 | **1,000,000** |
+| `settle_as` on the upgraded package | 1,000,000 | 4,902,000 | 3,450,055 | **2,451,945** |
+
+The upgrade itself is storage-dominated: it pays for a second full copy of the
+package's bytecode. The aborted attempts charge computation only — trying a
+gate and being wrong costs about a million MIST, which is what makes the
+ladder cheap to probe.
 
 ### Gas (Sui testnet, live execution)
 

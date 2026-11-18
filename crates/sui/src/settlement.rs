@@ -150,6 +150,26 @@ pub struct DeployedContract {
     pub ops_cap_id: String,
 }
 
+/// The framework upgrade-policy tiers (`sui-framework sources/package.move`).
+/// `authorize_upgrade` requires `policy >= cap.policy`, so the ladder is
+/// monotonic: a cap restricted to a tighter tier rejects any looser one.
+pub const UPGRADE_POLICY_COMPATIBLE: u8 = 0;
+/// Add new functions or types, or change dependencies; existing functions
+/// cannot change.
+pub const UPGRADE_POLICY_ADDITIVE: u8 = 128;
+/// Only change dependencies.
+pub const UPGRADE_POLICY_DEP_ONLY: u8 = 192;
+
+/// Result of a live package upgrade through the steering ceremony
+/// ([`upgrade_package`]).
+pub struct UpgradeOutcome {
+    /// The new (latest) package id after the upgrade. Calls against the
+    /// original package id keep routing to the latest version.
+    pub new_package_id: String,
+    /// The digest of the upgrade transaction.
+    pub tx_digest: String,
+}
+
 /// Sui settlement client that commits block anchors on-chain.
 pub struct Settlement {
     key: Ed25519PrivateKey,
@@ -801,8 +821,9 @@ async fn run_entomb_upgrade_cap(
 ///
 /// `build` is the compiled new version from
 /// `sui move build --dump-bytecode-as-base64` (see [`parse_move_build`]);
-/// `policy` must be at least as restrictive as the entombed cap's. Returns
-/// the new package id.
+/// `policy` must be at least as restrictive as the entombed cap's.
+///
+/// Returns the new package id and the upgrade transaction's digest.
 ///
 /// # Errors
 ///
@@ -817,7 +838,7 @@ pub async fn upgrade_package(
     ops_cap_id: &str,
     build: MoveBuild,
     policy: u8,
-) -> Result<String, SettlementError> {
+) -> Result<UpgradeOutcome, SettlementError> {
     use sui_rpc::proto::sui::rpc::v2::changed_object::OutputObjectState;
     let (key, sender) = load_signer(key_path)?;
     let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
@@ -854,6 +875,7 @@ pub async fn upgrade_package(
         .build(&mut rpc)
         .await
         .map_err(|e| SettlementError::Build(format!("upgrade package: {e}")))?;
+    let tx_digest = tx.digest().to_string();
     let response = sign_and_execute(&mut rpc, &key, tx, "upgrade package", DEPLOY_TX_WAIT).await?;
 
     let new_package_id = response
@@ -867,12 +889,17 @@ pub async fn upgrade_package(
             SettlementError::Execution("upgraded package not found in response".into())
         })?;
     info!(package_id = %new_package_id, "package upgraded under steering custody");
-    Ok(new_package_id)
+    Ok(UpgradeOutcome {
+        new_package_id,
+        tx_digest,
+    })
 }
 
 /// Tightens the entombed cap's upgrade policy
 /// (`settlement::restrict_package_upgrades`). Only the framework's
 /// `additive` and `dep_only` tiers are accepted, never a loosening.
+///
+/// Returns the digest of the restrict transaction.
 ///
 /// # Errors
 ///
@@ -885,7 +912,7 @@ pub async fn restrict_package_upgrades(
     registry_id: &str,
     ops_cap_id: &str,
     policy: u8,
-) -> Result<(), SettlementError> {
+) -> Result<String, SettlementError> {
     let (key, sender) = load_signer(key_path)?;
     let mut rpc = sui_rpc::Client::new(rpc_url).map_err(|e| SettlementError::Rpc(e.to_string()))?;
     let package = parse_address(package_id, "package id")?;
@@ -910,8 +937,9 @@ pub async fn restrict_package_upgrades(
         .build(&mut rpc)
         .await
         .map_err(|e| SettlementError::Build(format!("restrict upgrades: {e}")))?;
+    let tx_digest = tx.digest().to_string();
     sign_and_execute(&mut rpc, &key, tx, "restrict upgrades", DEPLOY_TX_WAIT).await?;
-    Ok(())
+    Ok(tx_digest)
 }
 
 /// Destroys the entombed `UpgradeCap`, making the package permanently
@@ -1223,6 +1251,16 @@ fn parse_blob_id(bytes: &[u8]) -> Result<BlobId, SettlementError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_policy_constants_match_the_framework() {
+        // `sui-framework sources/package.move`: COMPATIBLE = 0, ADDITIVE = 128,
+        // DEP_ONLY = 192. `authorize_upgrade` requires
+        // `policy >= cap.policy`, so the ladder is monotonic by these values.
+        assert_eq!(UPGRADE_POLICY_COMPATIBLE, 0);
+        assert_eq!(UPGRADE_POLICY_ADDITIVE, 128);
+        assert_eq!(UPGRADE_POLICY_DEP_ONLY, 192);
+    }
 
     #[test]
     fn parse_move_build_reads_the_cli_json() {
