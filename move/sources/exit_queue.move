@@ -19,7 +19,10 @@
 //! Redemption consumes a recorded request: the owner signs the payout with
 //! their L2 key (EIP-191 over domain ‖ address ‖ amount ‖ recipient), the
 //! recovered address must equal the recorded one, and [`redeem`] mints a
-//! `bridge::ExitClaim` hot potato that releases the vault's coins.
+//! `bridge::ExitClaim` hot potato that releases the vault's coins. The
+//! queue serves records in proof order, ascending `(height, seq)`, and a
+//! head that never redeems is demoted after a ten-minute window, so
+//! strict order cannot become a veto.
 //!
 //! See `docs/src/exit-queue.md` for the design and the rejected
 //! alternatives (sequencer attestations, ZK transitions, challenge windows).
@@ -30,6 +33,7 @@ module podseq::exit_queue {
     use sui::address;
     use sui::clock::{Self, Clock};
     use sui::coin;
+    use sui::dynamic_field;
     use sui::ecdsa_k1;
     use sui::event;
     use sui::hash;
@@ -79,6 +83,14 @@ module podseq::exit_queue {
     const E_AMOUNT: u64 = 16;
     /// Nothing is left to redeem: the recorded balance is fully paid out.
     const E_NOTHING_TO_REDEEM: u64 = 17;
+    /// The address is not the queue head: an indexed record redeems only at
+    /// the head, and a record outside the index waits until it drains.
+    const E_NOT_QUEUE_HEAD: u64 = 18;
+    /// The ordered index is empty, so the skip valve has nothing to pass.
+    const E_QUEUE_EMPTY: u64 = 19;
+    /// The head has not sat in the queue past [`SKIP_AFTER_MS`], so the
+    /// valve will not demote it yet.
+    const E_SKIP_EARLY: u64 = 20;
 
     /// Longest RLP length-of-length prefix accepted, matching Ethereum's 8.
     const MAX_LEN_BYTES: u64 = 8;
@@ -103,6 +115,15 @@ module podseq::exit_queue {
     /// shape: every settle aborts at the inbox gate, `last_settled_ts`
     /// freezes, and the entry stays pending forever.
     const HALT_MARGIN_MS: u64 = 600_000;
+
+    /// How long a head may hold the ordered payout queue before anyone can
+    /// demote it with [`skip_head`]. Same margin class as
+    /// [`HALT_MARGIN_MS`]: the exit path already pays ten minutes for
+    /// settlement-lag safety, and the valve pays the same for strict
+    /// order. A head its owner never signs blocks every payout behind it
+    /// until the window elapses — the cost of serving exits in proof
+    /// order.
+    const SKIP_AFTER_MS: u64 = 600_000;
 
     /// Failure marker for positive tests (the assertion that failed is named
     /// by the test, not the code).
@@ -406,6 +427,53 @@ module podseq::exit_queue {
         next_seq: u64,
     }
 
+    // ---------- ordered payout index ----------
+    //
+    // Redemption serves exits in proof order: ascending `(height, seq)`.
+    // `requests` maps address -> record; the index below links the payable
+    // records in serving order as dynamic fields of the `ExitQueue` object
+    // itself. The struct layout froze at publish, and dynamic fields are
+    // how this package grows without breaking deployed objects (the
+    // adjustable inclusion window did the same to the `Inbox`).
+    //
+    // Redemption serves the head and nothing else; a paid head leaves the
+    // index and its successor becomes the head. The skip valve keeps
+    // strict order from becoming a veto: after [`SKIP_AFTER_MS`] anyone
+    // can demote a head that never redeems, sending it behind the whole
+    // queue.
+
+    /// Dynamic-field key holding the index head's address. The field's
+    /// presence is the index's "not empty" state.
+    public struct QueueHeadKey has copy, drop, store {}
+
+    /// Dynamic-field key for one index node, keyed by the L2 address.
+    public struct QueueAddrKey has copy, drop, store {
+        address: vector<u8>,
+    }
+
+    /// One node of the ordered index: the linked list over payable
+    /// records, ascending by `(height, seq)`.
+    public struct QueueNode has copy, drop, store {
+        prev: Option<vector<u8>>,
+        next: Option<vector<u8>>,
+        /// Clock reading when the record entered the index — the skip
+        /// valve's clock. A same-height reproof rewrites the record but
+        /// leaves this untouched, so nobody can keep a head fresh forever
+        /// by replaying public proofs; only a strictly-earlier proof
+        /// re-enters a record, and heights run out.
+        recorded_at_ms: u64,
+    }
+
+    /// Dynamic-field key holding the index size.
+    public struct QueueCountKey has copy, drop, store {}
+
+    /// Dynamic-field key marking a demoted record. Skipped records keep
+    /// their request and their paid counter; they redeem once every
+    /// indexed record ahead of them has been served.
+    public struct SkipMarkKey has copy, drop, store {
+        address: vector<u8>,
+    }
+
     /// Emitted when an escape request is recorded or improved. A proof that
     /// would regress the request's height is ignored silently: the state
     /// does not change, so there is nothing to observe.
@@ -511,6 +579,190 @@ module podseq::exit_queue {
         table::length(&queue.requests)
     }
 
+    /// Emitted when the valve demotes a head that never redeemed. The
+    /// record stays: it can still redeem, behind everyone indexed.
+    public struct ExitSkipped has copy, drop {
+        /// The 20-byte L2 address that was head.
+        address: vector<u8>,
+        /// Settled height the request was proven at.
+        height: u64,
+        /// Sequence the request holds.
+        seq: u64,
+    }
+
+    /// The ordered index's head — the payable record every redemption must
+    /// serve first, `none` when no indexed record is pending. Records
+    /// outside the index (zero-balance proofs, fully-paid records, and
+    /// skipped ones) wait behind it.
+    public fun queue_head(queue: &ExitQueue): Option<vector<u8>> {
+        index_head_addr(queue)
+    }
+
+    /// How many records sit in the ordered index.
+    public fun queue_size(queue: &ExitQueue): u64 {
+        index_size(queue)
+    }
+
+    /// Whether the valve has demoted `address`'s record: skipped records
+    /// redeem once the ordered index drains, not in their old position.
+    public fun is_skipped(queue: &ExitQueue, address: vector<u8>): bool {
+        dynamic_field::exists_with_type<SkipMarkKey, bool>(&queue.id, SkipMarkKey { address })
+    }
+
+    /// How long a head may hold the queue before [`skip_head`] may demote
+    /// it.
+    public fun skip_after_ms(): u64 {
+        SKIP_AFTER_MS
+    }
+
+    /// The liveness valve. The head holds the queue only so long: once it
+    /// has sat for [`SKIP_AFTER_MS`] without its owner redeeming, anyone
+    /// can demote it — the head moves to its successor and the skipped
+    /// record goes behind every indexed record. Strict order stays the
+    /// rule for owners who show up; an absent one cannot hold everyone
+    /// hostage past the window. The record keeps its request and its paid
+    /// counter, and a skipped record never re-enters the index.
+    public fun skip_head(queue: &mut ExitQueue, clock: &Clock) {
+        let head = index_head_addr(queue);
+        assert!(option::is_some(&head), E_QUEUE_EMPTY);
+        let address = option::destroy_some(head);
+        let node = *dynamic_field::borrow<QueueAddrKey, QueueNode>(&queue.id, QueueAddrKey { address });
+        assert!(clock.timestamp_ms() > node.recorded_at_ms + SKIP_AFTER_MS, E_SKIP_EARLY);
+        let record = *table::borrow(&queue.requests, address);
+        index_unlink(queue, address);
+        dynamic_field::add(&mut queue.id, SkipMarkKey { address }, true);
+        event::emit(ExitSkipped {
+            address,
+            height: record.height,
+            seq: record.seq,
+        });
+    }
+
+    // ---------- index internals ----------
+
+    /// Lexicographic `(height, seq)` ordering: is `(h1, s1)` at or before
+    /// `(h2, s2)`?
+    fun key_at_or_before(h1: u64, s1: u64, h2: u64, s2: u64): bool {
+        h1 < h2 || (h1 == h2 && s1 <= s2)
+    }
+
+    /// The index head's address, `none` when the index is empty. The
+    /// `QueueHeadKey` field's presence is the "not empty" state.
+    fun index_head_addr(queue: &ExitQueue): Option<vector<u8>> {
+        if (dynamic_field::exists_with_type<QueueHeadKey, vector<u8>>(&queue.id, QueueHeadKey {})) {
+            option::some(*dynamic_field::borrow<QueueHeadKey, vector<u8>>(&queue.id, QueueHeadKey {}))
+        } else {
+            option::none()
+        }
+    }
+
+    fun index_size(queue: &ExitQueue): u64 {
+        if (dynamic_field::exists_with_type<QueueCountKey, u64>(&queue.id, QueueCountKey {})) {
+            *dynamic_field::borrow<QueueCountKey, u64>(&queue.id, QueueCountKey {})
+        } else {
+            0
+        }
+    }
+
+    fun index_set_size(queue: &mut ExitQueue, size: u64) {
+        if (dynamic_field::exists_with_type<QueueCountKey, u64>(&queue.id, QueueCountKey {})) {
+            *dynamic_field::borrow_mut<QueueCountKey, u64>(&mut queue.id, QueueCountKey {}) = size;
+        } else {
+            dynamic_field::add(&mut queue.id, QueueCountKey {}, size);
+        };
+    }
+
+    /// The `next` link of `address`'s node. The node must exist: callers
+    /// only walk links they were handed by the index itself.
+    fun index_node_next(queue: &ExitQueue, address: vector<u8>): Option<vector<u8>> {
+        let node = *dynamic_field::borrow<QueueAddrKey, QueueNode>(&queue.id, QueueAddrKey { address });
+        node.next
+    }
+
+    /// Inserts `address`'s payable record into the ordered index at its
+    /// `(height, seq)` position — the walk starts at the head and stops at
+    /// the first node ordered after it, so a record that belongs at the
+    /// front costs one hop and a record that belongs at the back costs the
+    /// whole walk. The record must exist in `requests` and hold no node.
+    fun index_insert(queue: &mut ExitQueue, address: vector<u8>, now_ms: u64) {
+        let record = *table::borrow(&queue.requests, address);
+        let mut prev: Option<vector<u8>> = option::none();
+        let mut next = index_head_addr(queue);
+        let mut walking = option::is_some(&next);
+        while (walking) {
+            let cur = option::extract(&mut next);
+            let cur_record = *table::borrow(&queue.requests, cur);
+            if (key_at_or_before(cur_record.height, cur_record.seq, record.height, record.seq)) {
+                prev = option::some(cur);
+                next = index_node_next(queue, cur);
+                walking = option::is_some(&next);
+            } else {
+                // The successor; stop with `prev` as the predecessor.
+                next = option::some(cur);
+                walking = false;
+            };
+        };
+        dynamic_field::add(&mut queue.id, QueueAddrKey { address }, QueueNode {
+            prev: prev,
+            next: next,
+            recorded_at_ms: now_ms,
+        });
+        if (option::is_some(&prev)) {
+            let p = *option::borrow(&prev);
+            dynamic_field::borrow_mut<QueueAddrKey, QueueNode>(
+                &mut queue.id,
+                QueueAddrKey { address: p },
+            ).next = option::some(address);
+        } else if (dynamic_field::exists_with_type<QueueHeadKey, vector<u8>>(
+            &queue.id,
+            QueueHeadKey {},
+        )) {
+            *dynamic_field::borrow_mut<QueueHeadKey, vector<u8>>(&mut queue.id, QueueHeadKey {}) =
+                address;
+        } else {
+            dynamic_field::add(&mut queue.id, QueueHeadKey {}, address);
+        };
+        if (option::is_some(&next)) {
+            let n = *option::borrow(&next);
+            dynamic_field::borrow_mut<QueueAddrKey, QueueNode>(
+                &mut queue.id,
+                QueueAddrKey { address: n },
+            ).prev = option::some(address);
+        };
+        let size = index_size(queue) + 1;
+        index_set_size(queue, size);
+    }
+
+    /// Removes `address`'s node from the ordered index, relinking its
+    /// neighbours; an unlinked head hands the head to its successor, and
+    /// the last record empties the index.
+    fun index_unlink(queue: &mut ExitQueue, address: vector<u8>) {
+        let QueueNode { prev, next, recorded_at_ms: _ } =
+            dynamic_field::remove<QueueAddrKey, QueueNode>(&mut queue.id, QueueAddrKey { address });
+        if (option::is_some(&prev)) {
+            let p = *option::borrow(&prev);
+            dynamic_field::borrow_mut<QueueAddrKey, QueueNode>(
+                &mut queue.id,
+                QueueAddrKey { address: p },
+            ).next = next;
+        } else if (option::is_some(&next)) {
+            *dynamic_field::borrow_mut<QueueHeadKey, vector<u8>>(&mut queue.id, QueueHeadKey {}) =
+                *option::borrow(&next);
+        } else {
+            // The index drained.
+            dynamic_field::remove<QueueHeadKey, vector<u8>>(&mut queue.id, QueueHeadKey {});
+        };
+        if (option::is_some(&next)) {
+            let n = *option::borrow(&next);
+            dynamic_field::borrow_mut<QueueAddrKey, QueueNode>(
+                &mut queue.id,
+                QueueAddrKey { address: n },
+            ).prev = prev;
+        };
+        let size = index_size(queue);
+        index_set_size(queue, size - 1);
+    }
+
     /// Records (or improves) an escape request — the escape entrypoint.
     ///
     /// Fires only in the inbox-derived halt state ([`halt_expired_deadline`]):
@@ -529,11 +781,11 @@ module podseq::exit_queue {
     /// can produce a valid proof at any later height, and the rule makes
     /// that useless. The redeemed total ([`paid_at`]) is carried through
     /// replacements, so the cumulative payout never exceeds the balance
-    /// proven at some settled height. Redemption itself ([`redeem`]) is
-    /// first-come in Sui transaction order: the queue position protects the
-    /// record, not the payout race, and the vault either covers everyone or
-    /// was already drained — the residual risk documented in the design
-    /// page.
+    /// proven at some settled height. Redemption serves the queue in
+    /// `(height, seq)` order: [`redeem`] pays only the head, and the
+    /// [`skip_head`] valve demotes a head that sits past
+    /// [`skip_after_ms`] without its owner redeeming, so an earlier proof
+    /// cannot be overtaken by a later one.
     public fun request_exit(
         queue: &mut ExitQueue,
         registry: &Registry,
@@ -547,10 +799,12 @@ module podseq::exit_queue {
         assert!(option::is_some(&expired), E_NOT_HALTED);
         let expired_deadline_ms = option::destroy_some(expired);
         let (nonce, balance) = verify_account(registry, height, address, proof);
+        let now_ms = clock.timestamp_ms();
 
         if (table::contains(&queue.requests, address)) {
             let current = *table::borrow(&queue.requests, address);
             if (height <= current.height) {
+                let improved = height < current.height;
                 *table::borrow_mut(&mut queue.requests, address) = ExitRequest {
                     height,
                     nonce,
@@ -566,6 +820,28 @@ module podseq::exit_queue {
                     balance,
                     expired_deadline_ms,
                 });
+                // Index bookkeeping. A strictly-earlier proof can move the
+                // record's position and change what remains payable, so its
+                // node unlinks and re-enters at the new position — with the
+                // valve clock restarted, the one honest way a record that
+                // moves forward buys itself a fresh window. A same-height
+                // replay changes nothing (a trie is deterministic, so the
+                // balance cannot differ), and its node — valve clock
+                // included — stays untouched: nobody keeps a head fresh by
+                // replaying public proofs.
+                let indexed = dynamic_field::exists_with_type<QueueAddrKey, QueueNode>(
+                    &queue.id,
+                    QueueAddrKey { address },
+                );
+                if (improved && indexed) {
+                    index_unlink(queue, address);
+                };
+                let updated = *table::borrow(&queue.requests, address);
+                if (improved
+                    && !is_skipped(queue, address)
+                    && updated.balance > updated.paid) {
+                    index_insert(queue, address, now_ms);
+                };
             };
         } else {
             let seq = queue.next_seq;
@@ -585,12 +861,22 @@ module podseq::exit_queue {
                 balance,
                 expired_deadline_ms,
             });
+            // Payable records enter the index. A zero-balance proof has
+            // nothing to serve and would only ever gate the queue.
+            if (balance > 0) {
+                index_insert(queue, address, now_ms);
+            };
         };
     }
 
     /// Redeems a recorded request: the owner signs the payout with their L2
     /// key and the vault releases what remains — no sequencer capability
     /// involved.
+    ///
+    /// The queue serves exits in `(height, seq)` order: an indexed record
+    /// redeems only at the head, and a paid record hands the position to
+    /// its successor. Records outside the index — skipped by the valve, or
+    /// recorded before the index existed — wait until it drains.
     ///
     /// Fires only in the inbox-derived halt state (the same gate as
     /// [`request_exit`]). The payout is `balance - paid` from the recorded
@@ -631,6 +917,19 @@ module podseq::exit_queue {
         // The vault's coin amounts are u64; a balance beyond that cannot be
         // backed by deposits made through this bridge in the first place.
         assert!(remaining <= 0xFFFFFFFFFFFFFFFFu256, E_AMOUNT);
+        // Ordered consumption. An indexed record redeems only at the head;
+        // a record outside the index — skipped by the valve, or recorded
+        // before the index existed — waits until the indexed queue drains.
+        let indexed = dynamic_field::exists_with_type<QueueAddrKey, QueueNode>(
+            &queue.id,
+            QueueAddrKey { address },
+        );
+        if (indexed) {
+            let head = index_head_addr(queue);
+            assert!(option::is_some(&head) && *option::borrow(&head) == address, E_NOT_QUEUE_HEAD);
+        } else {
+            assert!(index_size(queue) == 0, E_NOT_QUEUE_HEAD);
+        };
         verify_redemption_signature(&address, recipient, remaining, &payload, &signature);
 
         *table::borrow_mut(&mut queue.requests, address) = ExitRequest {
@@ -647,6 +946,11 @@ module podseq::exit_queue {
             amount: (remaining as u64),
             recipient,
         });
+        if (indexed) {
+            // The served record leaves the index; its successor becomes the
+            // head.
+            index_unlink(queue, address);
+        };
         bridge::escape_claim(address, (remaining as u64), recipient)
     }
 
@@ -837,10 +1141,11 @@ module podseq::exit_queue {
     }
 
     /// Destroys an exit queue; every recorded request's address must be
-    /// named and is removed first (the table has no iteration).
+    /// named and is removed first (the table has no iteration), along with
+    /// its ordered-index node and skip mark if it holds one.
     #[test_only]
     public fun teardown_queue(queue: ExitQueue, addresses: vector<vector<u8>>) {
-        let ExitQueue { id, mut requests, next_seq: _ } = queue;
+        let ExitQueue { id: mut id, mut requests, next_seq: _ } = queue;
         let mut i: u64 = 0;
         let n = vector::length(&addresses);
         while (i < n) {
@@ -849,7 +1154,23 @@ module podseq::exit_queue {
                 let ExitRequest { height: _, nonce: _, balance: _, seq: _, paid: _ } =
                     table::remove(&mut requests, address);
             };
+            if (dynamic_field::exists_with_type<QueueAddrKey, QueueNode>(
+                &id,
+                QueueAddrKey { address },
+            )) {
+                let QueueNode { prev: _, next: _, recorded_at_ms: _ } =
+                    dynamic_field::remove<QueueAddrKey, QueueNode>(&mut id, QueueAddrKey { address });
+            };
+            if (dynamic_field::exists_with_type<SkipMarkKey, bool>(&id, SkipMarkKey { address })) {
+                dynamic_field::remove<SkipMarkKey, bool>(&mut id, SkipMarkKey { address });
+            };
             i = i + 1;
+        };
+        if (dynamic_field::exists_with_type<QueueHeadKey, vector<u8>>(&id, QueueHeadKey {})) {
+            dynamic_field::remove<QueueHeadKey, vector<u8>>(&mut id, QueueHeadKey {});
+        };
+        if (dynamic_field::exists_with_type<QueueCountKey, u64>(&id, QueueCountKey {})) {
+            dynamic_field::remove<QueueCountKey, u64>(&mut id, QueueCountKey {});
         };
         table::destroy_empty(requests);
         id.delete();
@@ -1507,6 +1828,8 @@ module podseq::exit_queue {
     #[test_only]
     const SEED_B: vector<u8> = x"426f622065786974207365656420303030303030303030303030303030303030";
     #[test_only]
+    const SEED_C: vector<u8> = x"4361726f6c206578697420736565642030303030303030303030303030303030";
+    #[test_only]
     const VAULT_RECIPIENT: vector<u8> = x"1111111111111111111111111111111111111111";
     #[test_only]
     const SUI_RECIPIENT: address = @0xC0FFEE;
@@ -2067,6 +2390,700 @@ module podseq::exit_queue {
         assert!(recorded.balance == SINGLE_BALANCE, E_TEST);
         let paid = paid_at(&queue, REPLACE_ADDRESS);
         assert!(option::destroy_some(paid) == 400, E_TEST);
+
+        teardown_queue(queue, vector[REPLACE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    // ---------- ordered redemption ----------
+    //
+    // The queue serves exits in `(height, seq)` order: the head first, the
+    // valve demoting a head that never redeems. Index-state tests drive
+    // `request_exit` with real proofs; ordered-redeem tests record
+    // synthetic requests for the signer seeds (the redeem fixtures'
+    // existing pattern) and index them directly, because the recorded
+    // address must equal the recovered signer and the trie fixtures pin
+    // fixed addresses.
+
+    /// Anchors `root_a` at height 1, `root_b` at height 2, and `root_c` at
+    /// height 3 of a fresh three-height registry.
+    #[test_only]
+    public fun three_height_registry_for_testing(
+        ctx: &mut TxContext,
+        root_a: vector<u8>,
+        root_b: vector<u8>,
+        root_c: vector<u8>,
+    ): (Registry, Inbox, Clock) {
+        let (mut registry, mut inbox, clock) = settlement::settled_registry_for_testing(ctx, 1);
+        settlement::commit_state_root(&mut registry, &clock, 1, root_a, ctx);
+        settlement::settle_as(&mut registry, &mut inbox, &clock, b"blob", 2, 2_000, 0, ctx);
+        settlement::commit_state_root(&mut registry, &clock, 2, root_b, ctx);
+        settlement::settle_as(&mut registry, &mut inbox, &clock, b"blob", 3, 3_000, 0, ctx);
+        settlement::commit_state_root(&mut registry, &clock, 3, root_c, ctx);
+        (registry, inbox, clock)
+    }
+
+    /// Records a synthetic request at `height` (the redeem fixtures'
+    /// `record_for_testing` pins height 1).
+    #[test_only]
+    fun recorded_request_for_testing(
+        queue: &mut ExitQueue,
+        address: vector<u8>,
+        height: u64,
+        balance: u256,
+    ) {
+        let seq = queue.next_seq;
+        queue.next_seq = seq + 1;
+        table::add(&mut queue.requests, address, ExitRequest {
+            height,
+            nonce: 0,
+            balance,
+            seq,
+            paid: 0,
+        });
+    }
+
+    /// Inserts an index node for a synthetic record — standing in for the
+    /// proof path that normally feeds the index.
+    #[test_only]
+    fun index_for_testing(queue: &mut ExitQueue, address: vector<u8>, now_ms: u64) {
+        index_insert(queue, address, now_ms)
+    }
+
+    #[test]
+    fun skip_after_ms_matches_the_documented_value() {
+        assert!(skip_after_ms() == 600_000, E_TEST);
+    }
+
+    #[test]
+    fun first_ordered_claim_becomes_the_queue_head() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        let head = queue_head(&queue);
+        assert!(option::is_some(&head), E_TEST);
+        assert!(*option::borrow(&head) == SINGLE_ADDRESS, E_TEST);
+        assert!(queue_size(&queue) == 1, E_TEST);
+        assert!(!is_skipped(&queue, SINGLE_ADDRESS), E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun later_height_claim_queues_behind_the_head() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, MULTI_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            MULTI_ADDRESS,
+            vector[MULTI_NODE_0, MULTI_NODE_1, MULTI_NODE_2, MULTI_NODE_3],
+        );
+
+        let head = queue_head(&queue);
+        assert!(option::is_some(&head), E_TEST);
+        assert!(*option::borrow(&head) == SINGLE_ADDRESS, E_TEST);
+        assert!(queue_size(&queue) == 2, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS, MULTI_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun earlier_proof_takes_the_head_regardless_of_arrival() {
+        // MULTI claims at height 2 first; SINGLE's height-1 proof arrives
+        // second with a later sequence and must still pass it: the order
+        // is the proof's (height, seq), not the arrival order.
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, MULTI_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            MULTI_ADDRESS,
+            vector[MULTI_NODE_0, MULTI_NODE_1, MULTI_NODE_2, MULTI_NODE_3],
+        );
+        let head = queue_head(&queue);
+        assert!(*option::borrow(&head) == MULTI_ADDRESS, E_TEST);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        let head = queue_head(&queue);
+        assert!(option::is_some(&head), E_TEST);
+        assert!(*option::borrow(&head) == SINGLE_ADDRESS, E_TEST);
+        assert!(queue_size(&queue) == 2, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS, MULTI_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun zero_balance_claim_stays_out_of_the_index() {
+        // MULTI_ZERO shares MULTI's trie (same anchored root) with balance
+        // zero: a real proof, nothing payable, and no place in the payout
+        // order — a zero-balance head could never be served, so it must
+        // never gate the queue.
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, MULTI_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            MULTI_ADDRESS,
+            vector[MULTI_NODE_0, MULTI_NODE_1, MULTI_NODE_2, MULTI_NODE_3],
+        );
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            MULTI_ZERO_ADDRESS,
+            vector[MULTI_ZERO_NODE_0, MULTI_ZERO_NODE_1],
+        );
+
+        let head = queue_head(&queue);
+        assert!(option::is_some(&head), E_TEST);
+        assert!(*option::borrow(&head) == MULTI_ADDRESS, E_TEST);
+        assert!(queue_size(&queue) == 1, E_TEST);
+        assert!(request_count(&queue) == 2, E_TEST);
+
+        teardown_queue(queue, vector[MULTI_ADDRESS, MULTI_ZERO_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun regressing_proof_never_touches_the_index() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, REPLACE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        // The later REPLACE proof is the attacker shape: a valid proof at a
+        // later height for the same address. The record does not move and
+        // neither does the index.
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            REPLACE_ADDRESS,
+            vector[REPLACE_NODE_0, REPLACE_NODE_1],
+        );
+
+        assert!(queue_size(&queue) == 1, E_TEST);
+        let head = queue_head(&queue);
+        assert!(*option::borrow(&head) == SINGLE_ADDRESS, E_TEST);
+        let recorded = *option::borrow(&request_at(&queue, SINGLE_ADDRESS));
+        assert!(recorded.height == 1, E_TEST);
+        assert!(recorded.balance == SINGLE_BALANCE, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun same_height_claims_order_by_sequence() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        let owner_a = eth_address_for_testing(SEED_A);
+        let owner_b = eth_address_for_testing(SEED_B);
+        recorded_request_for_testing(&mut queue, owner_a, 1, 100);
+        recorded_request_for_testing(&mut queue, owner_b, 1, 100);
+        index_for_testing(&mut queue, owner_a, 1_000_000);
+        index_for_testing(&mut queue, owner_b, 1_000_000);
+
+        let head = queue_head(&queue);
+        assert!(*option::borrow(&head) == owner_a, E_TEST);
+
+        // Insertion order must not matter within a height: the sequence
+        // decides, so indexing B first leaves A at the head.
+        let mut queue_b = queue_for_testing(ctx);
+        recorded_request_for_testing(&mut queue_b, owner_a, 1, 100);
+        recorded_request_for_testing(&mut queue_b, owner_b, 1, 100);
+        index_for_testing(&mut queue_b, owner_b, 1_000_000);
+        index_for_testing(&mut queue_b, owner_a, 1_000_000);
+        let head_b = queue_head(&queue_b);
+        assert!(*option::borrow(&head_b) == owner_a, E_TEST);
+
+        teardown_queue(queue_b, vector[owner_a, owner_b]);
+        teardown_queue(queue, vector[owner_a, owner_b]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun skip_walks_the_whole_order_middle_to_last() {
+        // A(h1), C(h3), B(h2) — arrival builds a middle insert, and the
+        // skip sequence must walk A, B, C: proof height order, not
+        // insertion order.
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        let owner_a = eth_address_for_testing(SEED_A);
+        let owner_b = eth_address_for_testing(SEED_B);
+        let owner_c = eth_address_for_testing(SEED_C);
+        recorded_request_for_testing(&mut queue, owner_a, 1, 100);
+        recorded_request_for_testing(&mut queue, owner_c, 3, 100);
+        recorded_request_for_testing(&mut queue, owner_b, 2, 100);
+        index_for_testing(&mut queue, owner_a, 1_000_000);
+        index_for_testing(&mut queue, owner_c, 1_000_000);
+        index_for_testing(&mut queue, owner_b, 1_000_000);
+
+        clock::set_for_testing(&mut clock, 1_600_001);
+        skip_head(&mut queue, &clock);
+        let head = queue_head(&queue);
+        assert!(*option::borrow(&head) == owner_b, E_TEST);
+        skip_head(&mut queue, &clock);
+        let head = queue_head(&queue);
+        assert!(*option::borrow(&head) == owner_c, E_TEST);
+        assert!(queue_size(&queue) == 1, E_TEST);
+        skip_head(&mut queue, &clock);
+        assert!(option::is_none(&queue_head(&queue)), E_TEST);
+        assert!(queue_size(&queue) == 0, E_TEST);
+        assert!(is_skipped(&queue, owner_a), E_TEST);
+        assert!(is_skipped(&queue, owner_b), E_TEST);
+        assert!(is_skipped(&queue, owner_c), E_TEST);
+
+        teardown_queue(queue, vector[owner_a, owner_b, owner_c]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test, expected_failure(abort_code = E_QUEUE_EMPTY, location = Self)]
+    fun skip_refuses_an_empty_queue() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_600_001);
+
+        skip_head(&mut queue, &clock);
+
+        teardown_queue(queue, vector[]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test, expected_failure(abort_code = E_SKIP_EARLY, location = Self)]
+    fun skip_refuses_at_the_exact_valve_boundary() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        // The record entered at 1_200_001; the strict boundary is one
+        // millisecond later, mirroring the halt gates' shape.
+        clock::set_for_testing(&mut clock, 1_800_001);
+        skip_head(&mut queue, &clock);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun skip_demotes_the_head_after_the_valve_window() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        clock::set_for_testing(&mut clock, 1_800_002);
+        skip_head(&mut queue, &clock);
+
+        assert!(option::is_none(&queue_head(&queue)), E_TEST);
+        assert!(queue_size(&queue) == 0, E_TEST);
+        assert!(is_skipped(&queue, SINGLE_ADDRESS), E_TEST);
+        // The record survives the demotion with its request intact.
+        let recorded = *option::borrow(&request_at(&queue, SINGLE_ADDRESS));
+        assert!(recorded.balance == SINGLE_BALANCE, E_TEST);
+        assert!(request_count(&queue) == 1, E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test]
+    fun same_height_reproof_does_not_reset_the_valve_clock() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) = anchored_registry_for_testing(ctx, SINGLE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        // A same-height replay at 1_300_000 must not restart the head's
+        // clock: at 1_800_002 the valve still fires because the record
+        // entered at 1_200_001.
+        clock::set_for_testing(&mut clock, 1_300_000);
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        clock::set_for_testing(&mut clock, 1_800_002);
+        skip_head(&mut queue, &clock);
+        assert!(option::is_none(&queue_head(&queue)), E_TEST);
+
+        teardown_queue(queue, vector[SINGLE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test, expected_failure(abort_code = E_SKIP_EARLY, location = Self)]
+    fun improve_resets_the_valve_clock() {
+        // REPLACE claims at height 2, then improves to height 1: the
+        // record re-enters the index and its valve clock restarts. The
+        // skip below runs past the ORIGINAL entry's window (1_200_001 +
+        // 600_000) but only 550_000 ms after the improvement — it must
+        // refuse, which pins the reset.
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, REPLACE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            REPLACE_ADDRESS,
+            vector[REPLACE_NODE_0, REPLACE_NODE_1],
+        );
+        clock::set_for_testing(&mut clock, 1_300_000);
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        // Past the ORIGINAL entry's window (1_200_001 + 600_000), but only
+        // 550_000 ms after the improvement. The valve must refuse: the
+        // improvement restarted the clock.
+        clock::set_for_testing(&mut clock, 1_850_000);
+        skip_head(&mut queue, &clock);
+
+        teardown_queue(queue, vector[REPLACE_ADDRESS]);
+        teardown(registry, inbox, clock);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_QUEUE_HEAD, location = Self)]
+    fun ordered_redeem_refuses_a_later_position() {
+        let ctx = &mut tx_context::dummy();
+        let owner_a = eth_address_for_testing(SEED_A);
+        let owner_b = eth_address_for_testing(SEED_B);
+        let payload_b = payload_for_testing(&owner_b, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig_b = eth_sign_for_testing(SEED_B, &payload_b);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner_a, REDEEM_AMOUNT);
+        recorded_request_for_testing(&mut queue, owner_b, 2, REDEEM_AMOUNT);
+        index_for_testing(&mut queue, owner_a, 1_000_000);
+        index_for_testing(&mut queue, owner_b, 1_000_000);
+
+        // B holds the later position: its signature is valid, but its turn
+        // is not — A's record stands ahead of it in proof order.
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner_b, SUI_RECIPIENT, payload_b, sig_b);
+        bridge::drop_claim_for_testing(claim_sink);
+
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner_a, owner_b]);
+    }
+
+    #[test]
+    fun redeem_advances_the_head_to_the_next_record() {
+        let ctx = &mut tx_context::dummy();
+        let owner_a = eth_address_for_testing(SEED_A);
+        let owner_b = eth_address_for_testing(SEED_B);
+        let payload_a = payload_for_testing(&owner_a, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig_a = eth_sign_for_testing(SEED_A, &payload_a);
+        let payload_b = payload_for_testing(&owner_b, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig_b = eth_sign_for_testing(SEED_B, &payload_b);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner_a, REDEEM_AMOUNT);
+        recorded_request_for_testing(&mut queue, owner_b, 2, REDEEM_AMOUNT);
+        index_for_testing(&mut queue, owner_a, 1_000_000);
+        index_for_testing(&mut queue, owner_b, 1_000_000);
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner_a, SUI_RECIPIENT, payload_a, sig_a);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+        let head = queue_head(&queue);
+        assert!(option::is_some(&head), E_TEST);
+        assert!(*option::borrow(&head) == owner_b, E_TEST);
+        assert!(queue_size(&queue) == 1, E_TEST);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner_b, SUI_RECIPIENT, payload_b, sig_b);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+        assert!(option::is_none(&queue_head(&queue)), E_TEST);
+        assert!(queue_size(&queue) == 0, E_TEST);
+        // Both payouts landed, in order.
+        assert!(bridge::reserve<bridge::TestCoin>(&vault) == 100, E_TEST);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner_a, owner_b]);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_QUEUE_HEAD, location = Self)]
+    fun skipped_record_cannot_jump_the_drained_queue() {
+        let ctx = &mut tx_context::dummy();
+        let owner_a = eth_address_for_testing(SEED_A);
+        let owner_b = eth_address_for_testing(SEED_B);
+        let payload_a = payload_for_testing(&owner_a, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig_a = eth_sign_for_testing(SEED_A, &payload_a);
+        let (registry, inbox, mut clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner_a, REDEEM_AMOUNT);
+        recorded_request_for_testing(&mut queue, owner_b, 2, REDEEM_AMOUNT);
+        index_for_testing(&mut queue, owner_a, 1_000_000);
+        index_for_testing(&mut queue, owner_b, 1_000_000);
+
+        // A never redeems, so the valve demotes it — and a demoted record
+        // still cannot jump the queue: B is indexed ahead of it, and the
+        // skip-marked record waits for the whole index to drain (the
+        // sibling test walks it through to the payout).
+        clock::set_for_testing(&mut clock, 1_600_001);
+        skip_head(&mut queue, &clock);
+        let head = queue_head(&queue);
+        assert!(*option::borrow(&head) == owner_b, E_TEST);
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner_a, SUI_RECIPIENT, payload_a, sig_a);
+        bridge::drop_claim_for_testing(claim_sink);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner_a, owner_b]);
+    }
+
+    #[test]
+    fun skipped_record_redeems_once_the_queue_drains() {
+        let ctx = &mut tx_context::dummy();
+        let owner_a = eth_address_for_testing(SEED_A);
+        let owner_b = eth_address_for_testing(SEED_B);
+        let payload_a = payload_for_testing(&owner_a, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig_a = eth_sign_for_testing(SEED_A, &payload_a);
+        let payload_b = payload_for_testing(&owner_b, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig_b = eth_sign_for_testing(SEED_B, &payload_b);
+        let (registry, inbox, mut clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner_a, REDEEM_AMOUNT);
+        recorded_request_for_testing(&mut queue, owner_b, 2, REDEEM_AMOUNT);
+        index_for_testing(&mut queue, owner_a, 1_000_000);
+        index_for_testing(&mut queue, owner_b, 1_000_000);
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        // The valve demotes A; B redeems in its turn; the drained queue
+        // then lets the skipped record redeem behind everyone.
+        clock::set_for_testing(&mut clock, 1_600_001);
+        skip_head(&mut queue, &clock);
+        let claim = redeem(&mut queue, &inbox, &clock, owner_b, SUI_RECIPIENT, payload_b, sig_b);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+        assert!(option::is_none(&queue_head(&queue)), E_TEST);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner_a, SUI_RECIPIENT, payload_a, sig_a);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+        assert!(bridge::reserve<bridge::TestCoin>(&vault) == 100, E_TEST);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner_a, owner_b]);
+    }
+
+    #[test, expected_failure(abort_code = E_NOT_QUEUE_HEAD, location = Self)]
+    fun legacy_record_waits_for_the_ordered_queue() {
+        // A queue holding pre-index records (the deployment shape before
+        // this index existed) plus one ordered claim: the legacy record
+        // redeems after the ordered queue drains, never before it.
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        let claim_sink = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::drop_claim_for_testing(claim_sink);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner, SINGLE_ADDRESS]);
+    }
+
+    #[test]
+    fun legacy_record_redeems_once_the_ordered_queue_drains() {
+        let ctx = &mut tx_context::dummy();
+        let owner = eth_address_for_testing(SEED_A);
+        let payload = payload_for_testing(&owner, REDEEM_AMOUNT, SUI_RECIPIENT);
+        let sig = eth_sign_for_testing(SEED_A, &payload);
+        let (registry, inbox, mut clock, mut queue) =
+            halted_queue_with_record_for_testing(ctx, owner, REDEEM_AMOUNT);
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+        let mut vault = funded_vault_for_testing<bridge::TestCoin>(ctx, 500);
+
+        // The valve empties the ordered queue; the legacy record then
+        // redeems first-come among the leftovers.
+        clock::set_for_testing(&mut clock, 1_800_002);
+        skip_head(&mut queue, &clock);
+        assert!(option::is_none(&queue_head(&queue)), E_TEST);
+        assert!(queue_size(&queue) == 0, E_TEST);
+
+        let claim = redeem(&mut queue, &inbox, &clock, owner, SUI_RECIPIENT, payload, sig);
+        bridge::escape_release<bridge::TestCoin>(&mut vault, claim, ctx);
+        assert!(bridge::reserve<bridge::TestCoin>(&vault) == 300, E_TEST);
+
+        teardown_vault_for_testing<bridge::TestCoin>(vault);
+        teardown_with_queue(registry, inbox, clock, queue, vector[owner, SINGLE_ADDRESS]);
+    }
+
+    #[test]
+    fun skipped_claim_never_reenters_on_an_improvement() {
+        let ctx = &mut tx_context::dummy();
+        let (registry, mut inbox, mut clock) =
+            two_height_registry_for_testing(ctx, SINGLE_ROOT, REPLACE_ROOT);
+        let mut queue = queue_for_testing(ctx);
+        inbox::submit(&mut inbox, &clock, b"forced");
+        clock::set_for_testing(&mut clock, 1_200_001);
+
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            2,
+            REPLACE_ADDRESS,
+            vector[REPLACE_NODE_0, REPLACE_NODE_1],
+        );
+        clock::set_for_testing(&mut clock, 1_800_002);
+        skip_head(&mut queue, &clock);
+        assert!(is_skipped(&queue, REPLACE_ADDRESS), E_TEST);
+
+        // The improvement makes the record payable again (999 proven over
+        // the height-1 state), but a demoted record stays behind the
+        // whole queue: the index must stay empty.
+        clock::set_for_testing(&mut clock, 1_900_000);
+        request_exit(
+            &mut queue,
+            &registry,
+            &inbox,
+            &clock,
+            1,
+            SINGLE_ADDRESS,
+            vector[SINGLE_NODE_0],
+        );
+
+        assert!(option::is_none(&queue_head(&queue)), E_TEST);
+        assert!(queue_size(&queue) == 0, E_TEST);
+        assert!(is_skipped(&queue, REPLACE_ADDRESS), E_TEST);
 
         teardown_queue(queue, vector[REPLACE_ADDRESS]);
         teardown(registry, inbox, clock);

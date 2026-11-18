@@ -199,8 +199,9 @@ values passed to `settle`, which is an attributable equivocation.
 
 ## Open work
 
-- The exit queue (see [roadmap](./roadmap.md)) composes with the inbox: a halted
-  settlement should unlock forced exits so users can leave during a halt. The
-  first piece of this landed: settled state roots are now anchored on Sui (see
-  [exit queue](./exit-queue.md)), which is the value balance proofs verify
-  against. The proof verifier and the unlock condition itself are next.
+- None left in the composition itself: the exit queue now works end to
+  end against a halted settlement. The inbox-derived halt verdict
+  unlocks forced exits, balance proofs verify against settled state
+  roots anchored on Sui, and payouts serve the queue in `(height, seq)`
+  order — see [exit queue](./exit-queue.md). Ongoing work is tracked in
+  the [roadmap](./roadmap.md).

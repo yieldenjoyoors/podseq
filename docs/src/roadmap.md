@@ -25,7 +25,9 @@ simple while making the chain trust-minimized and developer-friendly.
 - [x] **Exit queue**: if the sequencer halts or censors, any user can submit a
       Merkle proof of their L2 balance to the Sui bridge and exit without the
       sequencer, paying out with an owner-signed redemption. Records are ordered
-      by `(height, seq)`; payouts are first-come in Sui transaction order.
+      by `(height, seq)` and redemption serves that order; a head that never
+      redeems is demoted by a ten-minute valve, so strict order cannot become a
+      veto.
       See [exit queue](./exit-queue.md).
 - [x] **Sequencer failure detection**: full nodes verify the force-inclusion
       deadline from Sui state alone, halt locally on a violated gate, and export

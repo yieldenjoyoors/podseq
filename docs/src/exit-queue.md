@@ -173,13 +173,12 @@ Reproofs carry `paid` forward, so the cumulative payout never exceeds the
 balance proven at some settled height — an earlier-height proof that shows a
 larger balance re-opens the delta, a later one cannot regress the record.
 
-Two limits are honest about what this path is. Payouts are first-come in
-Sui transaction order, not `(height, seq)` order: enforcing the L2 order
-would need an ordered index over the queue, and it would not change the
-outcome that matters — the vault either covers everyone or was already
-drained (the censoring-sequencer-drains-first residual risk). And the
+One limit stays honest about what this path is, and one closed. The
 remainder must fit the vault's u64 coin amounts (`E_AMOUNT` otherwise):
 balances above that cannot arise from deposits made through this bridge.
+The closed one is payout order — payouts used to be first-come in Sui
+transaction order; they now serve the queue in `(height, seq)` order
+(see [ordered redemption](#ordered-redemption)).
 
 Measured, not estimated: a testnet publish ran the full
 `request_exit` → `redeem` → `escape_release` sequence against real proofs
@@ -292,6 +291,48 @@ load-bearing because proofs are public chain data: anyone can produce a valid
 proof at any later height, and the rule makes that useless — a queue position
 can only improve, never be forced backward. Proofs that would regress are
 silent no-ops, with no event, because the state did not change.
+
+## Ordered redemption
+
+The queue serves exits in proof order: ascending `(height, seq)`. The
+records carry the key, and an ordered index links the payable records as
+dynamic fields of the `ExitQueue` object. The struct layout froze at
+publish, and dynamic fields are how this package adds state to deployed
+objects — the adjustable inclusion window did the same to the `Inbox`.
+Redemption pays the head and nothing else; a paid record leaves the
+index and its successor becomes the head. `queue_head` and `queue_size`
+read the order, so anyone can tell where a record stands before signing
+anything.
+
+Strict order has a cost: the head gates every payout behind it, and
+anyone can put a record at the head, because proofs are public chain
+data and `request_exit` does not authenticate them. The valve bounds
+that. After `skip_after_ms` (ten minutes, the same margin class as the
+halt gate), anyone can call `skip_head`: the head moves behind every
+indexed record, marked with a skip, and the queue advances. A skipped
+record keeps its request and its paid counter, it can still redeem once
+the index drains, and it never re-enters the index. Two details keep
+the valve honest: a same-height reproof does not restart a head's clock
+(public proofs cannot keep a head fresh forever), while a
+strictly-earlier proof does (improving your position is the point of
+the replace rule, and heights run out).
+
+Records that predate the index redeem after it drains, first-come among
+themselves. That is the migration rule for deployments upgraded onto
+this version: their pending requests keep working, ordered behind
+anything claimed after the upgrade.
+
+The alternatives, rejected. Keeping payouts first-come (the shipped
+behavior until this change) lets a later proof overtake an earlier one
+the moment the vault runs short, which is the race the `(height, seq)`
+key exists to prevent. Gating a jump on the vault covering everyone
+ahead would need a vault read and a sum over the whole walk inside one
+PTB, and a head with a large proven balance would still block it.
+Requiring the owner's signature on `request_exit` would shrink the
+head-holding to real claimants, at the cost of dropping the
+third-party-submission path the design deliberately allows; under
+ordered redemption that path is useless rather than harmful, and the
+valve keeps the bounded wedge it permits.
 
 ## How the exit path completes
 
