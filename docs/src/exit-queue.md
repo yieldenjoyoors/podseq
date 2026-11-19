@@ -180,11 +180,13 @@ The closed one is payout order — payouts used to be first-come in Sui
 transaction order; they now serve the queue in `(height, seq)` order
 (see [ordered redemption](#ordered-redemption)).
 
-Measured, not estimated: a testnet publish ran the full
-`request_exit` → `redeem` → `escape_release` sequence against real proofs
-(the same bench the rotation ceremony used; `crates/sui/examples/exit_gas_bench.rs`).
-Net MIST per step (computation + storage − rebate), testnet epoch 1279,
-accumulator gas:
+Measured, not estimated: a testnet publish ran the ordered payout index end
+to end against real proofs — both inserts, the not-head and early-skip
+rejections, the head payout with its unlink + advance, the skip valve after
+its ten-minute window, and the skipped record's drained-index fallback
+redeem (`crates/sui/examples/exit_gas_bench.rs`, the `order` phase; the
+same bench the rotation ceremony used). Net MIST per step
+(computation + storage − rebate), testnet epoch 1288, accumulator gas:
 
 | step | net MIST | note |
 | --------------------------------- | ---------: | ------------------------------------------ |
@@ -192,25 +194,36 @@ accumulator gas:
 | deposit into the vault reserve    | 6,479,831  | coin split + `bridge::deposit`             |
 | narrow the window to the floor    | 2,786,499  | `request_window_change`, OpsCap-steered    |
 | submit the forced transaction     | 2,877,376  | `inbox::submit`                            |
-| `request_exit`, 1-node proof      | 1,000,170  | idempotent re-record: computation only     |
-| `request_exit`, 2-node proof      | 3,606,970  | new record: the storage deposit dominates  |
-| `redeem` + `escape_release`       | 1,988,949  | `ecrecover` + reserve split + payout       |
-| replayed redemption (aborts 17)   | 1,000,401  | the advanced `paid` counter rejects        |
+| `request_exit` on a closed gate   | 1,000,170  | aborts `E_NOT_HALTED` (12); computation only |
+| `request_exit`, first (empty index) | 9,838,970 | head + count + node fields at once         |
+| `request_exit`, second (at back)  | 6,350,998  | node field + predecessor link + count      |
+| not-head redemption (aborts 18)   | 1,000,401  | `E_NOT_QUEUE_HEAD` under a valid signature  |
+| early skip (aborts 20)            | 1,000,170  | `E_SKIP_EARLY` inside the head's window     |
+| `redeem` at the head              | −753,753   | net refund: record + node deposits return   |
+| `skip_head` past the window       | −1,438,807 | net refund: the demoted node field is freed |
+| fallback redeem (skipped, drained) | 1,988,949 | the migration path, no index walk           |
 
 Computation sits at the 1,000,000 MIST floor in every row: under the
 accumulator gas model testnet charges with a computation floor, so the
 proof walk (keccak + RLP per node, loops bounded by the proof length) does
-not surface above it at these depths — what varies between the two
-`request_exit` rows is the storage deposit for a new queue record, most of
-which is rebated at redemption. The redemption row is the whole path's
-owner-side cost — one `ecrecover`-adjacent native, the record update, and
-the vault split — about half the settle+anchor cost (≈0.002 SUI). The
-closed-gate rejection was observed live as an
+not surface above it at these depths, and the index walk (one hop for the
+back insert) stays on the same floor. What the ordered index changes is
+storage: a request pays the deposit for its index fields — 9.8 MIST-million
+for the first record, which initializes the head and count pointers,
+versus 3.6 million for a first-come record — and most of it comes straight
+back at payout: both the head redemption and the skip returned more
+storage rebate than they charged, running net-negative. Over the
+two-record lifecycle above (insert, insert, head payout, skip, fallback
+payout) the index machinery netted 15,986,357 MIST ≈ 0.016 SUI, the price
+of strict order plus the valve that keeps it from becoming a veto. The
+fallback redeem reproduces
+the first-come redemption cost exactly (1,988,949 MIST, same number the
+pre-index table measured), as it must — that path skips the index
+entirely. The closed-gate rejection was observed live as an
 `E_NOT_HALTED` abort (code 12) in `exit_queue::request_exit` while the
 oldest pending transaction sat inside its window-plus-margin, and the
-verdict opened on schedule past the margin; a replayed redemption aborts
-`E_NOTHING_TO_REDEEM` (17) exactly when `paid` reaches the recorded
-balance.
+verdict opened on schedule past the margin; order enforcement and the
+valve boundary were observed the same way (codes 18 and 20 above).
 
 ### Fuzzing the signing seam
 

@@ -8,6 +8,11 @@
 //! `escape_release`, and a replayed redemption. Gas is read from the executed
 //! effects and appended to `<state>.gas.csv`.
 //!
+//! The `order` phase runs instead of `halt` on the same state and measures
+//! the ordered payout index end to end: both inserts, the not-head and
+//! early-skip rejections, the head payout with its unlink + advance, the
+//! skip valve, and the skipped record's drained-index fallback redeem.
+//!
 //! The verdict needs real clock time: after the forced submit, the inbox
 //! deadline is `now + window` (narrowed to the 1-minute floor) and the
 //! on-chain gate adds the 10-minute halt margin, so the halt phase starts
@@ -40,8 +45,8 @@ use k256::ecdsa::SigningKey;
 use podseq_sui::bridge::BridgeClient;
 use podseq_sui::deadline::SUI_CLOCK_ID;
 use podseq_sui::exit_queue::{
-    append_redeem, append_request_exit, eth_address, sign_exit_payload, RedeemRequest,
-    RedeemTargets,
+    append_redeem, append_request_exit, append_skip_head, eth_address, sign_exit_payload,
+    ExitTargets, RedeemRequest, RedeemTargets, SkipTargets,
 };
 use podseq_sui::settlement::Settlement;
 use sui_crypto::ed25519::Ed25519PrivateKey;
@@ -373,7 +378,7 @@ fn shared_prefix_pair(shared_nibbles: usize) -> (L2Address, L2Address) {
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 5 {
-        bail!("usage: exit_gas_bench <rpc_url> <deployer_key> <state_file> <deploy|prepare|halt>");
+        bail!("usage: exit_gas_bench <rpc_url> <deployer_key> <state_file> <deploy|prepare|gate|halt|order>");
     }
     let rpc_url = args[1].clone();
     let deployer_path = PathBuf::from(&args[2]);
@@ -386,7 +391,8 @@ async fn main() -> Result<()> {
         "prepare" => prepare(&rpc_url, &deployer, &state_path, &gas_csv).await,
         "gate" => gate(&rpc_url, &deployer, &state_path, &gas_csv).await,
         "halt" => halt(&rpc_url, &deployer, &state_path, &gas_csv).await,
-        other => bail!("unknown phase {other} (expected deploy, prepare, gate, or halt)"),
+        "order" => order(&rpc_url, &deployer, &state_path, &gas_csv).await,
+        other => bail!("unknown phase {other} (expected deploy, prepare, gate, halt, or order)"),
     }
 }
 
@@ -871,6 +877,183 @@ async fn halt(
         );
     })
     .await?
+    .append_csv(gas_csv)?;
+
+    println!("rows appended to {}", gas_csv.display());
+    Ok(())
+}
+
+/// A redemption request for one recorded balance, signed by its owner.
+fn redeem_request(
+    owner: &SigningKey,
+    address: [u8; 20],
+    balance: u64,
+    recipient: Address,
+) -> RedeemRequest {
+    let mut amount_be = [0u8; 32];
+    amount_be[24..].copy_from_slice(&balance.to_be_bytes());
+    let (payload, signature) = sign_exit_payload(owner, address, amount_be, recipient);
+    RedeemRequest {
+        address,
+        recipient,
+        payload,
+        signature: signature.to_vec(),
+        coin_type: SUI_TYPE.parse().expect("valid type tag"),
+    }
+}
+
+/// The ordered-index measurement — run INSTEAD of `halt` on the same state
+/// (the queue is still fresh; `halt` is what consumes it). Exercises every
+/// index path live: the empty-index insert, the back insert, the not-head
+/// rejection, the early-skip rejection, the head payout with its unlink +
+/// advance, the skip valve, and the skipped record's drained-index fallback
+/// redeem. The abort probes pin shared inputs at version 1 — the pin only
+/// sequences the transaction, execution reads the latest state. B's valve
+/// clock starts at its request, so the phase sleeps the window out between
+/// the head redeem and the skip.
+async fn order(
+    rpc_url: &str,
+    deployer: &Ed25519PrivateKey,
+    state_path: &Path,
+    gas_csv: &Path,
+) -> Result<()> {
+    let state = read_state(state_path)?;
+    let package: Address = sui_address(&state, "package")?;
+    let registry: Address = sui_address(&state, "registry")?;
+    let inbox: Address = sui_address(&state, "inbox")?;
+    let queue: Address = sui_address(&state, "queue")?;
+    let vault: Address = sui_address(&state, "vault")?;
+    let recipient: Address = sui_address(&state, "recipient")?;
+    let addr_a: [u8; 20] = parse_hex(state.get("addr_a").context("state missing addr_a")?)?;
+    let addr_b: [u8; 20] = parse_hex(state.get("addr_b").context("state missing addr_b")?)?;
+    let owner_a = SigningKey::from_slice(&parse_hex::<32>(
+        state.get("owner_a").context("state missing owner_a")?,
+    )?)?;
+    let owner_b = SigningKey::from_slice(&parse_hex::<32>(
+        state.get("owner_b").context("state missing owner_b")?,
+    )?)?;
+    let proof_a = load_proof(&state, "proof_a")?;
+    let proof_b = load_proof(&state, "proof_b")?;
+    let balance_a: u64 = state
+        .get("balance_a")
+        .context("state missing balance_a")?
+        .parse()
+        .context("parsing balance_a")?;
+    let balance_b: u64 = state
+        .get("balance_b")
+        .context("state missing balance_b")?
+        .parse()
+        .context("parsing balance_b")?;
+
+    let exit_targets = ExitTargets {
+        package,
+        queue,
+        registry,
+        inbox,
+    };
+    let redeem_targets = RedeemTargets {
+        package,
+        queue,
+        inbox,
+        vault,
+    };
+    let skip_targets = SkipTargets { package, queue };
+
+    // A records first and lands at the front: the insert finds no head, so
+    // it initializes the head pointer.
+    let (first_row, _) = execute_measured("request_exit_first", rpc_url, deployer, |b| {
+        append_request_exit(b, &exit_targets, 1, addr_a, proof_a.clone());
+    })
+    .await?;
+    first_row.append_csv(gas_csv)?;
+
+    // B records behind A: the insert walks the one existing node and links
+    // at the back.
+    let (second_row, _) = execute_measured("request_exit_second", rpc_url, deployer, |b| {
+        append_request_exit(b, &exit_targets, 2, addr_b, proof_b.clone());
+    })
+    .await?;
+    second_row.append_csv(gas_csv)?;
+
+    // Order enforcement, live: B sits behind A, so its redemption aborts
+    // with E_NOT_QUEUE_HEAD even under a valid owner signature.
+    let not_head = redeem_request(&owner_b, addr_b, balance_b, recipient);
+    execute_measured_expect_abort("redeem_not_head_aborted", rpc_url, deployer, |b| {
+        let queue_arg = b.object(ObjectInput::shared(queue, 1, true));
+        let inbox_arg = b.object(ObjectInput::shared(inbox, 1, false));
+        let clock_arg = b.object(ObjectInput::shared(SUI_CLOCK_ID, 1, false));
+        let address_arg = b.pure(&not_head.address.to_vec());
+        let recipient_arg = b.pure(&not_head.recipient);
+        let payload_arg = b.pure(&not_head.payload);
+        let signature_arg = b.pure(&not_head.signature);
+        let claim = b.move_call(
+            module_fn(package, "exit_queue", "redeem"),
+            vec![
+                queue_arg,
+                inbox_arg,
+                clock_arg,
+                address_arg,
+                recipient_arg,
+                payload_arg,
+                signature_arg,
+            ],
+        );
+        let vault_arg = b.object(ObjectInput::shared(vault, 1, true));
+        b.move_call(
+            module_fn(package, "bridge", "escape_release")
+                .with_type_args(vec![SUI_TYPE.parse().expect("valid type tag")]),
+            vec![vault_arg, claim],
+        );
+    })
+    .await?
+    .append_csv(gas_csv)?;
+
+    // The valve boundary, live: B's clock started at its request, so the
+    // skip aborts with E_SKIP_EARLY.
+    execute_measured_expect_abort("skip_head_early_aborted", rpc_url, deployer, |b| {
+        let queue_arg = b.object(ObjectInput::shared(queue, 1, true));
+        let clock_arg = b.object(ObjectInput::shared(SUI_CLOCK_ID, 1, false));
+        b.move_call(
+            module_fn(package, "exit_queue", "skip_head"),
+            vec![queue_arg, clock_arg],
+        );
+    })
+    .await?
+    .append_csv(gas_csv)?;
+
+    // The head payout: A redeems, its node unlinks, B becomes the head.
+    let head = redeem_request(&owner_a, addr_a, balance_a, recipient);
+    let (redeem_row, _) = execute_measured("redeem_head_advance", rpc_url, deployer, |b| {
+        append_redeem(b, &redeem_targets, &head);
+    })
+    .await?;
+    redeem_row.append_csv(gas_csv)?;
+
+    // The valve window on B's head position is chain time; the sleep is
+    // wall clock with slack for the request latencies above.
+    println!(
+        "sleeping {} s for the skip valve ({} ms window) ...",
+        630, 600_000
+    );
+    tokio::time::sleep(Duration::from_secs(630)).await;
+
+    // Anyone may now demote the sitting head: B unlinks and is marked
+    // skipped, keeping its request and paid counter.
+    execute_measured("skip_head_valve", rpc_url, deployer, |b| {
+        append_skip_head(b, &skip_targets);
+    })
+    .await?
+    .0
+    .append_csv(gas_csv)?;
+
+    // The skipped record's fallback: the index drained (B was its only
+    // node), so B redeems outside the index — the migration rule.
+    let fallback = redeem_request(&owner_b, addr_b, balance_b, recipient);
+    execute_measured("redeem_skipped_fallback", rpc_url, deployer, |b| {
+        append_redeem(b, &redeem_targets, &fallback);
+    })
+    .await?
+    .0
     .append_csv(gas_csv)?;
 
     println!("rows appended to {}", gas_csv.display());
