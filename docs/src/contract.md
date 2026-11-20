@@ -92,6 +92,29 @@ entrypoint existed, or `commit_state_roots` pinned off) are skipped rather than
 failed, and read errors never pause the node — the same transport-error posture
 as the deadline monitor.
 
+### Block integrity
+
+The state-root check needs settlement; block application does not. Every block
+a full node applies — from p2p or from Walrus — passes an integrity gate
+before its head moves:
+
+1. The execution payload must agree with the header the sequencer signed
+   (parent hash, height, timestamp). The header is the signed object; the
+   payload is whatever the source served next to it.
+2. A block above the node's head must chain onto it, so a wrong parent or a
+   skipped height rejects instead of desyncing the optimistic chain.
+3. Reth's `newPayload` verdict must be VALID with the validated hash matching
+   the payload's own block hash, which binds the executed post-state to the
+   state root the header signed.
+
+The head never advances on a rejection. A rejected p2p block is skipped —
+peers are not the finalization authority, and the DA path re-adjudicates the
+same height from the settled blob. A settled block that fails the gate latches
+the node like a state-root mismatch: encode determinism pins a batch to its
+blob id, so re-fetching returns the same bytes and nothing self-heals.
+`podseq_block_gate_rejections_total` counts rejections and
+`podseq_block_gate_status` reports the latch.
+
 ## Access control
 
 Only the sequencer can call `settle`. This is enforced by the `SettlerCap`, an owned

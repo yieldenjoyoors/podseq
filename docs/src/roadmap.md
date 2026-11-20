@@ -35,7 +35,11 @@ simple while making the chain trust-minimized and developer-friendly.
       [metrics](./metrics.md). They also verify each settled height's state root
       against their own execution and the on-chain anchor
       (`sui.verify_state_roots`), so a dishonest root halts finalization with a
-      mismatch counter — see [contract](./contract.md#state-roots).
+      mismatch counter — see [contract](./contract.md#state-roots). Every
+      applied block also passes an integrity gate — header/payload agreement,
+      head chaining, Reth's execution verdict — so a lying peer or aggregator
+      cannot move a full node's head; see
+      [contract](./contract.md#block-integrity).
 
 ## Phase 3: Developer & User UX
 

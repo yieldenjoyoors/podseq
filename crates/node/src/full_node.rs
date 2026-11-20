@@ -9,9 +9,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::B256;
-use alloy_rpc_types_engine::ForkchoiceState;
-use anyhow::{Context, Result};
-use podseq_core::DataAvailability;
+use alloy_rpc_types_engine::{
+    ExecutionPayloadV3, ForkchoiceState, ForkchoiceUpdated, PayloadStatus, PayloadStatusEnum,
+};
+use anyhow::{bail, Context, Result};
+use podseq_core::{DataAvailability, Header};
 use podseq_engine::{Engine, EngineError, PARENT_BEACON_BLOCK_ROOT};
 use podseq_p2p::{AdmissionHandle, BlockReceiver};
 use podseq_sui::inbox::{InboxError, InboxTransport, SuiInboxTransport};
@@ -30,9 +32,159 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 
+/// The engine calls the full node makes while applying and finalizing
+/// blocks. Isolated as a trait so the applied-block integrity gate runs in
+/// unit tests without a Reth process.
+trait EngineOps: Send + Sync {
+    fn current_head(&self) -> EngineFuture<'_, Result<B256, EngineError>>;
+    fn block_number(&self) -> EngineFuture<'_, Result<u64, EngineError>>;
+    fn new_payload(
+        &self,
+        payload: &ExecutionPayloadV3,
+    ) -> EngineFuture<'_, Result<PayloadStatus, EngineError>>;
+    fn fork_choice(
+        &self,
+        state: ForkchoiceState,
+    ) -> EngineFuture<'_, Result<ForkchoiceUpdated, EngineError>>;
+    fn block_by_number(&self, height: u64) -> EngineFuture<'_, Result<Option<B256>, EngineError>>;
+    fn block_state_root(&self, number: u64) -> EngineFuture<'_, Result<Option<B256>, EngineError>>;
+}
+
+type EngineFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+impl EngineOps for Engine {
+    fn current_head(&self) -> EngineFuture<'_, Result<B256, EngineError>> {
+        Box::pin(Engine::current_head(self))
+    }
+
+    fn block_number(&self) -> EngineFuture<'_, Result<u64, EngineError>> {
+        Box::pin(self.rpc().block_number())
+    }
+
+    fn new_payload(
+        &self,
+        payload: &ExecutionPayloadV3,
+    ) -> EngineFuture<'_, Result<PayloadStatus, EngineError>> {
+        let payload = payload.clone();
+        Box::pin(async move {
+            self.rpc()
+                .new_payload_v4(payload, vec![], PARENT_BEACON_BLOCK_ROOT)
+                .await
+        })
+    }
+
+    fn fork_choice(
+        &self,
+        state: ForkchoiceState,
+    ) -> EngineFuture<'_, Result<ForkchoiceUpdated, EngineError>> {
+        Box::pin(async move { self.rpc().fork_choice_updated_v3(state, None).await })
+    }
+
+    fn block_by_number(&self, height: u64) -> EngineFuture<'_, Result<Option<B256>, EngineError>> {
+        Box::pin(self.rpc().block_by_number(height))
+    }
+
+    fn block_state_root(&self, number: u64) -> EngineFuture<'_, Result<Option<B256>, EngineError>> {
+        Box::pin(self.rpc().block_state_root(number))
+    }
+}
+
+/// Verdict of the applied-block integrity gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BlockRejection {
+    /// Reth is still evaluating the payload's parent chain.
+    Syncing,
+    /// Reth judged the payload invalid against its own chain.
+    Invalid { detail: String },
+    /// The engine validated a different hash than the payload claims.
+    ValidatedHashMismatch { validated: B256, claimed: B256 },
+    /// The served payload disagrees with the header the sequencer signed.
+    HeaderBinding { detail: String },
+    /// The header does not chain onto this node's verified head.
+    ParentMismatch { expected: B256, actual: B256 },
+}
+
+/// Whether a block was applied to the head or rejected by the gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ApplyOutcome {
+    Applied,
+    Rejected(BlockRejection),
+}
+
+/// The payload is what a source (peer, aggregator) served; the header is
+/// what the sequencer signed. The two must describe the same block before
+/// any engine call, or the served data is not the signed block's data.
+fn bind_payload_to_header(header: &Header, payload: &ExecutionPayloadV3) -> Option<BlockRejection> {
+    let inner = &payload.payload_inner.payload_inner;
+    if inner.parent_hash != B256::from(header.parent_hash)
+        || inner.block_number != header.height
+        || inner.timestamp != header.timestamp
+    {
+        return Some(BlockRejection::HeaderBinding {
+            detail: format!(
+                "payload parent={} number={} timestamp={} vs header parent={} height={} timestamp={}",
+                inner.parent_hash,
+                inner.block_number,
+                inner.timestamp,
+                B256::from(header.parent_hash),
+                header.height,
+                header.timestamp
+            ),
+        });
+    }
+    None
+}
+
+/// Reth's verdict binds the payload to execution: VALID means the post-state
+/// matched the payload's claimed state root against the claimed parent on
+/// Reth's own chain, and the claimed root is the one the header signed.
+fn execution_verdict(
+    status: &PayloadStatus,
+    payload: &ExecutionPayloadV3,
+) -> Option<BlockRejection> {
+    match &status.status {
+        PayloadStatusEnum::Valid => {}
+        PayloadStatusEnum::Syncing | PayloadStatusEnum::Accepted => {
+            return Some(BlockRejection::Syncing)
+        }
+        PayloadStatusEnum::Invalid { validation_error } => {
+            return Some(BlockRejection::Invalid {
+                detail: validation_error.clone(),
+            })
+        }
+    }
+    let claimed = payload.payload_inner.payload_inner.block_hash;
+    if status.latest_valid_hash != Some(claimed) {
+        return Some(BlockRejection::ValidatedHashMismatch {
+            validated: status.latest_valid_hash.unwrap_or_default(),
+            claimed,
+        });
+    }
+    None
+}
+
+/// One-way latch for settled blocks that fail local validation. Encode
+/// determinism pins a batch to its blob id, so re-fetching cannot change
+/// the verdict — recovery is an operator event (a re-publish changes the
+/// settlement commitment), like the state-root latch.
+#[derive(Debug, Default)]
+struct BlockGate {
+    latched: bool,
+}
+
+impl BlockGate {
+    fn latch(&mut self) {
+        self.latched = true;
+    }
+
+    fn latched(&self) -> bool {
+        self.latched
+    }
+}
+
 /// Reconstructs the chain from DA + settlement, feeding blocks to Reth.
 pub struct FullNode {
-    engine: Engine,
+    ops: Box<dyn EngineOps>,
     sui: SuiClient,
     registry_id: String,
     rpc_url: String,
@@ -67,6 +219,10 @@ pub struct FullNode {
     /// Latched by a proven settled-root mismatch: finalization stops until
     /// an operator intervenes (a wrong anchor cannot self-heal).
     state_root_gate: StateRootGate,
+    /// Latched by a settled block that fails the applied-block integrity
+    /// gate: the sync stops until an operator intervenes (a rejected blob
+    /// cannot self-heal by re-fetching).
+    block_gate: BlockGate,
     /// Shared Prometheus instruments. Gauges are written even when the
     /// `[metrics]` endpoint is disabled, so a later scrape config change
     /// finds live values.
@@ -147,7 +303,7 @@ impl FullNode {
         let admission = build_admission(config, admission_handle);
 
         Ok(Self {
-            engine,
+            ops: Box::new(engine),
             sui,
             registry_id,
             rpc_url: config.sui.rpc_url.clone(),
@@ -167,6 +323,7 @@ impl FullNode {
             admission,
             state_root_reader: build_state_root_reader(config),
             state_root_gate: StateRootGate::default(),
+            block_gate: BlockGate::default(),
             metrics,
         })
     }
@@ -186,13 +343,12 @@ impl FullNode {
             None => {
                 info!("full node: discovering chain head from Reth");
                 self.head = self
-                    .engine
+                    .ops
                     .current_head()
                     .await
                     .context("discovering chain head")?;
                 self.head_height = self
-                    .engine
-                    .rpc()
+                    .ops
                     .block_number()
                     .await
                     .context("querying head height from Reth")?;
@@ -221,6 +377,9 @@ impl FullNode {
                         }
                     }
                     if self.state_root_gate.latched() {
+                        continue;
+                    }
+                    if self.block_gate.latched() {
                         continue;
                     }
                     if let Err(e) = self.sync_from_settlement().await {
@@ -318,7 +477,7 @@ impl FullNode {
         da_root: &[u8; 32],
     ) -> Result<()> {
         let outcome = match self.state_root_reader.as_ref() {
-            Some(reader) => verify_settled_root(&self.engine, reader, height, da_root).await,
+            Some(reader) => verify_settled_root(&self.ops, reader, height, da_root).await,
             None => return Ok(()),
         };
         record_state_root(&self.metrics, &outcome);
@@ -400,29 +559,69 @@ impl FullNode {
         };
 
         self.verify_signature(&block)?;
-        self.apply_block(&block).await?;
-        Ok(())
+        self.handle_announced_block(&block).await
     }
 
-    /// Submits a block to Reth and advances `head`.
-    ///
-    /// The execution payload is sent once via `engine_newPayloadV4`, and the
-    /// fork-choice `head` is advanced. `safe`/`finalized` and the sync cursor
-    /// are untouched; they only move in [`mark_finalized`], driven by the DA
-    /// path. This is used for both p2p (optimistic head) and DA blocks that
-    /// were not yet applied.
-    async fn apply_block(&mut self, block: &podseq_core::Block) -> Result<()> {
-        let payload: alloy_rpc_types_engine::ExecutionPayloadV3 =
+    /// Verifies and applies one announced block. A gate rejection is
+    /// advisory here: p2p is not the finalization authority, so the block is
+    /// skipped and the DA path re-adjudicates the same height from the
+    /// settled blob.
+    async fn handle_announced_block(&mut self, block: &podseq_core::Block) -> Result<()> {
+        self.verify_signature(block)?;
+        match self.apply_block(block).await {
+            Ok(ApplyOutcome::Applied) => Ok(()),
+            Ok(ApplyOutcome::Rejected(rejection)) => {
+                info!(
+                    height = block.header.height,
+                    rejection = ?rejection,
+                    "full node: skipping p2p block rejected by the integrity gate"
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Applies a block to the head through the integrity gate: the payload
+    /// must agree with the signed header, chain onto this node's verified
+    /// head, and pass Reth's execution with the validated hash matching the
+    /// payload. The head never advances on a rejection.
+    async fn apply_block(&mut self, block: &podseq_core::Block) -> Result<ApplyOutcome> {
+        let payload: ExecutionPayloadV3 =
             serde_json::from_slice(&block.data).context("decoding execution payload")?;
 
-        let block_hash = payload.payload_inner.payload_inner.block_hash;
+        if let Some(rejection) = bind_payload_to_header(&block.header, &payload) {
+            return Ok(self.reject(rejection, block.header.height));
+        }
+        if block.header.height > self.head_height
+            && (block.header.height != self.head_height + 1
+                || block.header.parent_hash != self.head.0)
+        {
+            // Append path: the header must chain onto this node's verified
+            // head, so a wrong parent or a skipped height (a gap between the
+            // head and the announced block) rejects instead of desyncing the
+            // optimistic chain. Heights at or below the head are the
+            // equivocation re-apply path, adjudicated by the execution
+            // verdict and apply_and_finalize's canonical check.
+            return Ok(self.reject(
+                BlockRejection::ParentMismatch {
+                    expected: self.head,
+                    actual: B256::from(block.header.parent_hash),
+                },
+                block.header.height,
+            ));
+        }
 
-        self.engine
-            .rpc()
-            .new_payload_v4(payload, vec![], PARENT_BEACON_BLOCK_ROOT)
+        let status = self
+            .ops
+            .new_payload(&payload)
             .await
             .context("submitting block to Reth via engine_newPayloadV4")?;
+        if let Some(rejection) = execution_verdict(&status, &payload) {
+            return Ok(self.reject(rejection, block.header.height));
+        }
 
+        let block_hash = payload.payload_inner.payload_inner.block_hash;
         self.head = block_hash;
         self.head_height = block.header.height;
         self.metrics.block_height.set(block.header.height as i64);
@@ -432,9 +631,8 @@ impl FullNode {
             safe_block_hash: self.safe,
             finalized_block_hash: self.finalized,
         };
-        self.engine
-            .rpc()
-            .fork_choice_updated_v3(fc_state, None)
+        self.ops
+            .fork_choice(fc_state)
             .await
             .context("advancing forkchoice via engine_forkchoiceUpdatedV3")?;
 
@@ -444,7 +642,19 @@ impl FullNode {
             "full node: block applied to head"
         );
 
-        Ok(())
+        Ok(ApplyOutcome::Applied)
+    }
+
+    /// Records one gate rejection: evidence in the log plus the rejection
+    /// counter. Shared by both apply paths.
+    fn reject(&mut self, rejection: BlockRejection, height: u64) -> ApplyOutcome {
+        warn!(
+            height,
+            rejection = ?rejection,
+            "full node: block rejected by the integrity gate"
+        );
+        self.metrics.block_gate_rejections_total.inc();
+        ApplyOutcome::Rejected(rejection)
     }
 
     /// Marks an already-applied block as safe+finalized and advances the DA
@@ -452,7 +662,7 @@ impl FullNode {
     /// payload, it only moves the fork-choice `finalized` pointer via
     /// `engine_forkchoiceUpdatedV3` and persists the cursor.
     async fn mark_finalized(&mut self, block: &podseq_core::Block) -> Result<()> {
-        let payload: alloy_rpc_types_engine::ExecutionPayloadV3 =
+        let payload: ExecutionPayloadV3 =
             serde_json::from_slice(&block.data).context("decoding execution payload")?;
         let block_hash = payload.payload_inner.payload_inner.block_hash;
 
@@ -465,9 +675,8 @@ impl FullNode {
             safe_block_hash: self.safe,
             finalized_block_hash: self.finalized,
         };
-        self.engine
-            .rpc()
-            .fork_choice_updated_v3(fc_state, None)
+        self.ops
+            .fork_choice(fc_state)
             .await
             .context("advancing finalized via engine_forkchoiceUpdatedV3")?;
 
@@ -496,7 +705,7 @@ impl FullNode {
     /// reorgs; a mismatch (sequencer equivocation) re-applies the canonical DA
     /// block, reorging onto it.
     async fn apply_and_finalize(&mut self, block: &podseq_core::Block) -> Result<()> {
-        let payload: alloy_rpc_types_engine::ExecutionPayloadV3 =
+        let payload: ExecutionPayloadV3 =
             serde_json::from_slice(&block.data).context("decoding execution payload")?;
         let block_hash = payload.payload_inner.payload_inner.block_hash;
         let height = block.header.height;
@@ -504,8 +713,7 @@ impl FullNode {
         let already_applied = if self.head_height >= height {
             // A p2p block at/above this height was applied; check that Reth's
             // block here matches the canonical DA block.
-            self.engine
-                .rpc()
+            self.ops
                 .block_by_number(height)
                 .await
                 .context("querying Reth block for DA verification")?
@@ -515,7 +723,23 @@ impl FullNode {
         };
 
         if !already_applied {
-            self.apply_block(block).await?;
+            match self.apply_block(block).await? {
+                ApplyOutcome::Applied => {}
+                ApplyOutcome::Rejected(rejection) => {
+                    // A settled block that fails local validation cannot
+                    // self-heal: encode determinism pins the batch to its
+                    // blob id, so re-fetch returns the same bytes. Latch and
+                    // stop the sync; recovery is an operator event.
+                    self.block_gate.latch();
+                    self.metrics.block_gate_status.set(2);
+                    error!(
+                        height,
+                        rejection = ?rejection,
+                        "full node: latching the block gate on a rejected settled block"
+                    );
+                    bail!("DA block {height} rejected by the integrity gate: {rejection:?}");
+                }
+            }
         }
         self.mark_finalized(block).await?;
         Ok(())
@@ -596,6 +820,15 @@ impl CanonicalRoot for Engine {
         height: u64,
     ) -> Pin<Box<dyn Future<Output = Result<Option<B256>, EngineError>> + Send + 'a>> {
         Box::pin(async move { self.rpc().block_state_root(height).await })
+    }
+}
+
+impl CanonicalRoot for Box<dyn EngineOps> {
+    fn state_root_at<'a>(
+        &'a self,
+        height: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<B256>, EngineError>> + Send + 'a>> {
+        self.block_state_root(height)
     }
 }
 
@@ -1682,5 +1915,485 @@ mod state_root_verification_tests {
             "0x4444444444444444444444444444444444444444444444444444444444444444",
         );
         assert!(build_state_root_reader(&config).is_none());
+    }
+}
+
+#[cfg(test)]
+mod block_gate_tests {
+    use super::*;
+    use alloy_primitives::Address;
+    use alloy_rpc_types_engine::{
+        ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3, ForkchoiceUpdated,
+        PayloadStatus, PayloadStatusEnum,
+    };
+    use podseq_core::keys::Ed25519BlockSigner;
+    use podseq_core::BlockSigner;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use sui_crypto::ed25519::Ed25519PrivateKey;
+
+    const HEAD_HASH: B256 = B256::new([0x11; 32]);
+    const BLOCK_HASH: B256 = B256::new([0x22; 32]);
+    const NEXT_HASH: B256 = B256::new([0x33; 32]);
+
+    fn payload_fixture(
+        height: u64,
+        parent: B256,
+        state_root: B256,
+        block_hash: B256,
+        timestamp: u64,
+    ) -> ExecutionPayloadV3 {
+        ExecutionPayloadV3 {
+            payload_inner: ExecutionPayloadV2 {
+                payload_inner: ExecutionPayloadV1 {
+                    parent_hash: parent,
+                    fee_recipient: Address::ZERO,
+                    state_root,
+                    receipts_root: B256::ZERO,
+                    logs_bloom: Default::default(),
+                    prev_randao: B256::ZERO,
+                    block_number: height,
+                    gas_limit: 30_000_000,
+                    gas_used: 0,
+                    timestamp,
+                    extra_data: Default::default(),
+                    base_fee_per_gas: alloy_primitives::U256::from(7),
+                    block_hash,
+                    transactions: vec![],
+                },
+                withdrawals: vec![],
+            },
+            blob_gas_used: 0,
+            excess_blob_gas: 0,
+        }
+    }
+
+    /// A block whose header and payload agree, chaining onto `parent`.
+    fn chained_block(height: u64, parent: B256, block_hash: B256) -> podseq_core::Block {
+        let payload = payload_fixture(
+            height,
+            parent,
+            B256::new([0x44; 32]),
+            block_hash,
+            height * 2,
+        );
+        let header = Header {
+            height,
+            parent_hash: parent.into(),
+            state_root: [0x44; 32],
+            timestamp: height * 2,
+        };
+        podseq_core::Block {
+            header,
+            data: serde_json::to_vec(&payload).unwrap(),
+            signature: None,
+        }
+    }
+
+    /// Stub engine: records every call, serves programmed verdicts, and
+    /// defaults to VALID with the payload's own hash as the validated hash.
+    struct StubOps {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        payload_verdicts: Mutex<VecDeque<PayloadStatus>>,
+        blocks_by_number: Mutex<VecDeque<Option<B256>>>,
+    }
+
+    impl StubOps {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                payload_verdicts: Mutex::new(VecDeque::new()),
+                blocks_by_number: Mutex::new(VecDeque::new()),
+            }
+        }
+
+        fn with_verdict(status: PayloadStatusEnum, validated: Option<B256>) -> Self {
+            let ops = Self::new();
+            ops.payload_verdicts
+                .lock()
+                .unwrap()
+                .push_back(PayloadStatus {
+                    status,
+                    latest_valid_hash: validated,
+                });
+            ops
+        }
+
+        fn serving_block_at(block_hash: Option<B256>) -> Self {
+            let ops = Self::new();
+            ops.blocks_by_number.lock().unwrap().push_back(block_hash);
+            ops
+        }
+
+        fn calls_handle(&self) -> Arc<Mutex<Vec<&'static str>>> {
+            self.calls.clone()
+        }
+    }
+
+    impl EngineOps for StubOps {
+        fn current_head(&self) -> EngineFuture<'_, Result<B256, EngineError>> {
+            Box::pin(async move { Ok(B256::ZERO) })
+        }
+
+        fn block_number(&self) -> EngineFuture<'_, Result<u64, EngineError>> {
+            Box::pin(async move { Ok(0) })
+        }
+
+        fn new_payload(
+            &self,
+            payload: &ExecutionPayloadV3,
+        ) -> EngineFuture<'_, Result<PayloadStatus, EngineError>> {
+            let claimed = payload.payload_inner.payload_inner.block_hash;
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("new_payload");
+                Ok(self
+                    .payload_verdicts
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or(PayloadStatus {
+                        status: PayloadStatusEnum::Valid,
+                        latest_valid_hash: Some(claimed),
+                    }))
+            })
+        }
+
+        fn fork_choice(
+            &self,
+            _state: ForkchoiceState,
+        ) -> EngineFuture<'_, Result<ForkchoiceUpdated, EngineError>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("fork_choice");
+                Ok(ForkchoiceUpdated {
+                    payload_status: PayloadStatus {
+                        status: PayloadStatusEnum::Valid,
+                        latest_valid_hash: None,
+                    },
+                    payload_id: None,
+                })
+            })
+        }
+
+        fn block_by_number(
+            &self,
+            _height: u64,
+        ) -> EngineFuture<'_, Result<Option<B256>, EngineError>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("block_by_number");
+                Ok(self
+                    .blocks_by_number
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or(None))
+            })
+        }
+
+        fn block_state_root(
+            &self,
+            _number: u64,
+        ) -> EngineFuture<'_, Result<Option<B256>, EngineError>> {
+            Box::pin(async move { Ok(None) })
+        }
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "podseq-block-gate-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn test_node(
+        ops: StubOps,
+        head: B256,
+        head_height: u64,
+        metrics: Arc<PodseqMetrics>,
+    ) -> FullNode {
+        let dir = temp_dir("node");
+        FullNode {
+            ops: Box::new(ops),
+            sui: podseq_sui::Client::new(podseq_sui::Config::default()).unwrap(),
+            registry_id: String::new(),
+            rpc_url: String::new(),
+            poll_interval: Duration::from_millis(100),
+            synced_height: head_height,
+            head,
+            head_height,
+            safe: head,
+            finalized: head,
+            persisted_forkchoice: None,
+            state_store: StateStore::new(&dir),
+            p2p_receiver: None,
+            sequencer_pubkey: None,
+            table_uid: None,
+            deadline: None,
+            halt_gate: HaltGate::default(),
+            admission: None,
+            state_root_reader: None,
+            state_root_gate: StateRootGate::default(),
+            block_gate: BlockGate::default(),
+            metrics,
+        }
+    }
+
+    fn gate_metrics() -> Arc<PodseqMetrics> {
+        Arc::new(PodseqMetrics::new())
+    }
+
+    #[tokio::test]
+    async fn a_contiguous_valid_block_advances_the_head() {
+        let metrics = gate_metrics();
+        let ops = StubOps::new();
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+
+        let block = chained_block(5, HEAD_HASH, NEXT_HASH);
+        node.apply_block(&block).await.expect("apply");
+
+        assert_eq!(node.head, NEXT_HASH);
+        assert_eq!(node.head_height, 5);
+        assert_eq!(metrics.block_height.get(), 5);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_execution_verdict_is_rejected() {
+        let metrics = gate_metrics();
+        let ops = StubOps::with_verdict(
+            PayloadStatusEnum::Invalid {
+                validation_error: "programmed".to_string(),
+            },
+            None,
+        );
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+
+        let block = chained_block(5, HEAD_HASH, NEXT_HASH);
+        let outcome = node.apply_block(&block).await.expect("rpc ok");
+
+        assert!(matches!(
+            outcome,
+            ApplyOutcome::Rejected(BlockRejection::Invalid { .. })
+        ));
+        assert_eq!(node.head, HEAD_HASH);
+        assert_eq!(node.head_height, 4);
+        assert_eq!(metrics.block_gate_rejections_total.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_syncing_execution_verdict_is_rejected() {
+        let metrics = gate_metrics();
+        let ops = StubOps::with_verdict(PayloadStatusEnum::Syncing, None);
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+
+        let block = chained_block(5, HEAD_HASH, NEXT_HASH);
+        let outcome = node.apply_block(&block).await.expect("rpc ok");
+
+        assert_eq!(outcome, ApplyOutcome::Rejected(BlockRejection::Syncing));
+        assert_eq!(node.head, HEAD_HASH);
+    }
+
+    #[tokio::test]
+    async fn a_validated_hash_mismatch_is_rejected() {
+        let metrics = gate_metrics();
+        let stranger = B256::new([0x55; 32]);
+        let ops = StubOps::with_verdict(PayloadStatusEnum::Valid, Some(stranger));
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+
+        let block = chained_block(5, HEAD_HASH, NEXT_HASH);
+        let outcome = node.apply_block(&block).await.expect("rpc ok");
+
+        assert_eq!(
+            outcome,
+            ApplyOutcome::Rejected(BlockRejection::ValidatedHashMismatch {
+                validated: stranger,
+                claimed: NEXT_HASH,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gap_announce_is_rejected_without_engine_calls() {
+        let metrics = gate_metrics();
+        let ops = StubOps::new();
+        let calls = ops.calls_handle();
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+
+        // Height 7 skips 5 and 6: the header cannot chain onto the head.
+        let block = chained_block(7, B256::new([0x66; 32]), NEXT_HASH);
+        let outcome = node.apply_block(&block).await.expect("rpc ok");
+
+        assert!(matches!(
+            outcome,
+            ApplyOutcome::Rejected(BlockRejection::ParentMismatch { .. })
+        ));
+        assert!(calls.lock().unwrap().is_empty());
+        assert_eq!(metrics.block_gate_rejections_total.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_parent_hash_is_rejected() {
+        let metrics = gate_metrics();
+        let ops = StubOps::new();
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+
+        let other = B256::new([0x77; 32]);
+        let block = chained_block(5, other, NEXT_HASH);
+        let outcome = node.apply_block(&block).await.expect("rpc ok");
+
+        assert_eq!(
+            outcome,
+            ApplyOutcome::Rejected(BlockRejection::ParentMismatch {
+                expected: HEAD_HASH,
+                actual: other,
+            })
+        );
+        assert_eq!(metrics.block_gate_rejections_total.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_payload_disagreeing_with_its_header_is_rejected() {
+        let metrics = gate_metrics();
+        // Three independent tamper shapes, all rejected before any engine
+        // call: the header the sequencer signed cannot be reconciled with
+        // the served data.
+        let mutations: Vec<(B256, u64, u64)> = vec![
+            (B256::new([0x88; 32]), 5, 10), // parentHash tampered
+            (HEAD_HASH, 6, 10),             // blockNumber tampered
+            (HEAD_HASH, 5, 999),            // timestamp tampered
+        ];
+        for (parent, height, timestamp) in mutations {
+            let ops = StubOps::new();
+            let calls = ops.calls_handle();
+            let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+
+            let payload =
+                payload_fixture(height, parent, B256::new([0x44; 32]), NEXT_HASH, timestamp);
+            let header = Header {
+                height: 5,
+                parent_hash: HEAD_HASH.into(),
+                state_root: [0x44; 32],
+                timestamp: 10,
+            };
+            let block = podseq_core::Block {
+                header,
+                data: serde_json::to_vec(&payload).unwrap(),
+                signature: None,
+            };
+            let outcome = node.apply_block(&block).await.expect("rpc ok");
+
+            assert!(
+                matches!(
+                    outcome,
+                    ApplyOutcome::Rejected(BlockRejection::HeaderBinding { .. })
+                ),
+                "expected HeaderBinding rejection for parent={parent:?} height={height} ts={timestamp}"
+            );
+            assert!(calls.lock().unwrap().is_empty());
+            assert_eq!(node.head, HEAD_HASH);
+        }
+        assert_eq!(metrics.block_gate_rejections_total.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn an_already_applied_height_finalizes_without_resubmission() {
+        let metrics = gate_metrics();
+        // The p2p path already applied height 5 (head == its hash); the DA
+        // batch arrives with the same block. Finalize only.
+        let ops = StubOps::serving_block_at(Some(BLOCK_HASH));
+        let mut node = test_node(ops, BLOCK_HASH, 5, metrics.clone());
+
+        let block = chained_block(5, HEAD_HASH, BLOCK_HASH);
+        node.apply_and_finalize(&block).await.expect("finalize");
+
+        assert_eq!(node.finalized, BLOCK_HASH);
+        assert_eq!(node.synced_height, 5);
+    }
+
+    #[tokio::test]
+    async fn an_equivocating_da_block_reapplies_and_reorgs() {
+        let metrics = gate_metrics();
+        // Reth's block at this height differs from the canonical DA block:
+        // re-apply (fork-level reorg onto the canonical chain).
+        let ops = StubOps::serving_block_at(Some(BLOCK_HASH));
+        let mut node = test_node(ops, BLOCK_HASH, 5, metrics.clone());
+
+        let block = chained_block(5, HEAD_HASH, NEXT_HASH);
+        node.apply_and_finalize(&block).await.expect("re-apply");
+
+        assert_eq!(node.head, NEXT_HASH);
+        assert_eq!(node.finalized, NEXT_HASH);
+        assert_eq!(node.synced_height, 5);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_p2p_announcement_is_skipped_without_failing_the_poll() {
+        let metrics = gate_metrics();
+        // Signed header, tampered payload: signature passes, the gate
+        // rejects, and the poll carries on (the DA path re-adjudicates).
+        let key_file = temp_dir("signer").join("block.key");
+        std::fs::write(
+            &key_file,
+            Ed25519PrivateKey::new([9u8; 32])
+                .to_suiprivkey()
+                .expect("static key encoding"),
+        )
+        .unwrap();
+        let signer = Ed25519BlockSigner::from_suiprivkey_file(&key_file).unwrap();
+        let public_key = signer.pub_key();
+        let verifying_key = sui_crypto::ed25519::Ed25519VerifyingKey::new(&public_key);
+
+        let ops = StubOps::new();
+        ops.payload_verdicts
+            .lock()
+            .unwrap()
+            .push_back(PayloadStatus {
+                status: PayloadStatusEnum::Invalid {
+                    validation_error: "programmed".to_string(),
+                },
+                latest_valid_hash: None,
+            });
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+        node.sequencer_pubkey = Some(verifying_key.expect("static key"));
+
+        let mut block = chained_block(5, HEAD_HASH, NEXT_HASH);
+        block.signature = Some(signer.sign_header(&block.header).unwrap());
+        // Tamper the payload AFTER signing: signature stays valid, data lies
+        // (gas_used is not a header field, so the binding still passes and
+        // the execution verdict is what rejects).
+        let mut payload: ExecutionPayloadV3 = serde_json::from_slice(&block.data).unwrap();
+        payload.payload_inner.payload_inner.gas_used = 123_456;
+        block.data = serde_json::to_vec(&payload).unwrap();
+
+        node.handle_announced_block(&block)
+            .await
+            .expect("poll carries on");
+
+        assert_eq!(node.head, HEAD_HASH);
+        assert_eq!(metrics.block_gate_rejections_total.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_da_path_latches_after_a_rejection() {
+        let metrics = gate_metrics();
+        let ops = StubOps::with_verdict(
+            PayloadStatusEnum::Invalid {
+                validation_error: "programmed".to_string(),
+            },
+            None,
+        );
+        let mut node = test_node(ops, HEAD_HASH, 4, metrics.clone());
+        assert!(!node.block_gate.latched());
+
+        let block = chained_block(5, HEAD_HASH, NEXT_HASH);
+        node.apply_and_finalize(&block)
+            .await
+            .expect_err("rejected blocks stop the DA sync");
+
+        assert!(node.block_gate.latched());
+        assert_eq!(metrics.block_gate_status.get(), 2);
     }
 }

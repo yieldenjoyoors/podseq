@@ -39,6 +39,8 @@ When `enabled = false`, no HTTP server is started.
 | `podseq_deadline_overdue_seconds`    | Gauge     | Seconds the oldest pending forced transaction is past its deadline    |
 | `podseq_state_root_status`           | Gauge     | Settled-state-root verification verdict: 0 disabled, 1 verified, 2 no anchor, 3 mismatch, 4 read error |
 | `podseq_state_root_mismatches_total` | Counter   | Settled-state-root mismatches detected by this full node              |
+| `podseq_block_gate_status`           | Gauge     | Applied-block integrity gate on a full node: 1 accepting, 2 latched   |
+| `podseq_block_gate_rejections_total` | Counter   | Blocks rejected by the applied-block integrity gate                   |
 | `podseq_reserve_sui_balance_mist`    | Gauge     | Gas reserve SUI balance in mistos (0 until the first read)            |
 | `podseq_gas_topups_total`            | Counter   | Completed gas top-ups moved to the settlement key                     |
 | `podseq_rpc_proxy_requests_total`    | Counter   | JSON-RPC requests forwarded by the RPC proxy                          |
@@ -75,6 +77,12 @@ endpoint. Three states are worth a page:
   `podseq_settlement_height` keeps advancing) and nothing self-heals: an
   operator must resolve the divergence before the node (and the exit queue,
   which verifies against the anchored root) can be trusted again.
+- The block gate latches: `podseq_block_gate_status == 2` means a settled
+  block failed the integrity checks — the served data does not match the
+  signed header, does not chain onto the node's head, or Reth rejected its
+  execution. Like a state-root mismatch this is provable and does not
+  self-heal. `podseq_block_gate_rejections_total` counts every rejection,
+  including p2p blocks the node skipped without latching.
 
 `podseq_deadline_overdue_seconds` gives the paging depth: it only grows past
 the 10-minute margin while settlement stays stuck, so it separates a fresh

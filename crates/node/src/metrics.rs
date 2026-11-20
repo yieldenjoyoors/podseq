@@ -64,6 +64,11 @@ pub struct PodseqMetrics {
     pub state_root_status: Gauge,
     /// Settled-state-root mismatches this full node has detected.
     pub state_root_mismatches_total: Counter,
+    /// Applied-block integrity gate state on a full node: 1 accepting,
+    /// 2 latched (a settled block failed local validation).
+    pub block_gate_status: Gauge,
+    /// Blocks rejected by a full node's applied-block integrity gate.
+    pub block_gate_rejections_total: Counter,
     /// The gas reserve's SUI balance in mist (0 until the first read).
     pub reserve_sui_balance: Gauge,
     /// Completed settlement-key gas top-ups.
@@ -195,6 +200,20 @@ impl PodseqMetrics {
             state_root_mismatches_total.clone(),
         );
 
+        let block_gate_status = Gauge::default();
+        registry.register(
+            "podseq_block_gate_status",
+            "Applied-block integrity gate on a full node: 1 accepting, 2 latched",
+            block_gate_status.clone(),
+        );
+
+        let block_gate_rejections_total = Counter::default();
+        registry.register(
+            "podseq_block_gate_rejections",
+            "Blocks rejected by a full node's applied-block integrity gate",
+            block_gate_rejections_total.clone(),
+        );
+
         let reserve_sui_balance = Gauge::default();
         registry.register(
             "podseq_reserve_sui_balance_mist",
@@ -248,6 +267,8 @@ impl PodseqMetrics {
             settlement_height,
             state_root_status,
             state_root_mismatches_total,
+            block_gate_status,
+            block_gate_rejections_total,
             reserve_sui_balance,
             gas_topups_total,
             rpc_proxy_requests_total,
@@ -418,5 +439,17 @@ mod tests {
 
         assert!(buffer.contains("# TYPE podseq_reserve_sui_balance_mist gauge"));
         assert!(buffer.contains("# TYPE podseq_gas_topups_total counter"));
+    }
+
+    #[test]
+    fn block_gate_instruments_are_registered() {
+        let m = PodseqMetrics::new();
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+
+        assert!(buffer.contains("# TYPE podseq_block_gate_status gauge"));
+        assert!(buffer.contains("# TYPE podseq_block_gate_rejections counter"));
+        assert!(buffer.contains("podseq_block_gate_rejections_total 0"));
     }
 }
