@@ -273,12 +273,42 @@ async fn preflight_sui_balance() -> Result<()> {
     // Settlement deploy + bridge vault init + several commits need ~0.05 SUI.
     const MIN_BALANCE_MIST: u64 = 100_000_000; // 0.1 SUI
     if balance < MIN_BALANCE_MIST {
-        let sui = balance as f64 / 1_000_000_000.0;
-        bail!(
-            "funded Sui key has {balance} MIST ({sui:.4} SUI); need at least \
-             {MIN_BALANCE_MIST} (0.1 SUI) for settlement + bridge gas. \
-             Refill from the testnet faucet."
+        // The faucet PoW grind must outrun the checkpoint freshness window
+        // (~60-90 s), so the refill runs through the release-profile helper
+        // binary — a debug-profile grind cannot finish in time. CI builds it
+        // next to the test binary; locally run `cargo build --release -p
+        // podseq-e2e --bin faucet-refill` once.
+        let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/release/faucet-refill");
+        if !helper.exists() {
+            bail!(
+                "balance {balance} < {MIN_BALANCE_MIST} MIST and the release refill \
+                 helper is missing at {}; build it with \
+                 `cargo build --release -p podseq-e2e --bin faucet-refill`",
+                helper.display()
+            );
+        }
+        let out = tokio::process::Command::new(&helper)
+            .args(["--rpc", SUI_RPC])
+            .args(["--recipient", &sender.to_string()])
+            .args(["--min-mist", &MIN_BALANCE_MIST.to_string()])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await
+            .context("running the faucet refill helper")?;
+        eprintln!(
+            "faucet refill: {} {}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout).trim()
         );
+        if !out.status.success() {
+            bail!(
+                "faucet refill helper failed: {} {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
     }
     println!("e2e: SUI balance = {balance} MIST");
     Ok(())

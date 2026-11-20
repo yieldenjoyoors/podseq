@@ -152,6 +152,12 @@ jobs:
         working-directory: move
         run: sui move build
 
+      # The faucet PoW grind must be release-fast to beat the checkpoint
+      # freshness window; the preflight invokes this helper when the funded
+      # key runs low.
+      - name: Build faucet refill helper
+        run: cargo build --release -p podseq-e2e --bin faucet-refill
+
       - name: Run full-stack e2e
         env:
           SUI_SIGNER_KEY: ${{ secrets.SUI_SIGNER_KEY }}

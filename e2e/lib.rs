@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+pub mod faucet;
+
 /// Reth image tag pinned for reproducible CI runs.
 pub const RETH_IMAGE: &str = "ghcr.io/paradigmxyz/reth:v2.7.0";
 
