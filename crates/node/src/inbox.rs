@@ -21,7 +21,6 @@ use std::time::Duration;
 
 use alloy_primitives::{keccak256, Bytes, B256};
 use anyhow::Context as _;
-use podseq_core::Settlement as _;
 use podseq_sui::deadline::{parse_clock, SUI_CLOCK_ID};
 use podseq_sui::inbox::{
     parse_inbox_status, parse_pending_tx, InboxReader, InboxTransport, SuiInboxTransport,
@@ -29,12 +28,13 @@ use podseq_sui::inbox::{
 };
 use sui_sdk_types::Address;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::bridge::eth_send_raw_transaction;
 use crate::config::SuiConfig;
 use crate::metrics::PodseqMetrics;
 use crate::store::{InboxStore, NonceRecord, StoreError};
+use podseq_sui::SettlementError;
 
 /// Default inclusion window on chain (ms), mirrored from `podseq_sui::inbox`
 /// (`DEFAULT_WINDOW_MS`, i.e. `inbox.move`'s `INCLUSION_WINDOW_MS`): a forced
@@ -623,18 +623,18 @@ pub async fn commit_with_inbox(
     inbox: Option<&InboxIntegration>,
     block: &podseq_core::Block,
     blob_id: &podseq_core::BlobId,
-) -> Result<(), podseq_core::Error> {
+) -> Result<(), SettlementError> {
     let Some(inbox) = inbox else {
-        return sui.commit(block, blob_id).await;
+        return sui.commit_typed(block, blob_id).await;
     };
     match inbox.tracker().settle_cursor() {
-        Ok(cursor) => sui.commit_with_cursor(block, blob_id, cursor).await,
+        Ok(cursor) => sui.commit_with_cursor_typed(block, blob_id, cursor).await,
         Err(e) => {
             warn!(
                 error = %e,
                 "inclusion cursor unreadable; settling with the on-chain cursor"
             );
-            sui.commit(block, blob_id).await
+            sui.commit_typed(block, blob_id).await
         }
     }
 }
@@ -656,22 +656,22 @@ pub async fn settle_with_gate(
     if !wait_inclusion_gate(inbox, height, shutting_down, Duration::from_millis(500)).await {
         return false;
     }
-    let committed = crate::runner::retry_with_backoff(
+    let committed = settle_retry_loop(
         shutting_down,
         Duration::from_millis(500),
         Duration::from_secs(10),
+        metrics,
+        || wait_inclusion_gate(inbox, height, shutting_down, Duration::from_millis(500)),
         || async {
             let started = std::time::Instant::now();
-            match commit_with_inbox(sui, inbox, block, blob_id).await {
-                Ok(()) => {
-                    metrics
-                        .settlement_duration
-                        .observe(started.elapsed().as_secs_f64());
-                    metrics.settlement_height.set(height as i64);
-                    Ok(())
-                }
-                Err(e) => Err(e.to_string()),
+            let result = commit_with_inbox(sui, inbox, block, blob_id).await;
+            if result.is_ok() {
+                metrics
+                    .settlement_duration
+                    .observe(started.elapsed().as_secs_f64());
+                metrics.settlement_height.set(height as i64);
             }
+            result
         },
     )
     .await;
@@ -681,6 +681,103 @@ pub async fn settle_with_gate(
             true
         }
         None => false,
+    }
+}
+
+/// How a settled settle attempt should be handled by the retry loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettleOutcome {
+    /// The block is committed on Sui.
+    Committed,
+    /// A transient failure (RPC, key, unknown error): back off and retry.
+    Retry,
+    /// The contract refused with the inbox deadline exceeded — the local gate
+    /// view disagreed with the chain. Re-check the inclusion gate before the
+    /// next attempt: once the overdue transaction is included, the gate
+    /// reopens and the retry succeeds.
+    RecheckGate,
+    /// The contract refused with an attributable equivocation (conflicting
+    /// blob or state root for this height). Resubmitting identical bytes can
+    /// never succeed and every abort burns real gas: stop, leave the pending
+    /// marker for restart recovery, and let the full-node gates page.
+    Halt,
+}
+
+fn settle_outcome(result: &Result<(), SettlementError>) -> SettleOutcome {
+    match result {
+        Ok(()) => SettleOutcome::Committed,
+        Err(e) => match e.abort_class() {
+            Some(podseq_sui::AbortClass::Equivocation) => SettleOutcome::Halt,
+            Some(podseq_sui::AbortClass::DeadlineExceeded) => SettleOutcome::RecheckGate,
+            Some(podseq_sui::AbortClass::AuthorityRotated)
+            | Some(podseq_sui::AbortClass::Other) => SettleOutcome::Retry,
+            None => SettleOutcome::Retry,
+        },
+    }
+}
+
+/// Retries settlement until it succeeds, the abort class says stop, or
+/// shutdown. Unlike the generic backoff helper this loop sees typed errors:
+/// an equivocation abort stops the loop loudly (one gas burn, not an infinite
+/// one), a deadline abort re-checks the inclusion gate first, and everything
+/// else keeps the plain backoff. Returns `Some(())` when committed, `None`
+/// otherwise (the pending marker stays intact so the block is re-settled on
+/// restart).
+pub(crate) async fn settle_retry_loop<A, FutA, G, FutG>(
+    shutting_down: &Arc<AtomicBool>,
+    initial: Duration,
+    max_backoff: Duration,
+    metrics: &PodseqMetrics,
+    gate: G,
+    mut attempt: A,
+) -> Option<()>
+where
+    A: FnMut() -> FutA,
+    FutA: std::future::Future<Output = Result<(), SettlementError>>,
+    G: Fn() -> FutG,
+    FutG: std::future::Future<Output = bool>,
+{
+    let mut backoff = initial;
+    loop {
+        if shutting_down.load(Ordering::SeqCst) {
+            return None;
+        }
+        let result = attempt().await;
+        match settle_outcome(&result) {
+            SettleOutcome::Committed => return Some(()),
+            SettleOutcome::Halt => {
+                metrics.settlement_abort.inc();
+                if let Err(e) = result {
+                    error!(
+                        error = %e,
+                        "settlement refused with an attributable equivocation; \
+                         leaving the pending marker for restart recovery and \
+                         stopping settlement retries"
+                    );
+                }
+                return None;
+            }
+            SettleOutcome::RecheckGate => {
+                metrics.settlement_abort.inc();
+                if let Err(e) = &result {
+                    warn!(
+                        error = %e,
+                        "settlement refused with the inbox deadline exceeded; \
+                         re-checking the inclusion gate before the next attempt"
+                    );
+                }
+                if !gate().await {
+                    return None;
+                }
+            }
+            SettleOutcome::Retry => {
+                if let Err(e) = &result {
+                    warn!(error = %e, "settle failed; retrying in {backoff:?}");
+                }
+            }
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(max_backoff);
     }
 }
 
@@ -706,6 +803,280 @@ mod tests {
     use super::*;
     use crate::store::InboxStore;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::atomic::AtomicU32;
+
+    /// The retry loop classifies each settle attempt: equivocation must stop
+    /// the loop (resubmitting identical bytes can never succeed and every
+    /// abort burns gas), a deadline abort must re-check the inclusion gate
+    /// (the local view disagreed with the chain; inclusion reopens it), and
+    /// everything else keeps the backoff retry.
+    #[test]
+    fn settle_outcome_routes_each_error_class() {
+        let deadline = SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "inbox".into(),
+            code: podseq_sui::ABORT_CODE_DEADLINE_EXCEEDED,
+        };
+        let equivocation = SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "settlement".into(),
+            code: podseq_sui::ABORT_CODE_CONFLICTING_BLOB,
+        };
+        let rotated = SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "settlement".into(),
+            code: podseq_sui::ABORT_CODE_ROTATED,
+        };
+        let unknown_abort = SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "settlement".into(),
+            code: 9,
+        };
+        let opaque = SettlementError::Execution("rpc hiccup".into());
+
+        assert_eq!(settle_outcome(&Ok(())), SettleOutcome::Committed);
+        assert_eq!(settle_outcome(&Err(deadline)), SettleOutcome::RecheckGate);
+        assert_eq!(settle_outcome(&Err(equivocation)), SettleOutcome::Halt);
+        assert_eq!(settle_outcome(&Err(rotated)), SettleOutcome::Retry);
+        assert_eq!(settle_outcome(&Err(unknown_abort)), SettleOutcome::Retry);
+        assert_eq!(settle_outcome(&Err(opaque)), SettleOutcome::Retry);
+    }
+
+    fn halt_error() -> SettlementError {
+        SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "settlement".into(),
+            code: podseq_sui::ABORT_CODE_CONFLICTING_BLOB,
+        }
+    }
+
+    fn deadline_error() -> SettlementError {
+        SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "inbox".into(),
+            code: podseq_sui::ABORT_CODE_DEADLINE_EXCEEDED,
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_retry_loop_stops_on_equivocation_after_one_attempt() {
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let metrics = PodseqMetrics::new();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+
+        let settled = settle_retry_loop(
+            &shutting_down,
+            Duration::ZERO,
+            Duration::ZERO,
+            &metrics,
+            || async { true },
+            || {
+                let attempts = Arc::clone(&attempts_clone);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(halt_error())
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            settled, None,
+            "equivocation must not report the block settled"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "no re-submit after an attributable equivocation"
+        );
+        let mut buffer = String::new();
+        prometheus_client::encoding::text::encode(&mut buffer, &metrics.registry).unwrap();
+        assert!(buffer.contains("podseq_settlement_abort_total 1"));
+    }
+
+    #[tokio::test]
+    async fn settle_retry_loop_regates_on_a_deadline_abort() {
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let metrics = PodseqMetrics::new();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+        let gates = Arc::new(AtomicU32::new(0));
+        let gates_clone = Arc::clone(&gates);
+
+        let settled = settle_retry_loop(
+            &shutting_down,
+            Duration::ZERO,
+            Duration::ZERO,
+            &metrics,
+            || {
+                let gates = Arc::clone(&gates_clone);
+                async move {
+                    gates.fetch_add(1, Ordering::SeqCst);
+                    true
+                }
+            },
+            || {
+                let attempts = Arc::clone(&attempts_clone);
+                async move {
+                    let n = attempts.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        Err(deadline_error())
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(settled, Some(()));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            gates.load(Ordering::SeqCst),
+            1,
+            "a deadline abort means the local inbox view disagreed with the chain: the loop re-checks the gate before resubmitting (the initial gate ran outside the loop)"
+        );
+    }
+
+    #[tokio::test]
+    async fn settle_retry_loop_keeps_the_backoff_on_transient_errors() {
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let metrics = PodseqMetrics::new();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+        let gates = Arc::new(AtomicU32::new(0));
+        let gates_clone = Arc::clone(&gates);
+
+        let settled = settle_retry_loop(
+            &shutting_down,
+            Duration::ZERO,
+            Duration::ZERO,
+            &metrics,
+            || {
+                let gates = Arc::clone(&gates_clone);
+                async move {
+                    gates.fetch_add(1, Ordering::SeqCst);
+                    true
+                }
+            },
+            || {
+                let attempts = Arc::clone(&attempts_clone);
+                async move {
+                    let n = attempts.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        Err(SettlementError::Execution("rpc hiccup".into()))
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(settled, Some(()));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            gates.load(Ordering::SeqCst),
+            0,
+            "a non-abort failure is not an inbox disagreement: no in-loop gate read (the initial gate ran outside the loop)"
+        );
+    }
+
+    #[tokio::test]
+    async fn settle_retry_loop_honors_shutdown_between_attempts() {
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let metrics = PodseqMetrics::new();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+        let shutdown_handle = Arc::clone(&shutting_down);
+
+        let settled = settle_retry_loop(
+            &shutting_down,
+            Duration::ZERO,
+            Duration::ZERO,
+            &metrics,
+            || async { true },
+            move || {
+                let shutdown_handle = Arc::clone(&shutdown_handle);
+                let attempts = Arc::clone(&attempts_clone);
+                async move {
+                    let n = attempts.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        Err(SettlementError::Execution("rpc hiccup".into()))
+                    } else {
+                        shutdown_handle.store(true, Ordering::SeqCst);
+                        Err(SettlementError::Execution("rpc hiccup".into()))
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(settled, None);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn settle_retry_loop_stops_when_the_regate_fails() {
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let metrics = PodseqMetrics::new();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+
+        let settled = settle_retry_loop(
+            &shutting_down,
+            Duration::ZERO,
+            Duration::ZERO,
+            &metrics,
+            || async { false },
+            || {
+                let attempts = Arc::clone(&attempts_clone);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(deadline_error())
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            settled, None,
+            "the gate re-check failing means the chain is past the deadline again: stop and leave the pending marker"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "no resubmission past a failed gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn settle_retry_loop_stops_when_shutdown_is_set_before_the_first_attempt() {
+        let shutting_down = Arc::new(AtomicBool::new(true));
+        let metrics = PodseqMetrics::new();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+
+        let settled = settle_retry_loop(
+            &shutting_down,
+            Duration::ZERO,
+            Duration::ZERO,
+            &metrics,
+            || async { true },
+            || {
+                let attempts = Arc::clone(&attempts_clone);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(SettlementError::Execution("rpc hiccup".into()))
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(settled, None);
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+    }
 
     const INBOX_ID: [u8; 32] = [0x11; 32];
     const TABLE_UID: [u8; 32] = [0x22; 32];

@@ -184,6 +184,22 @@ check.
   wait indefinitely for the size threshold. With 5 flush opportunities inside the
   inclusion window (10 minutes by default), batching alone cannot push a
   settled-but-unrecorded entry past its deadline.
+- Classify settle failures instead of retrying blindly. The execution status of a
+  refused `settle` carries the Move abort's module and code, and the retry loop
+  routes on it:
+  - transient failures (RPC, keys) keep the exponential backoff;
+  - `inbox` `E_DEADLINE_EXCEEDED` means the local gate view disagreed with the
+    chain, so the loop re-checks the inclusion gate before the next attempt —
+    once the overdue transaction is included, the gate reopens and the same
+    bytes settle;
+  - `settlement` `E_CONFLICTING_BLOB` or `E_STATE_ROOT_CONFLICT` is an
+    attributable equivocation for the height. Resubmitting identical bytes can
+    never succeed and every abort burns real gas, so the loop stops, leaves the
+    pending marker for restart recovery, and raises
+    `podseq_settlement_abort_total` — the full-node gates already page on the
+    resulting settlement stall;
+  - `settlement` `E_ROTATED` clears once the rotation watcher swaps the key;
+    it retries like a transient failure.
 
 ## Full node verification
 

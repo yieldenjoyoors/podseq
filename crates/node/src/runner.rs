@@ -590,38 +590,6 @@ async fn settle_block(
     crate::inbox::settle_with_gate(sui, inbox, block, blob_id, shutting_down, metrics).await
 }
 
-/// Retries an operation with exponential backoff until it succeeds or shutdown
-/// is requested. Returns `Some(())` on success, `None` if shutdown interrupted.
-///
-/// On each failure the backoff doubles, capped at `max_backoff`. Shutdown is
-/// checked before each attempt, so a shutdown during a long backoff still exits
-/// promptly on the next iteration.
-pub(crate) async fn retry_with_backoff<F, Fut>(
-    shutting_down: &Arc<AtomicBool>,
-    initial: Duration,
-    max_backoff: Duration,
-    mut op: F,
-) -> Option<()>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<(), String>>,
-{
-    let mut backoff = initial;
-    loop {
-        if shutting_down.load(Ordering::SeqCst) {
-            return None;
-        }
-        match op().await {
-            Ok(()) => return Some(()),
-            Err(e) => {
-                warn!(error = %e, "operation failed; retrying in {backoff:?}");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(max_backoff);
-            }
-        }
-    }
-}
-
 /// Pending markers are left intact so blocks are re-uploaded on the next startup.
 async fn finalize_buffered_locally(
     engine: &Arc<Engine>,
@@ -780,7 +748,7 @@ mod tests {
     use podseq_core::Ed25519BlockSigner;
     use podseq_core::Header;
     use podseq_engine::Auth;
-    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn tmp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -872,84 +840,6 @@ mod tests {
         recover_pending(&pending_store, &block_store, &tx);
         assert!(rx.try_recv().is_err());
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[tokio::test]
-    async fn retry_with_backoff_succeeds_after_failures() {
-        let shutting_down = Arc::new(AtomicBool::new(false));
-        let attempts = Arc::new(AtomicU32::new(0));
-        let attempts_clone = Arc::clone(&attempts);
-
-        // Fail the first 3 attempts, succeed on the 4th.
-        let result = retry_with_backoff(
-            &shutting_down,
-            Duration::from_millis(1),
-            Duration::from_millis(8),
-            || {
-                let n = attempts_clone.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if n < 3 {
-                        Err("transient".into())
-                    } else {
-                        Ok(())
-                    }
-                }
-            },
-        )
-        .await;
-
-        assert_eq!(result, Some(()));
-        assert_eq!(attempts.load(Ordering::SeqCst), 4);
-    }
-
-    #[tokio::test]
-    async fn retry_with_backoff_succeeds_immediately() {
-        let shutting_down = Arc::new(AtomicBool::new(false));
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = Arc::clone(&calls);
-
-        let result = retry_with_backoff(
-            &shutting_down,
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            || {
-                calls_clone.fetch_add(1, Ordering::SeqCst);
-                async move { Ok(()) }
-            },
-        )
-        .await;
-
-        assert_eq!(result, Some(()));
-        // Never slept: a single successful call.
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn retry_with_backoff_aborts_on_shutdown() {
-        let shutting_down = Arc::new(AtomicBool::new(false));
-        let attempts = Arc::new(AtomicU32::new(0));
-        let attempts_clone = Arc::clone(&attempts);
-        let shutdown_clone = Arc::clone(&shutting_down);
-
-        // Always fail, but flip shutdown after the first attempt so the loop
-        // exits on the next iteration instead of sleeping forever.
-        let result = retry_with_backoff(
-            &shutting_down,
-            Duration::from_millis(1),
-            Duration::from_millis(1),
-            || {
-                let n = attempts_clone.fetch_add(1, Ordering::SeqCst);
-                if n == 0 {
-                    shutdown_clone.store(true, Ordering::SeqCst);
-                }
-                async move { Err("down".into()) }
-            },
-        )
-        .await;
-
-        assert_eq!(result, None);
-        // Attempted at least once, but did not spin forever after shutdown.
-        assert!(attempts.load(Ordering::SeqCst) >= 1);
     }
 
     #[test]

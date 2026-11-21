@@ -7,8 +7,10 @@ use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_rpc::field::FieldMask;
 use sui_rpc::field::FieldMaskUtil;
+use sui_rpc::proto::sui::rpc::v2::execution_error;
 use sui_rpc::proto::sui::rpc::v2::owner;
 use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest;
+use sui_rpc::proto::sui::rpc::v2::ExecutionError;
 use sui_rpc::proto::sui::rpc::v2::GetEpochRequest;
 use sui_rpc::proto::sui::rpc::v2::GetObjectRequest;
 use sui_rpc::proto::sui::rpc::v2::ListBalancesRequest;
@@ -126,8 +128,75 @@ pub enum SettlementError {
     Build(String),
     #[error("transaction execution failed: {0}")]
     Execution(String),
+    /// The contract refused the transaction with a Move abort whose identity
+    /// (module + code) is known, so the failure class is decidable off-chain:
+    /// deadline misses are self-healing once inclusion catches up, blob/state
+    /// root conflicts are attributable equivocation that no retry can fix,
+    /// and `E_ROTATED` clears when the rotation watcher swaps the key.
+    #[error("move abort {module} code {code} during {label}")]
+    MoveAbort {
+        /// The call site label (e.g. "settle").
+        label: String,
+        /// Move module that aborted (from the execution status).
+        module: String,
+        /// Abort code (from the execution status).
+        code: u64,
+    },
     #[error("parse error: {0}")]
     Parse(String),
+}
+
+/// `inbox.move` `E_DEADLINE_EXCEEDED`: the inclusion deadline for a pending
+/// forced transaction passed without inclusion.
+pub const ABORT_CODE_DEADLINE_EXCEEDED: u64 = 4;
+/// `settlement.move` `E_CONFLICTING_BLOB`: a different blob was already
+/// committed for this height (attributable equivocation).
+pub const ABORT_CODE_CONFLICTING_BLOB: u64 = 1;
+/// `settlement.move` `E_ROTATED`: the request was signed with a rotated-away
+/// authority; the rotation watcher's key swap clears it.
+pub const ABORT_CODE_ROTATED: u64 = 2;
+/// `settlement.move` `E_STATE_ROOT_CONFLICT`: a different state root was
+/// already anchored for this height (attributable equivocation).
+pub const ABORT_CODE_STATE_ROOT_CONFLICT: u64 = 12;
+
+/// How a settlement Move abort should be treated by a retrying caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbortClass {
+    /// The inbox deadline passed; once the overdue transaction is included
+    /// the contract accepts settles again. Retry after re-checking the gate.
+    DeadlineExceeded,
+    /// A conflicting blob or state root was already committed for the height.
+    /// Resubmitting identical bytes can never succeed.
+    Equivocation,
+    /// The signing key was rotated away; the rotation watcher's swap clears it.
+    AuthorityRotated,
+    /// Any other abort (unknown module or code). Keep the pre-classification
+    /// retry behavior; the abort identity is logged.
+    Other,
+}
+
+/// Maps a Move abort identity onto its retry class. Mirrors the abort
+/// constants of `inbox.move` and `settlement.move` — the settle path can only
+/// abort in those two modules (settle_as + commit_state_root).
+pub fn classify_abort(module: &str, code: u64) -> AbortClass {
+    match (module, code) {
+        ("inbox", ABORT_CODE_DEADLINE_EXCEEDED) => AbortClass::DeadlineExceeded,
+        ("settlement", ABORT_CODE_CONFLICTING_BLOB | ABORT_CODE_STATE_ROOT_CONFLICT) => {
+            AbortClass::Equivocation
+        }
+        ("settlement", ABORT_CODE_ROTATED) => AbortClass::AuthorityRotated,
+        _ => AbortClass::Other,
+    }
+}
+
+impl SettlementError {
+    /// The retry class of a Move abort, or `None` for non-abort failures.
+    pub fn abort_class(&self) -> Option<AbortClass> {
+        match self {
+            SettlementError::MoveAbort { module, code, .. } => Some(classify_abort(module, *code)),
+            _ => None,
+        }
+    }
 }
 
 /// Object IDs produced by deploying the settlement package.
@@ -1056,10 +1125,58 @@ fn into_checked(
     if status.success() {
         return Ok(inner);
     }
-    Err(SettlementError::Execution(format!(
-        "{label} failed: {}",
-        status.error().description.clone().unwrap_or_default()
-    )))
+    Err(failed_status_error(status.error(), label))
+}
+
+/// Builds the settle error for a failed execution status: a classified
+/// [`SettlementError::MoveAbort`] when the abort identity is recoverable
+/// (structured details first, the `MoveAbort(...)` Display shape in the
+/// description as fallback for node generations that fill only `description`),
+/// the pre-classification opaque error otherwise.
+fn failed_status_error(error: &ExecutionError, label: &str) -> SettlementError {
+    let description = error.description();
+    let identity = structured_abort(error).or_else(|| described_abort(description));
+    match identity {
+        Some((module, code)) => SettlementError::MoveAbort {
+            label: label.to_string(),
+            module,
+            code,
+        },
+        None => SettlementError::Execution(format!("{label} failed: {description}")),
+    }
+}
+
+/// Reads the abort identity from the execution status's structured error
+/// details (`ErrorDetails::Abort` with the abort code and Move location).
+fn structured_abort(error: &ExecutionError) -> Option<(String, u64)> {
+    let abort = match &error.error_details {
+        Some(execution_error::ErrorDetails::Abort(abort)) => abort,
+        _ => return None,
+    };
+    let code = abort.abort_code?;
+    let module = abort
+        .location
+        .as_ref()
+        .and_then(|location| location.module.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    Some((module, code))
+}
+
+/// Parses the abort identity out of the `SuiError::MoveAbort` Display shape
+/// that node generations put in the description:
+/// `MoveAbort(MoveLocation { ... name: Identifier("inbox") ... }, 4) in command 0`.
+/// The module is "unknown" when the description carries no identifier.
+fn described_abort(description: &str) -> Option<(String, u64)> {
+    let rest = description.strip_prefix("MoveAbort(")?;
+    let close = rest.rfind(')')?;
+    let code = rest[..close].rsplit(", ").next()?.parse::<u64>().ok()?;
+    let module = rest
+        .split("Identifier(\"")
+        .nth(1)
+        .and_then(|tail| tail.split('"').next())
+        .unwrap_or("unknown")
+        .to_string();
+    Some((module, code))
 }
 
 /// Returns the first object id created (`IdOperation::Created`) owned by `kind`.
@@ -1255,6 +1372,12 @@ fn parse_blob_id(bytes: &[u8]) -> Result<BlobId, SettlementError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sui_rpc::proto::sui::rpc::v2::ExecuteTransactionResponse;
+    use sui_rpc::proto::sui::rpc::v2::ExecutedTransaction;
+    use sui_rpc::proto::sui::rpc::v2::ExecutionStatus;
+    use sui_rpc::proto::sui::rpc::v2::MoveAbort;
+    use sui_rpc::proto::sui::rpc::v2::MoveLocation;
+    use sui_rpc::proto::sui::rpc::v2::TransactionEffects;
 
     #[test]
     fn upgrade_policy_constants_match_the_framework() {
@@ -1516,5 +1639,142 @@ mod tests {
         // value would make every deadline check vacuously true and silently
         // disable the contract-enforced halt.
         assert_eq!(settle_block_ts(1_793_045_000), 1_793_045_000_000);
+    }
+
+    fn abort_status_response(
+        description: &str,
+        details: Option<execution_error::ErrorDetails>,
+    ) -> ExecuteTransactionResponse {
+        // The proto structs are #[non_exhaustive]: build via Default + field
+        // mutation.
+        let mut response = ExecuteTransactionResponse::default();
+        let mut executed = ExecutedTransaction::default();
+        let mut effects = TransactionEffects::default();
+        let mut status = ExecutionStatus::default();
+        status.success = Some(false);
+        let mut error = ExecutionError::default();
+        error.description = Some(description.to_string());
+        error.error_details = details;
+        status.error = Some(error);
+        effects.status = Some(status);
+        executed.effects = Some(effects);
+        response.transaction = Some(executed);
+        response
+    }
+
+    fn abort_details(module: &str, code: u64) -> execution_error::ErrorDetails {
+        let mut location = MoveLocation::default();
+        location.package = Some("0x123".to_string());
+        location.module = Some(module.to_string());
+        let mut abort = MoveAbort::default();
+        abort.abort_code = Some(code);
+        abort.location = Some(location);
+        execution_error::ErrorDetails::Abort(abort)
+    }
+
+    #[test]
+    fn classify_abort_maps_the_settlement_path_codes() {
+        // `inbox::E_DEADLINE_EXCEEDED` (4) is self-healing: once the overdue
+        // transaction is included the gate reopens. `settlement`'s blob/root
+        // conflicts are attributable equivocation — retrying identical bytes
+        // can never succeed. `E_ROTATED` (2) clears once the rotation watcher
+        // swaps the signing key.
+        assert_eq!(
+            classify_abort("inbox", ABORT_CODE_DEADLINE_EXCEEDED),
+            AbortClass::DeadlineExceeded
+        );
+        assert_eq!(
+            classify_abort("settlement", ABORT_CODE_CONFLICTING_BLOB),
+            AbortClass::Equivocation
+        );
+        assert_eq!(
+            classify_abort("settlement", ABORT_CODE_STATE_ROOT_CONFLICT),
+            AbortClass::Equivocation
+        );
+        assert_eq!(
+            classify_abort("settlement", ABORT_CODE_ROTATED),
+            AbortClass::AuthorityRotated
+        );
+    }
+
+    #[test]
+    fn classify_abort_defaults_everything_else_to_other() {
+        assert_eq!(classify_abort("inbox", 5), AbortClass::Other);
+        assert_eq!(classify_abort("settlement", 0), AbortClass::Other);
+        assert_eq!(classify_abort("exit_queue", 18), AbortClass::Other);
+        assert_eq!(classify_abort("unknown_module", 4), AbortClass::Other);
+    }
+
+    #[test]
+    fn into_checked_extracts_structured_move_abort_details() {
+        let response = abort_status_response(
+            "settle failed: MoveAbort(...)",
+            Some(abort_details("inbox", ABORT_CODE_DEADLINE_EXCEEDED)),
+        );
+        let err = into_checked(response, "settle").expect_err("status failed");
+
+        let SettlementError::MoveAbort { module, code, .. } = err else {
+            panic!("expected MoveAbort, got {err:?}");
+        };
+        assert_eq!(module, "inbox");
+        assert_eq!(code, ABORT_CODE_DEADLINE_EXCEEDED);
+    }
+
+    #[test]
+    fn into_checked_falls_back_to_parsing_the_description() {
+        // Node generations that fill only `description` still carry the abort
+        // identity in the `SuiError::MoveAbort` Display shape.
+        let description = "MoveAbort(MoveLocation { module: ModuleId { index: InstanceId(2), \
+             name: Identifier(\"inbox\") }, function: 11, instruction: 7, \
+             function_name: Some(\"enforce_settle\") }, 4) in command 0";
+        let response = abort_status_response(description, None);
+        let err = into_checked(response, "settle").expect_err("status failed");
+
+        let SettlementError::MoveAbort { module, code, .. } = err else {
+            panic!("expected MoveAbort, got {err:?}");
+        };
+        assert_eq!(module, "inbox");
+        assert_eq!(code, 4);
+    }
+
+    #[test]
+    fn into_checked_stays_opaque_when_nothing_identifies_the_abort() {
+        let response = abort_status_response("some other failure", None);
+        let err = into_checked(response, "settle").expect_err("status failed");
+        assert!(matches!(err, SettlementError::Execution(_)));
+    }
+
+    #[test]
+    fn into_checked_passes_a_successful_response_through() {
+        let mut response = ExecuteTransactionResponse::default();
+        let mut executed = ExecutedTransaction::default();
+        let mut effects = TransactionEffects::default();
+        let mut status = ExecutionStatus::default();
+        status.success = Some(true);
+        effects.status = Some(status);
+        executed.effects = Some(effects);
+        response.transaction = Some(executed);
+        into_checked(response, "settle").expect("status succeeded");
+    }
+
+    #[test]
+    fn abort_class_reads_off_the_error_variant() {
+        let deadline = SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "inbox".into(),
+            code: ABORT_CODE_DEADLINE_EXCEEDED,
+        };
+        assert_eq!(deadline.abort_class(), Some(AbortClass::DeadlineExceeded));
+
+        let equivocation = SettlementError::MoveAbort {
+            label: "settle".into(),
+            module: "settlement".into(),
+            code: ABORT_CODE_CONFLICTING_BLOB,
+        };
+        assert_eq!(equivocation.abort_class(), Some(AbortClass::Equivocation));
+
+        let opaque = SettlementError::Execution("boom".into());
+        assert_eq!(opaque.abort_class(), None);
+        assert_eq!(SettlementError::Rpc("x".into()).abort_class(), None);
     }
 }

@@ -33,6 +33,7 @@ When `enabled = false`, no HTTP server is started.
 | `podseq_da_time_flushes_total`       | Counter   | DA batches flushed by `batch_flush_ms` age before the size threshold   |
 | `podseq_settlement_duration_seconds` | Histogram | Latency of the successful Sui settlement RPC per block                |
 | `podseq_settlement_height`           | Gauge     | Latest block height settled on Sui                                    |
+| `podseq_settlement_abort_total`      | Counter   | Settle attempts the contract refused with a Move abort (any class)    |
 | `podseq_bridge_deposits_total`       | Counter   | Bridge deposits minted on L2                                          |
 | `podseq_bridge_withdrawals_total`    | Counter   | Bridge withdrawals released on Sui                                    |
 | `podseq_deadline_status`             | Gauge     | Force-inclusion deadline verdict: 0 disabled, 1 active, 2 halted, 3 violated, 4 read error |

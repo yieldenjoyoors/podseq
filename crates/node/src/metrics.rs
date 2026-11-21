@@ -73,6 +73,8 @@ pub struct PodseqMetrics {
     pub reserve_sui_balance: Gauge,
     /// Completed settlement-key gas top-ups.
     pub gas_topups_total: Counter,
+    /// Settle attempts the contract refused with a Move abort (any class).
+    pub settlement_abort: Counter,
     /// JSON-RPC requests forwarded by the RPC proxy to the upstream.
     pub rpc_proxy_requests_total: Counter,
     /// JSON-RPC requests rejected by the RPC proxy's rate limit (HTTP 429).
@@ -228,6 +230,13 @@ impl PodseqMetrics {
             gas_topups_total.clone(),
         );
 
+        let settlement_abort = Counter::default();
+        registry.register(
+            "podseq_settlement_abort",
+            "Settle attempts the contract refused with a Move abort",
+            settlement_abort.clone(),
+        );
+
         let rpc_proxy_requests_total = Counter::default();
         registry.register(
             "podseq_rpc_proxy_requests",
@@ -271,6 +280,7 @@ impl PodseqMetrics {
             block_gate_rejections_total,
             reserve_sui_balance,
             gas_topups_total,
+            settlement_abort,
             rpc_proxy_requests_total,
             rpc_proxy_limited_total,
             rpc_proxy_request_duration,
@@ -440,6 +450,18 @@ mod tests {
         assert!(buffer.contains("# TYPE podseq_reserve_sui_balance_mist gauge"));
         assert!(buffer.contains("# TYPE podseq_gas_topups counter"));
         assert!(buffer.contains("podseq_gas_topups_total 0"));
+    }
+
+    #[test]
+    fn settlement_abort_instrument_is_registered() {
+        let m = PodseqMetrics::new();
+
+        m.settlement_abort.inc();
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &m.registry).unwrap();
+        assert!(buffer.contains("# TYPE podseq_settlement_abort counter"));
+        assert!(buffer.contains("podseq_settlement_abort_total 1"));
     }
 
     #[test]

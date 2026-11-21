@@ -47,7 +47,11 @@ pub fn verify_block_signature(
 }
 
 pub use podseq_core::parse_signer_key;
-pub use settlement::{DeployedContract, Settlement as SettlementSigner, SettlementError};
+pub use settlement::{
+    classify_abort, AbortClass, DeployedContract, Settlement as SettlementSigner, SettlementError,
+    ABORT_CODE_CONFLICTING_BLOB, ABORT_CODE_DEADLINE_EXCEEDED, ABORT_CODE_ROTATED,
+    ABORT_CODE_STATE_ROOT_CONFLICT,
+};
 
 /// Default Walrus testnet aggregator endpoint.
 pub const TESTNET_AGGREGATOR: &str = "https://aggregator.walrus-testnet.walrus.space";
@@ -293,19 +297,42 @@ impl DataAvailability for Client {
 
 impl Settlement for Client {
     async fn commit(&self, block: &Block, blob: &BlobId) -> Result<(), podseq_core::Error> {
-        let settlement = self
-            .settlement
-            .as_ref()
-            .ok_or_else(|| podseq_core::Error::Settlement("settlement not configured".into()))?;
-        let mut guard = settlement.lock().await;
-        guard
-            .commit(&block.header, blob)
+        self.commit_typed(block, blob)
             .await
             .map_err(|e| podseq_core::Error::Settlement(e.to_string()))
     }
 }
 
 impl Client {
+    /// Typed commit preserving the [`SettlementError`] identity so the
+    /// sequencer's retry loop can classify Move aborts off the structured
+    /// execution status instead of re-parsing log strings.
+    pub async fn commit_typed(&self, block: &Block, blob: &BlobId) -> Result<(), SettlementError> {
+        let settlement = self
+            .settlement
+            .as_ref()
+            .ok_or_else(|| SettlementError::Execution("settlement not configured".into()))?;
+        let mut guard = settlement.lock().await;
+        guard.commit(&block.header, blob).await
+    }
+
+    /// Typed [`Client::commit_with_cursor`], preserving the abort identity.
+    pub async fn commit_with_cursor_typed(
+        &self,
+        block: &Block,
+        blob: &BlobId,
+        tracked_cursor: u64,
+    ) -> Result<(), SettlementError> {
+        let settlement = self
+            .settlement
+            .as_ref()
+            .ok_or_else(|| SettlementError::Execution("settlement not configured".into()))?;
+        let mut guard = settlement.lock().await;
+        guard
+            .commit_with_cursor(&block.header, blob, tracked_cursor)
+            .await
+    }
+
     /// Commits a block, passing the sequencer's inclusion cursor. The signer
     /// clamps it to the on-chain cursor, so a cold tracker never regresses.
     pub async fn commit_with_cursor(
@@ -314,13 +341,7 @@ impl Client {
         blob: &BlobId,
         tracked_cursor: u64,
     ) -> Result<(), podseq_core::Error> {
-        let settlement = self
-            .settlement
-            .as_ref()
-            .ok_or_else(|| podseq_core::Error::Settlement("settlement not configured".into()))?;
-        let mut guard = settlement.lock().await;
-        guard
-            .commit_with_cursor(&block.header, blob, tracked_cursor)
+        self.commit_with_cursor_typed(block, blob, tracked_cursor)
             .await
             .map_err(|e| podseq_core::Error::Settlement(e.to_string()))
     }

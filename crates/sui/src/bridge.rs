@@ -36,6 +36,18 @@ pub enum BridgeError {
     Build(String),
     #[error("transaction execution failed: {0}")]
     Execution(String),
+    /// Mirrors the settlement variant: the contract refused the call with an
+    /// identifiable Move abort. The relayer's retry loop classifies these the
+    /// same way the settle path does.
+    #[error("move abort {module} code {code} during {label}")]
+    MoveAbort {
+        /// The call site label (e.g. "withdraw").
+        label: String,
+        /// Move module that aborted (from the execution status).
+        module: String,
+        /// Abort code (from the execution status).
+        code: u64,
+    },
     #[error("parse error: {0}")]
     Parse(String),
 }
@@ -48,6 +60,15 @@ impl From<SettlementError> for BridgeError {
             crate::settlement::SettlementError::Rpc(s) => BridgeError::Rpc(s),
             crate::settlement::SettlementError::Build(s) => BridgeError::Build(s),
             crate::settlement::SettlementError::Execution(s) => BridgeError::Execution(s),
+            crate::settlement::SettlementError::MoveAbort {
+                label,
+                module,
+                code,
+            } => BridgeError::MoveAbort {
+                label,
+                module,
+                code,
+            },
             crate::settlement::SettlementError::Parse(s) => BridgeError::Parse(s),
         }
     }
@@ -693,5 +714,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(client.sender(), file_addr);
+    }
+
+    #[test]
+    fn bridge_error_from_preserves_the_move_abort_identity() {
+        let settlement = SettlementError::MoveAbort {
+            label: "withdraw".into(),
+            module: "bridge".into(),
+            code: 7,
+        };
+        let BridgeError::MoveAbort {
+            label,
+            module,
+            code,
+        } = BridgeError::from(settlement)
+        else {
+            panic!("expected the MoveAbort variant to survive the conversion");
+        };
+        assert_eq!(label, "withdraw");
+        assert_eq!(module, "bridge");
+        assert_eq!(code, 7);
+
+        assert!(matches!(
+            BridgeError::from(SettlementError::Execution("boom".into())),
+            BridgeError::Execution(_)
+        ));
     }
 }
