@@ -95,7 +95,7 @@ impl PodseqMetrics {
 
         let blocks_built = Counter::default();
         registry.register(
-            "podseq_blocks_built_total",
+            "podseq_blocks_built",
             "Total blocks produced since startup",
             blocks_built.clone(),
         );
@@ -109,14 +109,14 @@ impl PodseqMetrics {
 
         let da_publish_errors_total = Counter::default();
         registry.register(
-            "podseq_da_publish_errors_total",
+            "podseq_da_publish_errors",
             "Total Walrus DA publish attempts that failed",
             da_publish_errors_total.clone(),
         );
 
         let da_time_flushes_total = Counter::default();
         registry.register(
-            "podseq_da_time_flushes_total",
+            "podseq_da_time_flushes",
             "DA batches flushed by batch_flush_ms age before the size threshold",
             da_time_flushes_total.clone(),
         );
@@ -144,21 +144,21 @@ impl PodseqMetrics {
 
         let bridge_deposits_total = Counter::default();
         registry.register(
-            "podseq_bridge_deposits_total",
+            "podseq_bridge_deposits",
             "Bridge deposits minted on L2",
             bridge_deposits_total.clone(),
         );
 
         let bridge_withdrawals_total = Counter::default();
         registry.register(
-            "podseq_bridge_withdrawals_total",
+            "podseq_bridge_withdrawals",
             "Bridge withdrawals released on Sui",
             bridge_withdrawals_total.clone(),
         );
 
         let bridge_tokens_created_total = Counter::default();
         registry.register(
-            "podseq_bridge_tokens_created_total",
+            "podseq_bridge_tokens_created",
             "Canonical L2 bridge tokens created through the factory",
             bridge_tokens_created_total.clone(),
         );
@@ -223,7 +223,7 @@ impl PodseqMetrics {
 
         let gas_topups_total = Counter::default();
         registry.register(
-            "podseq_gas_topups_total",
+            "podseq_gas_topups",
             "Completed settlement-key gas top-ups",
             gas_topups_total.clone(),
         );
@@ -438,7 +438,8 @@ mod tests {
         encode(&mut buffer, &m.registry).unwrap();
 
         assert!(buffer.contains("# TYPE podseq_reserve_sui_balance_mist gauge"));
-        assert!(buffer.contains("# TYPE podseq_gas_topups_total counter"));
+        assert!(buffer.contains("# TYPE podseq_gas_topups counter"));
+        assert!(buffer.contains("podseq_gas_topups_total 0"));
     }
 
     #[test]
