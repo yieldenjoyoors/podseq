@@ -378,7 +378,6 @@ mod tests {
         chain_id: String,
         checkpoint_seq: String,
         checkpoint_digest: String,
-        random_bytes: String,
         #[serde(rename = "faucetAddress")]
         faucet_address: String,
         recipient: String,
