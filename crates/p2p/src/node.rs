@@ -340,12 +340,17 @@ impl P2pNode {
             priority: false,
             codec_config: commonware_codec::RangeCfg::from(..),
             peer_provider: oracle.clone(),
+            // A peer whose block message fails to decode is blocked through
+            // the discovery tracker: the connection is dropped and future
+            // dials refused.
+            blocker: oracle.clone(),
             strategy: Sequential,
         };
         let (engine, mailbox) = commonware_broadcast::buffered::Engine::<
             commonware_runtime::tokio::Context,
             commonware_cryptography::ed25519::PublicKey,
             BlockMessage,
+            _,
             _,
             _,
         >::new(context.child("broadcast"), bc_cfg);

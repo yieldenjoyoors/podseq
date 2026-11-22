@@ -87,6 +87,17 @@ broadcast engine pushes to currently-connected peers only, and its `get` is
 local-cache. Historical recovery is Walrus DA's job; p2p blocks are an
 optimistic head ahead of DA finality.
 
+## Misbehavior blocking
+
+The broadcast engine decodes inbound blocks in a background task. A peer whose
+block message fails to decode is blocked through the discovery tracker: its
+connection drops and future dials from that identity are refused. The blocker
+is the discovery `Oracle` (the commonware `Blocker`), the same handle that
+admits peers, so one authority decides both admission and ejection.
+
+Undecodable announce messages are dropped without blocking; the announce
+channel carries only `(height, digest)` pointers.
+
 ## Configuration
 
 ```toml
