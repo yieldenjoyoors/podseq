@@ -4081,6 +4081,7 @@ dependencies = [
  "alloy-signer-local",
  "anyhow",
  "argon2",
+ "base64 0.23.1",
  "futures",
  "hex",
  "podseq-core",

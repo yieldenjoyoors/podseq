@@ -4031,7 +4031,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::admission",
-      "line": 390,
+      "line": 395,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4039,7 +4039,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::broadcaster",
-      "line": 396,
+      "line": 401,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4049,8 +4049,8 @@
       "function": "P2pNode::new",
       "line": 252,
       "cyclomatic": 7.0,
-      "coverage": 97.16981132075472,
-      "crap": 7.001110816311452,
+      "coverage": 97.2972972972973,
+      "crap": 7.000967366197461,
       "uncovered": [
         {
           "start": 258,
@@ -4065,7 +4065,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "P2pNode::receiver",
-      "line": 402,
+      "line": 407,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -4089,7 +4089,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "initial_tracked_set",
-      "line": 421,
+      "line": 426,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0
@@ -4097,7 +4097,7 @@
     {
       "file": "./crates/p2p/src/node.rs",
       "function": "load_pubkey",
-      "line": 410,
+      "line": 415,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0
@@ -6819,10 +6819,10 @@
     {
       "file": "./e2e/bin/faucet-refill.rs",
       "function": "main",
-      "line": 20,
-      "cyclomatic": 21.0,
+      "line": 23,
+      "cyclomatic": 27.0,
       "coverage": null,
-      "crap": 462.0
+      "crap": 756.0
     },
     {
       "file": "./e2e/faucet.rs",
@@ -6915,7 +6915,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::config_path",
-      "line": 410,
+      "line": 467,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6923,7 +6923,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::drop",
-      "line": 573,
+      "line": 630,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -6931,7 +6931,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::dump_logs",
-      "line": 545,
+      "line": 602,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -6939,7 +6939,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::extract_from_log",
-      "line": 505,
+      "line": 562,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -6947,7 +6947,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::podseq_exited",
-      "line": 465,
+      "line": 522,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6955,7 +6955,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::podseq_state",
-      "line": 430,
+      "line": 487,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -6963,7 +6963,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::ports",
-      "line": 404,
+      "line": 456,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6971,7 +6971,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::read_config_string",
-      "line": 422,
+      "line": 479,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6979,7 +6979,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::relayer_key_path",
-      "line": 415,
+      "line": 472,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6987,23 +6987,31 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::start",
-      "line": 250,
-      "cyclomatic": 14.0,
+      "line": 259,
+      "cyclomatic": 19.0,
       "coverage": null,
-      "crap": 210.0
+      "crap": 380.0
     },
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::wait_for_log",
-      "line": 473,
+      "line": 530,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
     },
     {
       "file": "./e2e/lib.rs",
+      "function": "FullStack::walrus_url",
+      "line": 461,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/lib.rs",
       "function": "Ports::engine_url",
-      "line": 35,
+      "line": 36,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7011,7 +7019,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "Ports::rpc_url",
-      "line": 31,
+      "line": 32,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7019,7 +7027,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "Stack::drop",
-      "line": 141,
+      "line": 142,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7027,7 +7035,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "Stack::jwt_path",
-      "line": 53,
+      "line": 54,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7035,7 +7043,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "Stack::ports",
-      "line": 49,
+      "line": 50,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7043,7 +7051,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "Stack::start",
-      "line": 59,
+      "line": 60,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
@@ -7051,7 +7059,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "Stack::wait_ready",
-      "line": 133,
+      "line": 134,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7059,7 +7067,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "abi_word",
-      "line": 674,
+      "line": 731,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7067,7 +7075,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "compose_up",
-      "line": 169,
+      "line": 170,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7075,7 +7083,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "decode_abi_string_at",
-      "line": 789,
+      "line": 846,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7083,7 +7091,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "decode_revert_string",
-      "line": 809,
+      "line": 866,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7091,7 +7099,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_adopt_bridge",
-      "line": 727,
+      "line": 784,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7099,7 +7107,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_bridge_initialize",
-      "line": 702,
+      "line": 759,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7107,7 +7115,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_create_bridge",
-      "line": 737,
+      "line": 794,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7115,7 +7123,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_factory_initialize",
-      "line": 695,
+      "line": 752,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7123,7 +7131,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_initiate_withdrawal",
-      "line": 764,
+      "line": 821,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7131,7 +7139,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_mint",
-      "line": 755,
+      "line": 812,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7139,7 +7147,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_balance_of",
-      "line": 947,
+      "line": 1004,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7147,7 +7155,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_block_number",
-      "line": 850,
+      "line": 907,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7155,7 +7163,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_call_address",
-      "line": 913,
+      "line": 970,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7163,7 +7171,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_call_bool",
-      "line": 902,
+      "line": 959,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7171,7 +7179,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_call_raw",
-      "line": 876,
+      "line": 933,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7179,7 +7187,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_chain_id",
-      "line": 845,
+      "line": 902,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7187,7 +7195,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_gas_price",
-      "line": 870,
+      "line": 927,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7195,7 +7203,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_get_code",
-      "line": 927,
+      "line": 984,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7203,7 +7211,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_get_logs",
-      "line": 968,
+      "line": 1025,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7211,7 +7219,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_get_transaction_count",
-      "line": 855,
+      "line": 912,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7219,7 +7227,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "one_string",
-      "line": 773,
+      "line": 830,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7227,7 +7235,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "push_address",
-      "line": 688,
+      "line": 745,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7235,7 +7243,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "push_string",
-      "line": 679,
+      "line": 736,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7243,7 +7251,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "random_hex_32",
-      "line": 224,
+      "line": 225,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7251,7 +7259,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "read_toml_field",
-      "line": 617,
+      "line": 674,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
@@ -7259,7 +7267,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "require_docker",
-      "line": 639,
+      "line": 696,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7267,7 +7275,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "rpc_call",
-      "line": 824,
+      "line": 881,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7275,7 +7283,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "selector",
-      "line": 669,
+      "line": 726,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7283,7 +7291,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "sui_signer_key",
-      "line": 598,
+      "line": 655,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7291,7 +7299,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "wait_for_http_ok",
-      "line": 198,
+      "line": 199,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7299,7 +7307,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "word_len",
-      "line": 781,
+      "line": 838,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7307,7 +7315,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "workspace_root",
-      "line": 161,
+      "line": 162,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7379,7 +7387,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "bootstrap_l2_bridge",
-      "line": 655,
+      "line": 658,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7387,7 +7395,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "eth_get_transaction_receipt",
-      "line": 411,
+      "line": 414,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7395,7 +7403,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "fetch_blob_retrying",
-      "line": 384,
+      "line": 387,
       "cyclomatic": 8.0,
       "coverage": null,
       "crap": 72.0
@@ -7403,7 +7411,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "full_stack_produces_settles_and_serves_blobs",
-      "line": 57,
+      "line": 60,
       "cyclomatic": 43.0,
       "coverage": null,
       "crap": 1892.0
@@ -7411,7 +7419,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "fund_relayer",
-      "line": 513,
+      "line": 516,
       "cyclomatic": 12.0,
       "coverage": null,
       "crap": 156.0
@@ -7419,7 +7427,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "initiate_withdrawal",
-      "line": 828,
+      "line": 831,
       "cyclomatic": 13.0,
       "coverage": null,
       "crap": 182.0
@@ -7427,7 +7435,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "load_relayer_signer",
-      "line": 499,
+      "line": 502,
       "cyclomatic": 4.0,
       "coverage": null,
       "crap": 20.0
@@ -7435,7 +7443,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "preflight_sui_balance",
-      "line": 262,
+      "line": 265,
       "cyclomatic": 9.0,
       "coverage": null,
       "crap": 90.0
@@ -7443,7 +7451,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "send_contract_tx",
-      "line": 568,
+      "line": 571,
       "cyclomatic": 16.0,
       "coverage": null,
       "crap": 272.0
@@ -7451,7 +7459,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "send_self_transfer",
-      "line": 439,
+      "line": 442,
       "cyclomatic": 4.0,
       "coverage": null,
       "crap": 20.0
@@ -7459,7 +7467,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_deposit",
-      "line": 743,
+      "line": 746,
       "cyclomatic": 15.0,
       "coverage": null,
       "crap": 240.0
@@ -7467,7 +7475,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_query_retrying",
-      "line": 362,
+      "line": 365,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7475,7 +7483,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_signer_key",
-      "line": 507,
+      "line": 510,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7483,7 +7491,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "sui_vault_withdraw_nonce",
-      "line": 931,
+      "line": 934,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7491,7 +7499,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_config_id",
-      "line": 478,
+      "line": 481,
       "cyclomatic": 8.0,
       "coverage": null,
       "crap": 72.0
@@ -7499,7 +7507,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_height",
-      "line": 317,
+      "line": 320,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7507,7 +7515,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_l2_balance",
-      "line": 890,
+      "line": 893,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
@@ -7515,7 +7523,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_relayer_ready",
-      "line": 716,
+      "line": 719,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7523,7 +7531,7 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_settlement",
-      "line": 339,
+      "line": 342,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7531,10 +7539,114 @@
     {
       "file": "./e2e/tests/full_stack.rs",
       "function": "wait_for_sui_release",
-      "line": 914,
+      "line": 917,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "FundingTargets::defaults",
+      "line": 57,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "daemon_service",
+      "line": 148,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "e2e_walrus_config",
+      "line": 217,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "ensure_client_config",
+      "line": 124,
+      "cyclomatic": 6.0,
+      "coverage": null,
+      "crap": 42.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "faucet_requests_needed",
+      "line": 68,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "fund_service",
+      "line": 191,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "fund_wallet",
+      "line": 231,
+      "cyclomatic": 6.0,
+      "coverage": null,
+      "crap": 42.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "keystore_json",
+      "line": 81,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "prepare_wallet",
+      "line": 90,
+      "cyclomatic": 4.0,
+      "coverage": null,
+      "crap": 20.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "refill_wallet",
+      "line": 284,
+      "cyclomatic": 4.0,
+      "coverage": null,
+      "crap": 20.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "wait_for_daemon",
+      "line": 320,
+      "cyclomatic": 5.0,
+      "coverage": null,
+      "crap": 30.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "walrus_dir",
+      "line": 108,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/walrus.rs",
+      "function": "write_client_config",
+      "line": 114,
+      "cyclomatic": 3.0,
+      "coverage": null,
+      "crap": 12.0
     },
     {
       "file": "./fuzz/fuzz_targets/da_wire.rs",
@@ -7570,11 +7682,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 54,
+    "analyzed_files": 55,
     "lcov_files": 40,
     "matched_files": 39,
     "source_only": {
-      "count": 15,
+      "count": 16,
       "examples": [
         "./crates/p2p/tests/net.rs",
         "./crates/sui/examples/exit_gas_bench.rs",

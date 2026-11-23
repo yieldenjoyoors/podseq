@@ -9,6 +9,7 @@ description = "End-to-end integration tests driving podseq against a real Reth c
 podseq-core.workspace = true
 podseq-engine.workspace = true
 podseq-sui.workspace = true
+base64.workspace = true
 alloy-primitives.workspace = true
 alloy-rpc-types-engine.workspace = true
 alloy-consensus.workspace = true

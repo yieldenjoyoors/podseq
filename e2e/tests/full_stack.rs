@@ -1,4 +1,5 @@
-//! Full-stack e2e: real `podseq` binary + Reth + public Sui/Walrus testnet.
+//! Full-stack e2e: real `podseq` binary + Reth + a self-hosted Walrus daemon,
+//! against public Sui testnet.
 //!
 //! Verifies the production binary, end to end:
 //!   - podseq produces blocks (Reth `eth_blockNumber` advances).
@@ -8,7 +9,8 @@
 //!
 //! Skips itself when no funded Sui key is available (CI secret `SUI_SIGNER_KEY`
 //! or `docker/secrets/sui.key` locally). Slow: real Sui checkpoint latency +
-//! Walrus publication, several minutes end-to-end.
+//! Walrus publication + the daemon wallet funding (faucet PoW rounds), several
+//! minutes end-to-end.
 
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -45,6 +47,7 @@ use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
 const RPC_PORT: u16 = 18745;
 const ENGINE_PORT: u16 = 18751;
+const WALRUS_PORT: u16 = 18761;
 
 const SUI_RPC: &str = "https://fullnode.testnet.sui.io:443";
 
@@ -62,7 +65,7 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     // 10 minutes for the deploy to time out.
     preflight_sui_balance().await?;
 
-    let stack = FullStack::start(RPC_PORT, ENGINE_PORT)
+    let stack = FullStack::start(RPC_PORT, ENGINE_PORT, WALRUS_PORT)
         .await
         .context("starting full stack")?;
 
@@ -150,7 +153,7 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     .with_context(|| format!("commitment_at returned None for settled height {settled}"))?;
 
     let sui_client = SuiClient::new(SuiConfig {
-        aggregator_url: "https://aggregator.walrus-testnet.walrus.space".into(),
+        aggregator_url: stack.walrus_url(),
         ..SuiConfig::default()
     })?;
     // Walrus aggregators are eventually consistent and intermittently flaky;

@@ -14,6 +14,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 pub mod faucet;
+pub mod walrus;
 
 /// Reth image tag pinned for reproducible CI runs.
 pub const RETH_IMAGE: &str = "ghcr.io/paradigmxyz/reth:v2.7.0";
@@ -226,9 +227,10 @@ fn random_hex_32() -> String {
     hex::encode(buf)
 }
 
-/// The full podseq stack: Reth + the real `podseq` binary, talking public Sui
-/// and Walrus testnet. Bringing this up requires a funded Sui key so podseq can
-/// settle; without one the test that uses it skips itself.
+/// The full podseq stack: Reth + the real `podseq` binary + a self-hosted
+/// Walrus daemon, talking public Sui and Walrus testnet. Bringing this up
+/// requires a funded Sui key so podseq can settle; without one the test that
+/// uses it skips itself.
 ///
 /// The compose files are the production `docker-compose.yml` + testnet override.
 /// Secrets are written to a temp dir and mounted read-only, so the repo's own
@@ -237,6 +239,8 @@ pub struct FullStack {
     project: String,
     workdir: PathBuf,
     ports: Ports,
+    /// Host port the in-stack Walrus daemon publishes on.
+    walrus_port: u16,
     /// Path to the generated bridge relayer EVM key (32-byte secp256k1 hex).
     relayer_key_path: PathBuf,
 }
@@ -244,10 +248,15 @@ pub struct FullStack {
 impl FullStack {
     /// Writes a funded `sui.key` (from `SUI_SIGNER_KEY` env or `docker/secrets/sui.key`)
     /// into a temp workdir, renders the production compose files pointing at that
-    /// workdir, and starts Reth + podseq. Returns once both answer HTTP.
+    /// workdir, and starts Reth + the Walrus daemon + podseq. Returns once all
+    /// three answer HTTP.
+    ///
+    /// The Walrus daemon is funded before the stack starts: faucet-PoW SUI
+    /// tops the wallet to the funding targets, then `walrus get-wal` exchanges
+    /// WAL at the official testnet exchange (see [`walrus`]).
     ///
     /// Errors if no funded key is available — the full-stack test requires one.
-    pub async fn start(rpc_port: u16, engine_port: u16) -> Result<Self> {
+    pub async fn start(rpc_port: u16, engine_port: u16, walrus_port: u16) -> Result<Self> {
         let sui_key = sui_signer_key()?.ok_or_else(|| {
             anyhow::anyhow!("no funded Sui key found; set SUI_SIGNER_KEY or docker/secrets/sui.key")
         })?;
@@ -289,16 +298,15 @@ impl FullStack {
 
         // Write a config for this run and bind-mount it into the podseq
         // container. Same flow as a real deployment: `podseq start --config
-        // podseq.toml` against a TOML file.
-        let podseq_toml = r#"[reth]
+        // podseq.toml` against a TOML file. The Walrus leg points at the
+        // in-stack daemon (see `walrus::prepare_wallet` below).
+        let podseq_toml = format!(
+            r#"[reth]
 engine_url = "http://reth:8551"
 rpc_url = "http://reth:8545"
 jwt_path = "/jwt/jwt.hex"
 
-[walrus]
-publisher_url = "https://publisher.walrus-testnet.walrus.space"
-aggregator_url = "https://aggregator.walrus-testnet.walrus.space"
-epochs = 53
+{}
 
 [sui]
 rpc_url = "https://fullnode.testnet.sui.io:443"
@@ -314,11 +322,30 @@ enabled = true
 l2_relayer_key_path = "/secrets/relayer.key"
 
 mode = "sequencer"
-"#;
+"#,
+            walrus::e2e_walrus_config()
+        );
         std::fs::write(workdir.join("podseq.toml"), podseq_toml)?;
 
-        // Compose: Reth + podseq. podseq runs the real binary against the
-        // bind-mounted TOML, talking public Sui/Walrus testnet.
+        // Self-hosted Walrus: generate the daemon wallet and its client
+        // config before the compose file references them.
+        let (walrus_keystore, walrus_address) =
+            walrus::prepare_wallet(&workdir).context("generating the walrus daemon wallet")?;
+        let walrus_targets = walrus::FundingTargets::defaults();
+        let config_http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()?;
+        walrus::ensure_client_config(&workdir, &config_http)
+            .await
+            .context("writing the walrus client config")?;
+        eprintln!(
+            "e2e: walrus daemon wallet {walrus_address} (keystore {})",
+            walrus_keystore.display()
+        );
+
+        // Compose: Reth + the Walrus daemon + podseq. podseq runs the real
+        // binary against the bind-mounted TOML, talking public Sui testnet and
+        // the in-stack Walrus daemon.
         let compose = format!(
             r#"services:
   reth:
@@ -349,6 +376,8 @@ mode = "sequencer"
       - ./reth-genesis.json:/genesis/reth-genesis.json:ro,z
     restart: "no"
 
+{walrus_daemon}
+{walrus_fund}
   podseq:
     build:
       context: {context}
@@ -357,6 +386,8 @@ mode = "sequencer"
     depends_on:
       reth:
         condition: service_started
+      walrus:
+        condition: service_healthy
     environment:
       RUST_LOG: "info,podseq=debug"
     volumes:
@@ -371,10 +402,26 @@ volumes:
             reth_image = RETH_IMAGE,
             rpc_port = rpc_port,
             engine_port = engine_port,
+            walrus_daemon = walrus::daemon_service(walrus_port),
+            walrus_fund = walrus::fund_service(walrus_targets.wal_target_frost),
             context = repo_root.display(),
             project = project,
         );
         std::fs::write(workdir.join("docker-compose.yml"), compose)?;
+
+        // Fund the daemon wallet before anything starts: faucet SUI to the
+        // targets, then exchange WAL through the one-shot fund service. The
+        // daemon refuses to serve stores from an empty wallet, and podseq's
+        // first DA flush is the first spend.
+        walrus::fund_wallet(
+            &workdir,
+            &walrus_address,
+            "https://fullnode.testnet.sui.io:443",
+            faucet::TESTNET_FAUCET,
+            &project,
+        )
+        .await
+        .context("funding the walrus daemon wallet")?;
 
         compose_up(&project, &workdir).await?;
 
@@ -385,6 +432,7 @@ volumes:
                 rpc: rpc_port,
                 engine: engine_port,
             },
+            walrus_port,
             relayer_key_path,
         };
 
@@ -398,11 +446,20 @@ volumes:
             stack.dump_logs();
             return Err(e);
         }
+        if let Err(e) = walrus::wait_for_daemon(&stack.walrus_url()).await {
+            stack.dump_logs();
+            return Err(e);
+        }
         Ok(stack)
     }
 
     pub fn ports(&self) -> &Ports {
         &self.ports
+    }
+
+    /// Host URL of the in-stack Walrus daemon (publisher + aggregator).
+    pub fn walrus_url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.walrus_port)
     }
 
     /// Path to the podseq.toml in the workdir. Podseq writes deployed settlement

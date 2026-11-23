@@ -8,7 +8,7 @@ Three test suites, with different scope and infrastructure requirements.
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | `engine_integration` | `Engine::build` / `accept` / `finalize` advance the head on a real Reth node. Fast, deterministic.                                                                                                                                                                                                                        | Reth only                                |
 | `bridge_bootstrap`   | The genesis predeploys (`BridgeFactory` at `0x…0010`, canonical SUI `Bridge` at `0x…0011`), the one-time bootstrap (initialize ×2 + `adoptBridge`), permissionless `createBridge` with duplicate rejection, mint nonce replay protection, burns, and the `BridgeCreated`/`WithdrawalInitiated` logs the relayer consumes. | Reth only                                |
-| `full_stack`         | The real `podseq` binary produces blocks, user txs land on Reth, settlement advances on Sui, Walrus blobs decode, and the bridge relays both directions (deposit→mint, burn→withdraw). End-to-end.                                                                                                                        | Reth + podseq, public Sui/Walrus testnet |
+| `full_stack`         | The real `podseq` binary produces blocks, user txs land on Reth, settlement advances on Sui, Walrus blobs decode, and the bridge relays both directions (deposit→mint, burn→withdraw). End-to-end.                                                                                                                        | Reth + podseq + Walrus daemon, public Sui testnet |
 
 ## Scope and limitations
 
@@ -25,10 +25,10 @@ the bridge against the real genesis predeploys — no Sui, no funded key.
 
 ### `full_stack`
 
-Runs the production `podseq` binary in a second container alongside Reth, with
-Walrus and Sui pointed at public testnet. Requires a funded Sui key for
-settlement gas. Without one it fails (not skips) so a missing CI secret
-surfaces immediately.
+Runs the production `podseq` binary in a second container alongside Reth and a
+self-hosted Walrus daemon, with Sui pointed at public testnet. Requires a
+funded Sui key for settlement gas. Without one it fails (not skips) so a
+missing CI secret surfaces immediately.
 
 - **CI**: set the `SUI_SIGNER_KEY` secret to a `suiprivkey...` string. The job
   runs on every PR; it is allowed to fail (`continue-on-error`) so public-
@@ -37,6 +37,38 @@ surfaces immediately.
 
 The test is slow (several minutes — real Sui checkpoint latency + Walrus
 publication + bridge relay cycles).
+
+### Self-hosted Walrus daemon
+
+The full-stack stack runs its own `walrus daemon` (combined aggregator +
+publisher, image `mysten/walrus-service:testnet`) instead of posting to the
+public testnet publishers. The public daemons' WAL wallets drain between
+operator refills, which fails every block POST with `500 could not find WAL
+coins` — a third-party wallet we cannot refill. Our daemon pays for its own
+stores from a wallet the test funds automatically at bring-up:
+
+- a fresh wallet key per run (`walrus/sui_config/sui.keystore` in the workdir,
+  the standard `FileBasedKeystore` format behind `SUI_CONFIG_DIR`);
+- SUI topped to the funding targets through the release-profile
+  `faucet-refill` helper (one PoW payout per round, so the grind outruns the
+  checkpoint freshness window);
+- WAL converted from that SUI via `walrus get-wal` (the official 1:1 testnet
+  exchange), run as the `walrus-fund` one-shot compose service before the
+  stack starts;
+- the daemon's internal sub-wallets refilled from the main wallet at startup
+  and on low balance (`--n-clients 1`, tuned-down refill knobs).
+
+Sizing: a small DA batch costs ~2.1 WAL per storage epoch because Walrus bills
+the encoded size of a blob (erasure coding plus a fixed 64 MB of metadata per
+blob), so the metadata floor dominates small blobs. The e2e therefore stores
+with `epochs = 1` — blobs only need to outlive the run — where the production
+default of 53 epochs would cost ~110 WAL (~110 SUI) per blob, more than the
+testnet faucet can fund per run. The targets live in
+`e2e/walrus.rs::FundingTargets` (~16 WAL + a 4 SUI gas floor per run, ~20
+faucet rounds); bump them if CI shows WAL-exhaustion from the publisher.
+
+Build the refill helper before running locally:
+`cargo build --release -p podseq-e2e --bin faucet-refill`.
 
 The bridge section runs after settlement is confirmed, reusing the same
 deployed settlement package (so SUI gas is spent once, not twice). It generates
@@ -73,7 +105,8 @@ cargo test -p podseq-e2e --test full_stack -- --test-threads=1 --nocapture
 ```
 
 Each test binds fixed host ports (`18745`/`18751`, `18845`/`18851`, and
-`18545`/`18551`), so they must run serially (`--test-threads=1`).
+`18545`/`18551`), so they must run serially (`--test-threads=1`); the
+full-stack Walrus daemon publishes on `18761`.
 
 ## CI
 
