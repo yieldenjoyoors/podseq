@@ -116,3 +116,14 @@ unset; it runs the full-stack test (which includes bridge assertions) and is
 allowed to fail so public-testnet flakiness doesn't block PRs. A daily scheduled
 run re-runs it as blocking to catch silent regressions on `main`. See
 `.github/workflows/ci.yml`.
+
+## Startup evidence
+
+Every `FullStack::start` measures its phases (wallet prep, client-config
+fetch, faucet funding, compose up, Reth RPC/engine readiness, Walrus daemon
+readiness) and writes them to `e2e-logs/<project>/phase-timing.txt` next to
+this crate (override the directory with `PODSEQ_E2E_LOG_DIR`). On any startup
+failure the compose logs join them as `compose-logs.txt`. The CI job uploads
+the directory as the `e2e-fullstack-evidence` artifact on every run, so a red
+or timed-out job is diagnosable from the artifact even when the job log is not
+readable.

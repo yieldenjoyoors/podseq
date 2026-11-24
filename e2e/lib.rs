@@ -243,6 +243,9 @@ pub struct FullStack {
     walrus_port: u16,
     /// Path to the generated bridge relayer EVM key (32-byte secp256k1 hex).
     relayer_key_path: PathBuf,
+    /// Measured startup phases, written to the evidence dir on dump and on
+    /// success, so a slow or timed-out CI run names where its time went.
+    evidence: std::cell::RefCell<Vec<PhaseRecord>>,
 }
 
 impl FullStack {
@@ -329,15 +332,20 @@ mode = "sequencer"
 
         // Self-hosted Walrus: generate the daemon wallet and its client
         // config before the compose file references them.
+        let mut phases: Vec<PhaseRecord> = Vec::new();
+        let timer = PhaseTimer::start("walrus-wallet-prep");
+        let wallet = walrus::prepare_wallet(&workdir);
+        phases.push(timer.finish());
         let (walrus_keystore, walrus_address) =
-            walrus::prepare_wallet(&workdir).context("generating the walrus daemon wallet")?;
+            wallet.context("generating the walrus daemon wallet")?;
         let walrus_targets = walrus::FundingTargets::defaults();
         let config_http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .build()?;
-        walrus::ensure_client_config(&workdir, &config_http)
-            .await
-            .context("writing the walrus client config")?;
+        let timer = PhaseTimer::start("walrus-client-config");
+        let config = walrus::ensure_client_config(&workdir, &config_http).await;
+        phases.push(timer.finish());
+        config.context("writing the walrus client config")?;
         eprintln!(
             "e2e: walrus daemon wallet {walrus_address} (keystore {})",
             walrus_keystore.display()
@@ -413,17 +421,22 @@ volumes:
         // targets, then exchange WAL through the one-shot fund service. The
         // daemon refuses to serve stores from an empty wallet, and podseq's
         // first DA flush is the first spend.
-        walrus::fund_wallet(
+        let timer = PhaseTimer::start("walrus-funding");
+        let funding = walrus::fund_wallet(
             &workdir,
             &walrus_address,
             "https://fullnode.testnet.sui.io:443",
             faucet::TESTNET_FAUCET,
             &project,
         )
-        .await
-        .context("funding the walrus daemon wallet")?;
+        .await;
+        phases.push(timer.finish());
+        funding.context("funding the walrus daemon wallet")?;
 
-        compose_up(&project, &workdir).await?;
+        let timer = PhaseTimer::start("compose-up");
+        let up = compose_up(&project, &workdir).await;
+        phases.push(timer.finish());
+        up?;
 
         let stack = Self {
             project,
@@ -434,22 +447,33 @@ volumes:
             },
             walrus_port,
             relayer_key_path,
+            evidence: std::cell::RefCell::new(phases),
         };
 
         // Reth readiness is the gating signal; podseq may still be deploying
         // settlement (publishing the Move package takes real Sui gas).
-        if let Err(e) = wait_for_http_ok(&stack.ports.rpc_url(), "eth_blockNumber").await {
+        let timer = PhaseTimer::start("reth-rpc-ready");
+        let rpc = wait_for_http_ok(&stack.ports.rpc_url(), "eth_blockNumber").await;
+        stack.note_phase(timer.finish());
+        if let Err(e) = rpc {
             stack.dump_logs();
             return Err(e);
         }
-        if let Err(e) = wait_for_http_ok(&stack.ports.engine_url(), "eth_blockNumber").await {
+        let timer = PhaseTimer::start("reth-engine-ready");
+        let engine = wait_for_http_ok(&stack.ports.engine_url(), "eth_blockNumber").await;
+        stack.note_phase(timer.finish());
+        if let Err(e) = engine {
             stack.dump_logs();
             return Err(e);
         }
-        if let Err(e) = walrus::wait_for_daemon(&stack.walrus_url()).await {
+        let timer = PhaseTimer::start("walrus-daemon-ready");
+        let daemon = walrus::wait_for_daemon(&stack.walrus_url()).await;
+        stack.note_phase(timer.finish());
+        if let Err(e) = daemon {
             stack.dump_logs();
             return Err(e);
         }
+        stack.write_phase_evidence();
         Ok(stack)
     }
 
@@ -620,8 +644,42 @@ volumes:
                     eprintln!("{}", String::from_utf8_lossy(&o.stderr));
                 }
                 eprintln!("--- end logs ---");
+                // Keep the evidence outside stderr too: the CI job uploads the
+                // evidence dir as an artifact, and job logs are not readable
+                // without repository admin access. Best-effort — no branch on
+                // the result; phase evidence reports its own failures and a
+                // dead docker socket has bigger problems than a lost log file.
+                let dir = resolve_log_dir(&self.project);
+                let text = format!(
+                    "project {}\n{}\n--- stderr ---\n{}",
+                    self.project,
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr),
+                );
+                let _ = write_evidence(&dir, "compose-logs.txt", &text);
+                self.write_phase_evidence();
             }
             Err(e) => eprintln!("could not capture docker logs: {e}"),
+        }
+    }
+
+    /// Records one measured startup phase.
+    fn note_phase(&self, record: PhaseRecord) {
+        self.evidence.borrow_mut().push(record);
+    }
+
+    /// The rendered phase records.
+    fn evidence_text(&self) -> String {
+        phase_summary(&self.evidence.borrow())
+    }
+
+    /// Writes the phase timings to the evidence dir; best-effort (evidence
+    /// must never turn a healthy startup into a failed one).
+    fn write_phase_evidence(&self) {
+        let dir = resolve_log_dir(&self.project);
+        match write_evidence(&dir, "phase-timing.txt", &self.evidence_text()) {
+            Ok(()) => eprintln!("e2e: startup evidence in {}", dir.display()),
+            Err(e) => eprintln!("e2e: could not write startup evidence: {e:#}"),
         }
     }
 }
@@ -1053,6 +1111,94 @@ pub mod eth {
     }
 }
 
+// --- startup evidence: phase timings + retrievable log files ---
+
+/// One measured phase of `FullStack::start`, rendered into `phase-timing.txt`
+/// so a slow or timed-out CI run names where its 30 (now 60) minutes went.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhaseRecord {
+    pub name: &'static str,
+    pub elapsed_secs: u64,
+}
+
+impl PhaseRecord {
+    /// The `"<name>: <n>s"` line written to the evidence file.
+    pub fn summary(&self) -> String {
+        format!("{}: {}s", self.name, self.elapsed_secs)
+    }
+}
+
+/// Renders phase records as the `phase-timing.txt` content: one line each.
+pub fn phase_summary(records: &[PhaseRecord]) -> String {
+    let mut text = String::new();
+    for record in records {
+        text.push_str(&record.summary());
+        text.push('\n');
+    }
+    text
+}
+
+/// Directory where startup evidence is written. The default lives OUTSIDE the
+/// stack workdir on purpose — `Drop` deletes the workdir — and CI uploads the
+/// directory as a job artifact. Override with `PODSEQ_E2E_LOG_DIR`.
+pub fn resolve_log_dir(project: &str) -> PathBuf {
+    resolve_log_dir_with(project, std::env::var_os("PODSEQ_E2E_LOG_DIR").as_deref())
+}
+
+/// Compile-time anchor: this crate's dir, whose parent is the repo root. The
+/// evidence dir anchors there so the default never depends on cargo's
+/// test-process cwd and matches the CI artifact path exactly.
+const E2E_CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+/// Pure core of [`resolve_log_dir`]: `override_dir` wins when present, else
+/// `<repo root>/e2e-logs/<project>` (next to the e2e crate).
+fn resolve_log_dir_with(project: &str, override_dir: Option<&std::ffi::OsStr>) -> PathBuf {
+    match override_dir {
+        Some(dir) => PathBuf::from(dir).join(project),
+        None => Path::new(E2E_CRATE_DIR)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("e2e-logs")
+            .join(project),
+    }
+}
+
+/// Writes one UTF-8 evidence file into `dir` (created), used for compose logs
+/// and phase timings so CI artifacts carry them.
+pub fn write_evidence(dir: &Path, file: &str, content: &str) -> Result<()> {
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("creating the evidence dir {}", dir.display()))?;
+    std::fs::write(dir.join(file), content)
+        .with_context(|| format!("writing evidence file {}", dir.join(file).display()))?;
+    Ok(())
+}
+
+/// Times one startup phase; the record survives even when the phase fails, so
+/// the evidence file names where the wall-clock went.
+pub struct PhaseTimer {
+    name: &'static str,
+    started: std::time::Instant,
+}
+
+impl PhaseTimer {
+    /// Starts timing `name`, announcing it on stderr.
+    pub fn start(name: &'static str) -> Self {
+        eprintln!("e2e: phase {name} started");
+        Self {
+            name,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// Finishes the phase, returning its measured record.
+    pub fn finish(self) -> PhaseRecord {
+        PhaseRecord {
+            name: self.name,
+            elapsed_secs: self.started.elapsed().as_secs(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::abi;
@@ -1137,5 +1283,78 @@ mod tests {
         expected.extend_from_slice(&abi::abi_word(U256::from(0xab)));
         expected.extend_from_slice(&abi::abi_word(U256::from(0x05)));
         assert_eq!(calldata, expected);
+    }
+
+    // --- startup evidence: phase timings + retrievable log files ---
+
+    #[test]
+    fn phase_record_summary_names_and_seconds() {
+        assert_eq!(
+            super::PhaseRecord {
+                name: "walrus-funding",
+                elapsed_secs: 212,
+            }
+            .summary(),
+            "walrus-funding: 212s"
+        );
+    }
+
+    #[test]
+    fn phase_summary_renders_one_line_per_record() {
+        let records = vec![
+            super::PhaseRecord {
+                name: "walrus-wallet-prep",
+                elapsed_secs: 0,
+            },
+            super::PhaseRecord {
+                name: "walrus-funding",
+                elapsed_secs: 212,
+            },
+            super::PhaseRecord {
+                name: "compose-up",
+                elapsed_secs: 87,
+            },
+        ];
+        let text = super::phase_summary(&records);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "walrus-wallet-prep: 0s",
+                "walrus-funding: 212s",
+                "compose-up: 87s"
+            ]
+        );
+    }
+
+    #[test]
+    fn phase_summary_empty_is_empty() {
+        assert_eq!(super::phase_summary(&[]), "");
+    }
+
+    #[test]
+    fn resolve_log_dir_defaults_next_to_the_e2e_crate() {
+        let dir = super::resolve_log_dir_with("proj-1", None);
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        assert_eq!(dir, repo_root.join("e2e-logs").join("proj-1"));
+    }
+
+    #[test]
+    fn resolve_log_dir_env_override_wins_and_namespaces_per_project() {
+        let dir =
+            super::resolve_log_dir_with("proj-2", Some(std::ffi::OsStr::new("/tmp/artifacts")));
+        assert_eq!(dir, std::path::Path::new("/tmp/artifacts").join("proj-2"));
+    }
+
+    #[test]
+    fn write_evidence_creates_dir_and_file() {
+        let root = std::env::temp_dir().join(format!("podseq-e2e-evidence-{}", std::process::id()));
+        let dir = root.join("logs").join("proj");
+        super::write_evidence(&dir, "phase-timing.txt", "a: 1s\n").unwrap();
+        let written = std::fs::read_to_string(dir.join("phase-timing.txt")).unwrap();
+        assert_eq!(written, "a: 1s\n");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

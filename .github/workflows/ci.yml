@@ -129,7 +129,9 @@ jobs:
   e2e-full:
     name: e2e (full stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30m cut a passing bring-up short once the self-hosted Walrus daemon
+    # funding phase (faucet PoW rounds + get-wal exchange) joined the course.
+    timeout-minutes: 60
     continue-on-error: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v7
@@ -162,3 +164,14 @@ jobs:
         env:
           SUI_SIGNER_KEY: ${{ secrets.SUI_SIGNER_KEY }}
         run: cargo test -p podseq-e2e --no-fail-fast --test full_stack -- --nocapture --test-threads=1
+
+      # Job logs are API-admin-gated; the evidence dir (compose logs on
+      # failure + startup phase timings on every run) is the retrievable
+      # record for CI triage.
+      - name: Upload startup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-fullstack-evidence
+          path: e2e-logs/
+          if-no-files-found: ignore
