@@ -336,8 +336,8 @@ mode = "sequencer"
         let timer = PhaseTimer::start("walrus-wallet-prep");
         let wallet = walrus::prepare_wallet(&workdir);
         phases.push(timer.finish());
-        let (walrus_keystore, walrus_address) =
-            wallet.context("generating the walrus daemon wallet")?;
+        let (walrus_keystore, walrus_address) = early_failure(&project, &phases, wallet)
+            .context("generating the walrus daemon wallet")?;
         let walrus_targets = walrus::FundingTargets::defaults();
         let config_http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
@@ -345,7 +345,7 @@ mode = "sequencer"
         let timer = PhaseTimer::start("walrus-client-config");
         let config = walrus::ensure_client_config(&workdir, &config_http).await;
         phases.push(timer.finish());
-        config.context("writing the walrus client config")?;
+        early_failure(&project, &phases, config).context("writing the walrus client config")?;
         eprintln!(
             "e2e: walrus daemon wallet {walrus_address} (keystore {})",
             walrus_keystore.display()
@@ -431,12 +431,18 @@ volumes:
         )
         .await;
         phases.push(timer.finish());
-        funding.context("funding the walrus daemon wallet")?;
+        early_failure(&project, &phases, funding).context("funding the walrus daemon wallet")?;
 
         let timer = PhaseTimer::start("compose-up");
         let up = compose_up(&project, &workdir).await;
         phases.push(timer.finish());
-        up?;
+        if up.is_err() {
+            // Containers may exist even when `up` fails; their logs are the
+            // only readable record (the FullStack, and dump_logs with it, is
+            // not built yet).
+            dump_compose_logs(&project, &workdir);
+        }
+        early_failure(&project, &phases, up)?;
 
         let stack = Self {
             project,
@@ -624,43 +630,8 @@ volumes:
     /// when the test panics (so failures inside the test body leave evidence
     /// before the stack is torn down).
     pub fn dump_logs(&self) {
-        let out = std::process::Command::new("docker")
-            .args([
-                "compose",
-                "-p",
-                &self.project,
-                "-f",
-                "docker-compose.yml",
-                "logs",
-            ])
-            .current_dir(&self.workdir)
-            .output();
-        match out {
-            Ok(o) => {
-                eprintln!("--- docker compose logs (project {}) ---", self.project);
-                eprintln!("{}", String::from_utf8_lossy(&o.stdout));
-                if !o.stdout.is_empty() && !o.stderr.is_empty() {
-                    eprintln!("--- stderr ---");
-                    eprintln!("{}", String::from_utf8_lossy(&o.stderr));
-                }
-                eprintln!("--- end logs ---");
-                // Keep the evidence outside stderr too: the CI job uploads the
-                // evidence dir as an artifact, and job logs are not readable
-                // without repository admin access. Best-effort — no branch on
-                // the result; phase evidence reports its own failures and a
-                // dead docker socket has bigger problems than a lost log file.
-                let dir = resolve_log_dir(&self.project);
-                let text = format!(
-                    "project {}\n{}\n--- stderr ---\n{}",
-                    self.project,
-                    String::from_utf8_lossy(&o.stdout),
-                    String::from_utf8_lossy(&o.stderr),
-                );
-                let _ = write_evidence(&dir, "compose-logs.txt", &text);
-                self.write_phase_evidence();
-            }
-            Err(e) => eprintln!("could not capture docker logs: {e}"),
-        }
+        dump_compose_logs(&self.project, &self.workdir);
+        self.write_phase_evidence();
     }
 
     /// Records one measured startup phase.
@@ -1199,6 +1170,65 @@ impl PhaseTimer {
     }
 }
 
+/// Captures `docker compose logs` for `project` (whose compose file lives in
+/// `workdir`) into the evidence dir, echoing to stderr. Best-effort — no
+/// branch on the result; a dead docker socket has bigger problems than a lost
+/// log file. Standalone so a compose-up failure can dump logs BEFORE the
+/// `FullStack` (and its `dump_logs`) exists.
+fn dump_compose_logs(project: &str, workdir: &Path) {
+    let out = std::process::Command::new("docker")
+        .args(["compose", "-p", project, "-f", "docker-compose.yml", "logs"])
+        .current_dir(workdir)
+        .output();
+    match out {
+        Ok(o) => {
+            eprintln!("--- docker compose logs (project {project}) ---");
+            eprintln!("{}", String::from_utf8_lossy(&o.stdout));
+            if !o.stdout.is_empty() && !o.stderr.is_empty() {
+                eprintln!("--- stderr ---");
+                eprintln!("{}", String::from_utf8_lossy(&o.stderr));
+            }
+            eprintln!("--- end logs ---");
+            let dir = resolve_log_dir(project);
+            let text = format!(
+                "project {project}\n{}\n--- stderr ---\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr),
+            );
+            let _ = write_evidence(&dir, "compose-logs.txt", &text);
+        }
+        Err(e) => eprintln!("could not capture docker logs: {e}"),
+    }
+}
+
+/// Passes `result` through, writing the phase evidence collected so far when
+/// it is an error. Startup phases that fail BEFORE the `FullStack` exists
+/// (wallet prep, client config, funding, compose-up) have no readiness-failure
+/// path to flush for them, and a red run whose artifact comes up empty is
+/// exactly the blind spot the evidence dir exists to close.
+fn early_failure<T>(
+    project: &str,
+    phases: &[PhaseRecord],
+    result: anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    early_failure_with(&resolve_log_dir(project), phases, result)
+}
+
+/// Pure core of [`early_failure`] taking the evidence dir directly.
+fn early_failure_with<T>(
+    dir: &Path,
+    phases: &[PhaseRecord],
+    result: anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    if result.is_err() {
+        match write_evidence(dir, "phase-timing.txt", &phase_summary(phases)) {
+            Ok(()) => eprintln!("e2e: phase evidence written for the failed startup"),
+            Err(e) => eprintln!("e2e: could not write phase evidence: {e:#}"),
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::abi;
@@ -1355,6 +1385,32 @@ mod tests {
         super::write_evidence(&dir, "phase-timing.txt", "a: 1s\n").unwrap();
         let written = std::fs::read_to_string(dir.join("phase-timing.txt")).unwrap();
         assert_eq!(written, "a: 1s\n");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn early_failure_ok_passes_through_without_writing() {
+        let root = std::env::temp_dir().join(format!("podseq-e2e-early-ok-{}", std::process::id()));
+        let dir = root.join("logs").join("proj");
+        let passed = super::early_failure_with(&dir, &[], Ok(7u8));
+        assert_eq!(passed.unwrap(), 7);
+        assert!(!dir.exists(), "an Ok result must not write evidence");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn early_failure_err_writes_phase_evidence_and_passes_through() {
+        let root =
+            std::env::temp_dir().join(format!("podseq-e2e-early-err-{}", std::process::id()));
+        let dir = root.join("logs").join("proj");
+        let phases = vec![super::PhaseRecord {
+            name: "walrus-funding",
+            elapsed_secs: 212,
+        }];
+        let passed = super::early_failure_with::<u8>(&dir, &phases, Err(anyhow::anyhow!("boom")));
+        assert_eq!(passed.unwrap_err().to_string(), "boom");
+        let written = std::fs::read_to_string(dir.join("phase-timing.txt")).unwrap();
+        assert_eq!(written, "walrus-funding: 212s\n");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

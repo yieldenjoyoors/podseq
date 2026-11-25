@@ -6937,7 +6937,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::config_path",
-      "line": 491,
+      "line": 497,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6945,7 +6945,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::drop",
-      "line": 688,
+      "line": 659,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -6953,15 +6953,15 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::dump_logs",
-      "line": 626,
-      "cyclomatic": 5.0,
+      "line": 632,
+      "cyclomatic": 1.0,
       "coverage": null,
-      "crap": 30.0
+      "crap": 2.0
     },
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::evidence_text",
-      "line": 672,
+      "line": 643,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6969,7 +6969,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::extract_from_log",
-      "line": 586,
+      "line": 592,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -6977,7 +6977,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::note_phase",
-      "line": 667,
+      "line": 638,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6985,7 +6985,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::podseq_exited",
-      "line": 546,
+      "line": 552,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -6993,7 +6993,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::podseq_state",
-      "line": 511,
+      "line": 517,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7001,7 +7001,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::ports",
-      "line": 480,
+      "line": 486,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7009,7 +7009,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::read_config_string",
-      "line": 503,
+      "line": 509,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7017,7 +7017,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::relayer_key_path",
-      "line": 496,
+      "line": 502,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7026,14 +7026,14 @@
       "file": "./e2e/lib.rs",
       "function": "FullStack::start",
       "line": 262,
-      "cyclomatic": 19.0,
+      "cyclomatic": 20.0,
       "coverage": null,
-      "crap": 380.0
+      "crap": 420.0
     },
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::wait_for_log",
-      "line": 554,
+      "line": 560,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7041,7 +7041,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::walrus_url",
-      "line": 485,
+      "line": 491,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7049,7 +7049,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "FullStack::write_phase_evidence",
-      "line": 678,
+      "line": 649,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7057,7 +7057,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "PhaseRecord::summary",
-      "line": 1126,
+      "line": 1097,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7065,7 +7065,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "PhaseTimer::finish",
-      "line": 1194,
+      "line": 1165,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7073,7 +7073,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "PhaseTimer::start",
-      "line": 1185,
+      "line": 1156,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7137,7 +7137,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "abi_word",
-      "line": 789,
+      "line": 760,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7153,7 +7153,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "decode_abi_string_at",
-      "line": 904,
+      "line": 875,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7161,15 +7161,39 @@
     {
       "file": "./e2e/lib.rs",
       "function": "decode_revert_string",
-      "line": 924,
+      "line": 895,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
     },
     {
       "file": "./e2e/lib.rs",
+      "function": "dump_compose_logs",
+      "line": 1178,
+      "cyclomatic": 5.0,
+      "coverage": null,
+      "crap": 30.0
+    },
+    {
+      "file": "./e2e/lib.rs",
+      "function": "early_failure",
+      "line": 1209,
+      "cyclomatic": 1.0,
+      "coverage": null,
+      "crap": 2.0
+    },
+    {
+      "file": "./e2e/lib.rs",
+      "function": "early_failure_with",
+      "line": 1218,
+      "cyclomatic": 4.0,
+      "coverage": null,
+      "crap": 20.0
+    },
+    {
+      "file": "./e2e/lib.rs",
       "function": "encode_adopt_bridge",
-      "line": 842,
+      "line": 813,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7177,7 +7201,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_bridge_initialize",
-      "line": 817,
+      "line": 788,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7185,7 +7209,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_create_bridge",
-      "line": 852,
+      "line": 823,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7193,7 +7217,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_factory_initialize",
-      "line": 810,
+      "line": 781,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7201,7 +7225,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_initiate_withdrawal",
-      "line": 879,
+      "line": 850,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7209,7 +7233,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "encode_mint",
-      "line": 870,
+      "line": 841,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7217,7 +7241,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_balance_of",
-      "line": 1062,
+      "line": 1033,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7225,7 +7249,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_block_number",
-      "line": 965,
+      "line": 936,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7233,7 +7257,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_call_address",
-      "line": 1028,
+      "line": 999,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7241,7 +7265,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_call_bool",
-      "line": 1017,
+      "line": 988,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7249,7 +7273,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_call_raw",
-      "line": 991,
+      "line": 962,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7257,7 +7281,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_chain_id",
-      "line": 960,
+      "line": 931,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7265,7 +7289,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_gas_price",
-      "line": 985,
+      "line": 956,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7273,7 +7297,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_get_code",
-      "line": 1042,
+      "line": 1013,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7281,7 +7305,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_get_logs",
-      "line": 1083,
+      "line": 1054,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7289,7 +7313,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "eth_get_transaction_count",
-      "line": 970,
+      "line": 941,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7297,7 +7321,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "one_string",
-      "line": 888,
+      "line": 859,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7305,7 +7329,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "phase_summary",
-      "line": 1132,
+      "line": 1103,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7313,7 +7337,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "push_address",
-      "line": 803,
+      "line": 774,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7321,7 +7345,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "push_string",
-      "line": 794,
+      "line": 765,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7337,7 +7361,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "read_toml_field",
-      "line": 732,
+      "line": 703,
       "cyclomatic": 7.0,
       "coverage": null,
       "crap": 56.0
@@ -7345,7 +7369,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "require_docker",
-      "line": 754,
+      "line": 725,
       "cyclomatic": 2.0,
       "coverage": null,
       "crap": 6.0
@@ -7353,7 +7377,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "resolve_log_dir",
-      "line": 1144,
+      "line": 1115,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7361,7 +7385,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "resolve_log_dir_with",
-      "line": 1155,
+      "line": 1126,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
@@ -7369,7 +7393,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "rpc_call",
-      "line": 939,
+      "line": 910,
       "cyclomatic": 5.0,
       "coverage": null,
       "crap": 30.0
@@ -7377,7 +7401,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "selector",
-      "line": 784,
+      "line": 755,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7385,7 +7409,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "sui_signer_key",
-      "line": 713,
+      "line": 684,
       "cyclomatic": 6.0,
       "coverage": null,
       "crap": 42.0
@@ -7401,7 +7425,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "word_len",
-      "line": 896,
+      "line": 867,
       "cyclomatic": 1.0,
       "coverage": null,
       "crap": 2.0
@@ -7417,7 +7441,7 @@
     {
       "file": "./e2e/lib.rs",
       "function": "write_evidence",
-      "line": 1168,
+      "line": 1139,
       "cyclomatic": 3.0,
       "coverage": null,
       "crap": 12.0
