@@ -171,6 +171,33 @@ The idempotent re-submit path (same height, same blob) returns before touching t
 inbox, so crash retries of an already-settled block can never trip the deadline
 check.
 
+## Submitting a forced transaction
+
+The user-facing path is `podseq_sui::inbox`: `SubmitTargets { package, inbox }`
+names the deployed package and the shared `Inbox`, and `submit_forced_tx`
+builds, signs, and confirms the permissionless `inbox::submit` PTB (Inbox +
+Sui `Clock` + raw transaction bytes) with the user's own key. No capability is
+involved, and nothing client-side second-guesses the chain: an empty payload
+aborts with `E_EMPTY_TX`, and the PTB's consensus timestamp stamps the
+inclusion deadline the sequencer must meet.
+
+```rust,ignore
+use podseq_sui::inbox::{submit_forced_tx, SubmitTargets};
+
+submit_forced_tx(
+    "https://fullnode.testnet.sui.io:443",
+    &user_key,
+    &SubmitTargets { package, inbox },
+    &raw_tx_bytes, // a signed L2 transaction, exactly as `eth_sendRawTransaction` takes it
+).await?;
+```
+
+The full-stack e2e rides this path end to end: it signs a transfer, submits
+the bytes to the inbox instead of Reth's pool, and requires the receipt to
+appear on the L2 plus the settle cursor to record the inclusion on Sui — the
+sequencer observes the entry through `get_object`, feeds the pool, and the
+next settle carries the advanced cursor.
+
 ## Sequencer responsibilities
 
 - Poll the inbox for nonces above the local cursor and submit them to Reth's pool.

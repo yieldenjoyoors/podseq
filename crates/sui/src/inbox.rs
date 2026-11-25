@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_sdk_types::{Address, StructTag, TypeTag};
-use sui_transaction_builder::ObjectInput;
+use sui_transaction_builder::{ObjectInput, TransactionBuilder};
 use thiserror::Error;
 
 use crate::deadline::SUI_CLOCK_ID;
@@ -526,6 +526,58 @@ pub async fn submit_cancel_window_change(
     .await
 }
 
+/// The objects one forced-transaction submit PTB touches: the deployed Move
+/// package and the shared force-inclusion Inbox.
+pub struct SubmitTargets {
+    /// Deployed settlement Move package id.
+    pub package: Address,
+    /// Shared force-inclusion Inbox object id.
+    pub inbox: Address,
+}
+
+/// Appends the permissionless `inbox::submit` command to `builder`: the Inbox
+/// shared object, the Sui `Clock` (consensus time stamps the inclusion
+/// deadline), and the raw L2 transaction bytes. The user signs with their own
+/// key; no capability is involved.
+pub fn append_submit(builder: &mut TransactionBuilder, targets: &SubmitTargets, tx_bytes: &[u8]) {
+    let inbox_arg = builder.object(ObjectInput::new(targets.inbox));
+    let clock_arg = builder.object(ObjectInput::new(SUI_CLOCK_ID));
+    let bytes_arg = builder.pure(&tx_bytes);
+    builder.move_call(
+        crate::rotation::module_function(targets.package, "inbox", "submit").expect("static name"),
+        vec![inbox_arg, clock_arg, bytes_arg],
+    );
+}
+
+/// Builds, signs, and confirms a `submit` PTB — the user-facing path into the
+/// force-inclusion inbox.
+///
+/// The chain-side rules decide: an empty payload aborts with `E_EMPTY_TX`,
+/// and the consensus timestamp of the PTB stamps the inclusion deadline the
+/// sequencer must meet (or the chain halts). Nothing here second-guesses
+/// what chain data already settles.
+///
+/// # Errors
+///
+/// Rpc/Build/Execution errors from the submit path (an on-chain abort
+/// arrives as `Execution`).
+///
+/// # Panics
+///
+/// Only if the hard-coded module/function names stop being valid Sui
+/// identifiers, which is a compile-time property.
+pub async fn submit_forced_tx(
+    rpc_url: &str,
+    key: &Ed25519PrivateKey,
+    targets: &SubmitTargets,
+    tx_bytes: &[u8],
+) -> Result<(), SettlementError> {
+    crate::rotation::submit_rotation_tx(rpc_url, key, "forced transaction", |builder| {
+        append_submit(builder, targets, tx_bytes);
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,5 +1000,20 @@ mod tests {
         assert!(validate_window_change(600_000, MIN_WIDEN_DELAY_MS - 1).is_err());
         assert!(validate_window_change(600_000, MAX_WIDEN_DELAY_MS + 1).is_err());
         assert!(validate_window_change(600_000, 1).is_err());
+    }
+
+    #[test]
+    fn submit_append_records_without_a_network_round_trip() {
+        // The builder records the commands offline; only `.build(rpc)`
+        // touches the network, so the PTB shape is exercisable in a unit
+        // test. The permissionless on-chain rules (E_EMPTY_TX, the
+        // Clock-stamped inclusion deadline) are the Move module's job,
+        // not this builder's.
+        let mut builder = TransactionBuilder::new();
+        let targets = SubmitTargets {
+            package: Address::new([0x11; 32]),
+            inbox: Address::new([0x22; 32]),
+        };
+        append_submit(&mut builder, &targets, &[0xde, 0xad, 0xbe, 0xef]);
     }
 }

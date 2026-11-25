@@ -256,6 +256,85 @@ async fn full_stack_produces_settles_and_serves_blobs() -> Result<()> {
     }
     println!("e2e: withdrawal released on Sui");
 
+    // ---- Force inclusion: the K1 escape hatch, end to end ----
+    run_forced_inclusion_drill(
+        &stack,
+        &http,
+        &rpc_url,
+        &signer,
+        from,
+        chain_id,
+        &sui_key,
+        &package_id,
+    )
+    .await
+    .context("force-inclusion drill failed")?;
+    println!("e2e: forced inclusion recorded end to end");
+
+    Ok(())
+}
+
+/// The force-inclusion drill: signs a normal L2 transfer but hands the raw
+/// bytes to the Sui inbox instead of Reth's pool, then requires the escape
+/// hatch to work end to end — the sequencer observes the entry via
+/// `get_object`, includes the transaction within the window (10 min default),
+/// and the settle cursor records the inclusion on Sui.
+#[allow(clippy::too_many_arguments)] // test orchestrator threading the already-bound fixture handles
+async fn run_forced_inclusion_drill(
+    stack: &FullStack,
+    http: &reqwest::Client,
+    rpc_url: &str,
+    signer: &PrivateKeySigner,
+    from: Address,
+    chain_id: u64,
+    sui_key: &Ed25519PrivateKey,
+    package_id: &str,
+) -> Result<()> {
+    let inbox_id = wait_for_config_id(stack, "sui", "inbox_id").await?;
+    println!("e2e: force-inclusion inbox = {inbox_id}");
+
+    let forced_nonce = eth_get_transaction_count(http, rpc_url, from).await?;
+    let forced = build_self_transfer(http, rpc_url, signer, from, chain_id, forced_nonce).await?;
+    println!(
+        "e2e: forced tx {} ({} raw bytes), submitting to the inbox",
+        forced.hash,
+        forced.raw.len()
+    );
+
+    // The funded key's gas coin races settlement's ongoing commits (~every
+    // 2s): a build can lose the race and fail before execution, consuming no
+    // inbox nonce — safe to rebuild and retry (same shape as sui_deposit).
+    let submit_targets = podseq_sui::inbox::SubmitTargets {
+        package: package_id.parse().context("parsing the package id")?,
+        inbox: inbox_id.parse().context("parsing the inbox id")?,
+    };
+    let submit_deadline = Instant::now() + Duration::from_secs(120);
+    let mut submit_backoff = Duration::from_millis(500);
+    loop {
+        match podseq_sui::inbox::submit_forced_tx(SUI_RPC, sui_key, &submit_targets, &forced.raw)
+            .await
+        {
+            Ok(()) => break,
+            Err(e) if Instant::now() < submit_deadline => {
+                eprintln!("e2e: forced-tx submit retrying: {e}");
+                tokio::time::sleep(submit_backoff).await;
+                submit_backoff = (submit_backoff * 2).min(Duration::from_secs(10));
+            }
+            Err(e) => return Err(e).context("submitting the forced tx to the Sui inbox"),
+        }
+    }
+    println!("e2e: forced tx submitted to the Sui inbox");
+
+    wait_for_receipt(http, rpc_url, &forced.hash, Duration::from_secs(180))
+        .await
+        .context("forced tx never reached an L2 block within the window")?;
+    println!("e2e: forced tx included on L2 within the window");
+
+    wait_for_inbox_inclusion(&inbox_id, Duration::from_secs(240))
+        .await
+        .context("reading the on-chain inbox cursor")?;
+    println!("e2e: settle cursor recorded the forced inclusion on Sui");
+
     Ok(())
 }
 
@@ -447,6 +526,36 @@ async fn send_self_transfer(
     chain_id: u64,
     nonce: u64,
 ) -> Result<String> {
+    let forced = build_self_transfer(http, rpc_url, signer, from, chain_id, nonce).await?;
+    let hash: String = rpc_call(
+        http,
+        rpc_url,
+        "eth_sendRawTransaction",
+        vec![format!("0x{}", hex::encode(&forced.raw)).into()],
+    )
+    .await?;
+    Ok(hash)
+}
+
+/// A signed 1-wei self-transfer, in wire form: the 2718 envelope bytes and
+/// their hash (keccak of the envelope — the receipt lookup key).
+struct RawTransfer {
+    raw: Vec<u8>,
+    hash: String,
+}
+
+/// Builds and signs the transfer WITHOUT submitting it. The normal path hands
+/// the bytes to `eth_sendRawTransaction`; the forced-inclusion path hands them
+/// to the Sui inbox instead — the point of the escape hatch is that the
+/// sequencer never sees the submission itself.
+async fn build_self_transfer(
+    http: &reqwest::Client,
+    rpc_url: &str,
+    signer: &PrivateKeySigner,
+    from: Address,
+    chain_id: u64,
+    nonce: u64,
+) -> Result<RawTransfer> {
     let price = eth_gas_price(http, rpc_url).await?;
 
     let mut tx = TxEip1559 {
@@ -464,15 +573,58 @@ async fn send_self_transfer(
     let typed: TypedTransaction = tx.into();
     let envelope = typed.into_envelope(sig);
     let raw = envelope.encoded_2718();
+    let hash = format!("{:#x}", alloy_primitives::keccak256(&raw));
+    Ok(RawTransfer { raw, hash })
+}
 
-    let hash: String = rpc_call(
-        http,
-        rpc_url,
-        "eth_sendRawTransaction",
-        vec![format!("0x{}", hex::encode(&raw)).into()],
-    )
-    .await?;
-    Ok(hash)
+/// Polls for a receipt and requires execution success, so an included-but-
+/// reverted transfer cannot pass as inclusion.
+async fn wait_for_receipt(
+    http: &reqwest::Client,
+    rpc_url: &str,
+    tx_hash: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if Instant::now() >= deadline {
+            bail!("tx {tx_hash} never appeared in an L2 block within {timeout:?}");
+        }
+        if let Some(receipt) = eth_get_transaction_receipt(http, rpc_url, tx_hash).await? {
+            let status = receipt.get("status").and_then(|s| s.as_str()).unwrap_or("");
+            if status == "0x1" {
+                return Ok(());
+            }
+            bail!("tx {tx_hash} mined but reverted (status {status})");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Polls the on-chain inbox until the settle cursor has recorded at least one
+/// inclusion — the Sui-side proof that the sequencer met the deadline and the
+/// settle passed the advanced cursor (`commit_with_cursor`).
+async fn wait_for_inbox_inclusion(inbox_id: &str, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let inbox: sui_sdk_types::Address = inbox_id.parse().context("parsing the inbox id")?;
+    let reader = podseq_sui::inbox::InboxReader::new(
+        podseq_sui::inbox::SuiInboxTransport::new(SUI_RPC),
+        inbox,
+    );
+    loop {
+        if Instant::now() >= deadline {
+            bail!("inbox included_count never advanced; the settle cursor did not record the forced inclusion");
+        }
+        match reader.status().await {
+            Ok(status) if status.included_count >= 1 => return Ok(()),
+            Ok(status) => println!(
+                "e2e: inbox cursor {} (next_nonce {}), waiting for the settle to record inclusion",
+                status.included_count, status.next_nonce
+            ),
+            Err(e) => eprintln!("e2e: inbox status read retrying: {e}"),
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
 }
 
 // ---------- Bridge helpers ----------
