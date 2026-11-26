@@ -52,20 +52,23 @@ stores from a wallet the test funds automatically at bring-up:
 - SUI topped to the funding targets through the release-profile
   `faucet-refill` helper (one PoW payout per round, so the grind outruns the
   checkpoint freshness window);
-- WAL converted from that SUI via `walrus get-wal` (the official 1:1 testnet
-  exchange), run as the `walrus-fund` one-shot compose service before the
-  stack starts;
+- WAL converted from that SUI by our own exchange-swap PTB
+  (`e2e/walrus.rs::append_exchange_swap`): `SplitCoins(Gas)` materializes a
+  SUI coin from the address balance, `wal_exchange::exchange_all_for_wal`
+  swaps it 1:1, and the returned WAL coin transfers back to the wallet. The
+  official `walrus get-wal` cannot be used here: the faucet pays into the
+  address BALANCE (the accumulator gas model), and the walrus client's coin
+  selection enumerates coin objects, so get-wal fails with `could not find
+  SUI coins` on a funded wallet (live-probed 2026-11-26);
 - the daemon's internal sub-wallets refilled from the main wallet at startup
   and on low balance (`--n-clients 1`, tuned-down refill knobs).
 
-Sizing: a small DA batch costs ~2.1 WAL per storage epoch because Walrus bills
-the encoded size of a blob (erasure coding plus a fixed 64 MB of metadata per
-blob), so the metadata floor dominates small blobs. The e2e therefore stores
-with `epochs = 1` — blobs only need to outlive the run — where the production
-default of 53 epochs would cost ~110 WAL (~110 SUI) per blob, more than the
-testnet faucet can fund per run. The targets live in
-`e2e/walrus.rs::FundingTargets` (~16 WAL + a 4 SUI gas floor per run, ~20
-faucet rounds); bump them if CI shows WAL-exhaustion from the publisher.
+Sizing: Walrus bills the encoded size of a blob (erasure coding plus a fixed
+64 MB of metadata per blob), and `walrus info` on current testnet prices a
+store's metadata at 0.0003 WAL — a run's ~30 stores cost well under 0.1 WAL.
+The targets live in `e2e/walrus.rs::FundingTargets` (2 WAL + a 4 SUI gas
+floor per run, 6 faucet rounds); the WAL target must stay at or above the
+daemon's `--wal-refill-amount` (2 WAL).
 
 Build the refill helper before running locally:
 `cargo build --release -p podseq-e2e --bin faucet-refill`.

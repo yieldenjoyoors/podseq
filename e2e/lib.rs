@@ -338,7 +338,6 @@ mode = "sequencer"
         phases.push(timer.finish());
         let (walrus_keystore, walrus_address) = early_failure(&project, &phases, wallet)
             .context("generating the walrus daemon wallet")?;
-        let walrus_targets = walrus::FundingTargets::defaults();
         let config_http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .build()?;
@@ -385,7 +384,6 @@ mode = "sequencer"
     restart: "no"
 
 {walrus_daemon}
-{walrus_fund}
   podseq:
     build:
       context: {context}
@@ -411,23 +409,21 @@ volumes:
             rpc_port = rpc_port,
             engine_port = engine_port,
             walrus_daemon = walrus::daemon_service(walrus_port),
-            walrus_fund = walrus::fund_service(walrus_targets.wal_target_frost),
             context = repo_root.display(),
             project = project,
         );
         std::fs::write(workdir.join("docker-compose.yml"), compose)?;
 
         // Fund the daemon wallet before anything starts: faucet SUI to the
-        // targets, then exchange WAL through the one-shot fund service. The
-        // daemon refuses to serve stores from an empty wallet, and podseq's
-        // first DA flush is the first spend.
+        // targets, then exchange WAL through our own swap PTB (see
+        // `walrus::fund_wallet`). The daemon refuses to serve stores from an
+        // empty wallet, and podseq's first DA flush is the first spend.
         let timer = PhaseTimer::start("walrus-funding");
         let funding = walrus::fund_wallet(
-            &workdir,
             &walrus_address,
+            &walrus_keystore,
             "https://fullnode.testnet.sui.io:443",
             faucet::TESTNET_FAUCET,
-            &project,
         )
         .await;
         phases.push(timer.finish());
@@ -660,6 +656,14 @@ impl Drop for FullStack {
         // Dump logs on panic so test-body failures leave evidence before teardown.
         if std::thread::panicking() {
             self.dump_logs();
+            // The annotations channel (see `failure_annotation`) is the
+            // anonymously retrievable record; the Drop path has no error
+            // text, so it carries the phase summary only.
+            let phases = self.evidence.borrow();
+            println!(
+                "{}",
+                failure_annotation(&phases, "the test body panicked (see compose logs)")
+            );
         }
         let _ = std::process::Command::new("docker")
             .args([
@@ -1220,13 +1224,25 @@ fn early_failure_with<T>(
     phases: &[PhaseRecord],
     result: anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    if result.is_err() {
+    if let Err(err) = &result {
+        println!("{}", failure_annotation(phases, &err.to_string()));
         match write_evidence(dir, "phase-timing.txt", &phase_summary(phases)) {
             Ok(()) => eprintln!("e2e: phase evidence written for the failed startup"),
             Err(e) => eprintln!("e2e: could not write phase evidence: {e:#}"),
         }
     }
     result
+}
+
+/// Workflow-command annotation for a failed startup: the phase summary and
+/// the error. GitHub actions scan stdout/stderr for these and attach them to
+/// the job's check run, which the unauthenticated annotations API serves —
+/// the one retrievable text channel for CI triage (job logs and artifact
+/// downloads are auth-gated even on public repos). Single-line by contract.
+fn failure_annotation(phases: &[PhaseRecord], err: &str) -> String {
+    let summary = phase_summary(phases);
+    let summary = summary.trim_end().replace('\n', ", ");
+    format!("::error title=podseq-e2e startup failed::phases: {summary} | error: {err}")
 }
 
 #[cfg(test)]
@@ -1412,5 +1428,27 @@ mod tests {
         let written = std::fs::read_to_string(dir.join("phase-timing.txt")).unwrap();
         assert_eq!(written, "walrus-funding: 212s\n");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn failure_annotation_carries_phases_and_error() {
+        let phases = vec![
+            super::PhaseRecord {
+                name: "walrus-wallet-prep",
+                elapsed_secs: 1,
+            },
+            super::PhaseRecord {
+                name: "walrus-funding",
+                elapsed_secs: 1042,
+            },
+        ];
+        let annotation = super::failure_annotation(&phases, "walrus-fund failed (exit 1)");
+        assert!(annotation.starts_with("::error title=podseq-e2e startup failed::"));
+        assert!(annotation.contains("walrus-funding: 1042s"));
+        assert!(annotation.contains("walrus-fund failed (exit 1)"));
+        assert!(
+            !annotation.contains('\n'),
+            "workflow commands are single-line"
+        );
     }
 }
