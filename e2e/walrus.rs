@@ -20,6 +20,17 @@
 //! `wal_exchange::exchange_all_for_wal` consumes it — the same exchange
 //! contract get-wal drives.
 //!
+//! The same enumeration binds the daemon itself: its startup sub-wallet
+//! top-up (`Refiller::send_sui`/`send_wal` in walrus-service) runs
+//! synchronously before the daemon serves anything and its transaction
+//! builder selects gas via `select_coins` — coin objects only, on the same
+//! balance-model main wallet. So the funding PTB also splits spare
+//! self-coins (transferred back to the sender): one coin object per top-up
+//! PTB, since gas payment consumes the objects it selects. The compose
+//! service aligns `--gas-refill-amount` with `--sub-wallets-min-balance` so
+//! a single top-up reaches the minimum; after the two startup PTBs the main
+//! wallet is balance-only again, which a short-lived e2e run never refills.
+//!
 //! Cost shape that sizes the funding: Walrus bills the encoded size of a blob
 //! (about 4.5x the original plus a fixed 64 MB of metadata per blob). The e2e
 //! stores with `epochs = 1` — blobs only need to outlive the run — instead of
@@ -79,10 +90,21 @@ const CLIENT_CONFIG_FIXTURE: &str = include_str!("fixtures/walrus_client_config_
 /// Funding targets for the daemon wallet, in the wallet's own smallest units
 /// (MIST for SUI, FROST for WAL — 1 token = 1e9 units).
 pub struct FundingTargets {
-    /// SUI kept on the main wallet for gas and daemon refill transfers.
+    /// SUI kept on the main wallet as balance: gas for our own funding PTBs.
+    /// Daemon refills do NOT come from this — they spend the materialized
+    /// coin objects below.
     pub sui_floor_mist: u64,
     /// WAL converted for blob storage spends.
     pub wal_target_frost: u64,
+    /// Coin objects the funding PTB splits from the balance and transfers
+    /// back to the sender, so the daemon's synchronous startup top-up finds
+    /// gas: the walrus transaction builder selects coin objects only, and
+    /// gas payment consumes the objects it selects — one per top-up PTB
+    /// (send_sui, then send_wal).
+    pub materialized_coins: u32,
+    /// Balance of each materialized coin: above the 2-SUI refill amount
+    /// plus gas, so one top-up PTB reaches the sub-wallet minimum.
+    pub materialized_coin_mist: u64,
 }
 
 impl FundingTargets {
@@ -95,20 +117,31 @@ impl FundingTargets {
     /// minutes of every CI startup.
     pub fn defaults() -> Self {
         Self {
-            sui_floor_mist: 4_000_000_000,
+            sui_floor_mist: 1_000_000_000,
             wal_target_frost: 2_000_000_000,
+            materialized_coins: 2,
+            materialized_coin_mist: 3_000_000_000,
         }
     }
 }
 
-/// Faucet requests needed to fund a wallet holding `sui_balance_mist` up to
-/// the targets: the WAL conversion spends SUI, so one faucet budget covers
-/// floor plus WAL together. Each payout is ~1 SUI.
-pub fn faucet_requests_needed(sui_balance_mist: u64, targets: &FundingTargets) -> u32 {
-    let deficit = targets
+/// The wallet's whole funding target: the floor plus the WAL conversion plus
+/// the materialized top-up coins. One faucet budget covers all three — the
+/// conversion spends SUI, and the coins are split from the same balance.
+pub fn total_target_mist(targets: &FundingTargets) -> u64 {
+    targets
         .sui_floor_mist
         .saturating_add(targets.wal_target_frost)
-        .saturating_sub(sui_balance_mist);
+        .saturating_add(
+            u64::from(targets.materialized_coins).saturating_mul(targets.materialized_coin_mist),
+        )
+}
+
+/// Faucet requests needed to fund a wallet holding `sui_balance_mist` up to
+/// the targets: the WAL conversion spends SUI, so one faucet budget covers
+/// floor, WAL, and materialized coins together. Each payout is ~1 SUI.
+pub fn faucet_requests_needed(sui_balance_mist: u64, targets: &FundingTargets) -> u32 {
+    let deficit = total_target_mist(targets).saturating_sub(sui_balance_mist);
     deficit.div_ceil(ONE_SUI_MIST) as u32
 }
 
@@ -204,6 +237,8 @@ pub fn daemon_service(walrus_port: u16) -> String {
       - "2000000000"
       - --wal-refill-amount
       - "2000000000"
+      - --gas-refill-amount
+      - "2000000000"
     environment:
       SUI_CONFIG_DIR: /walrus/sui_config
       RUST_LOG: info
@@ -227,17 +262,30 @@ pub fn daemon_service(walrus_port: u16) -> String {
 /// Appends the SUI→WAL swap commands to `builder`: `SplitCoins` from the Gas
 /// input (the balance-model wallet holds no coin objects, so the coin must be
 /// materialized from the balance) followed by
-/// `wal_exchange::exchange_all_for_wal`. The exchange transfers the WAL to
-/// the sender; the builder injects the `TxContext` argument from the function
-/// signature.
-pub fn append_exchange_swap(builder: &mut TransactionBuilder, sender: Address, amount_mist: u64) {
+/// `wal_exchange::exchange_all_for_wal`. The `self_coin_mists` amounts are
+/// split in the same PTB and transferred back to the sender untouched — they
+/// leave standing Coin objects the daemon's startup top-up selects as gas.
+/// The exchange transfers the WAL to the sender; the builder injects the
+/// `TxContext` argument from the function signature.
+pub fn append_exchange_swap(
+    builder: &mut TransactionBuilder,
+    sender: Address,
+    amount_mist: u64,
+    self_coin_mists: &[u64],
+) {
     let exchange_arg = builder.object(ObjectInput::shared(WAL_EXCHANGE_OBJECT, 1, true));
-    let amount_arg = builder.pure(&amount_mist);
     // One amount → one split coin; `split_coins` returns one argument per
-    // amount.
+    // amount, in order: the self-coins first, the swap coin last.
+    let mut amounts: Vec<u64> = self_coin_mists.to_vec();
+    amounts.push(amount_mist);
+    let amount_args: Vec<_> = amounts.iter().map(|a| builder.pure(a)).collect();
     let gas = builder.gas();
-    let coin = builder.split_coins(gas, vec![amount_arg]);
-    let coin = coin.into_iter().next().expect("one amount, one coin");
+    let coins = builder.split_coins(gas, amount_args);
+    let swap_coin = coins
+        .last()
+        .copied()
+        .expect("one amount per coin, at least the swap");
+    let self_coins = &coins[..coins.len() - 1];
     // The exchange hands the WAL back as the call's return value; it must be
     // consumed (transferred to the sender) or simulation rejects the PTB with
     // unused-result-without-drop.
@@ -247,10 +295,12 @@ pub fn append_exchange_swap(builder: &mut TransactionBuilder, sender: Address, a
             Identifier::new("wal_exchange").expect("static name"),
             Identifier::new("exchange_all_for_wal").expect("static name"),
         ),
-        vec![exchange_arg, coin],
+        vec![exchange_arg, swap_coin],
     );
+    let mut transferred: Vec<_> = self_coins.to_vec();
+    transferred.push(wal);
     let recipient = builder.pure(&sender);
-    builder.transfer_objects(vec![wal], recipient);
+    builder.transfer_objects(transferred, recipient);
 }
 
 /// The keystore entry whose key derives `address` — a keystore may hold
@@ -269,7 +319,8 @@ pub fn wallet_key_for(keystore_path: &Path, address: &Address) -> Result<Ed25519
 }
 
 /// Builds, signs, and executes the SUI→WAL swap for the wallet behind `key`,
-/// waiting for checkpoint inclusion.
+/// waiting for checkpoint inclusion. `self_coin_mists` are materialized as
+/// standing coin objects on the sender (see `append_exchange_swap`).
 ///
 /// # Errors
 ///
@@ -279,6 +330,7 @@ pub async fn swap_sui_for_wal(
     rpc_url: &str,
     key: &Ed25519PrivateKey,
     amount_mist: u64,
+    self_coin_mists: &[u64],
 ) -> Result<()> {
     let sender = key.public_key().derive_address();
     let mut rpc = RpcClient::new(rpc_url)
@@ -286,7 +338,7 @@ pub async fn swap_sui_for_wal(
         .context("building the rpc client")?;
     let mut builder = TransactionBuilder::new();
     builder.set_sender(sender);
-    append_exchange_swap(&mut builder, sender, amount_mist);
+    append_exchange_swap(&mut builder, sender, amount_mist, self_coin_mists);
     let tx = builder
         .build(&mut rpc)
         .await
@@ -335,27 +387,35 @@ pub async fn fund_wallet(
     faucet_url: &str,
 ) -> Result<()> {
     let targets = FundingTargets::defaults();
-    let balance = podseq_sui::settlement::sui_balance(rpc_url, wallet_address)
+    let before = podseq_sui::settlement::sui_balance(rpc_url, wallet_address)
         .await
         .context("checking the walrus wallet SUI balance")?;
-    let rounds = faucet_requests_needed(balance, &targets);
+    let rounds = faucet_requests_needed(before, &targets);
     if rounds > 0 {
         refill_wallet(
             rpc_url,
             faucet_url,
             wallet_address,
-            targets.sui_floor_mist + targets.wal_target_frost,
+            total_target_mist(&targets),
             rounds as usize,
         )
         .await?;
     }
+    // Re-read AFTER the refill: the swap must spend the post-refill balance.
+    // The pre-refill read is stale whenever rounds ran — a fresh CI wallet
+    // holds nothing, so deciding the swap from it refuses a wallet the
+    // refill just funded (the 2026-11-27 CI failure).
+    let balance = podseq_sui::settlement::sui_balance(rpc_url, wallet_address)
+        .await
+        .context("re-reading the walrus wallet SUI balance after the refill")?;
     let key = wallet_key_for(
         keystore_path,
         &wallet_address.parse().context("parsing wallet address")?,
     )?;
     let swap = swap_amount(balance, &targets)
         .context("balance leaves nothing above the gas floor to swap for WAL")?;
-    swap_sui_for_wal(rpc_url, &key, swap)
+    let self_coins = vec![targets.materialized_coin_mist; targets.materialized_coins as usize];
+    swap_sui_for_wal(rpc_url, &key, swap, &self_coins)
         .await
         .context("swapping SUI for WAL")
 }
@@ -422,8 +482,22 @@ mod tests {
     #[test]
     fn fresh_wallet_needs_the_full_budget() {
         let targets = FundingTargets::defaults();
-        // 4 SUI gas floor + 2 WAL target, one payout per round.
-        assert_eq!(faucet_requests_needed(0, &targets), 6);
+        // 1 SUI floor + 2 WAL target + 2 materialized 3-SUI gas coins, one
+        // payout per round.
+        assert_eq!(faucet_requests_needed(0, &targets), 9);
+    }
+
+    #[test]
+    fn targets_materialize_one_gas_coin_per_daemon_topup() {
+        // The daemon's startup top-up is two PTBs (send_sui, then send_wal)
+        // signed by the main wallet, and gas payment CONSUMES coin objects:
+        // one materialized coin per PTB, each above the 2-SUI refill amount
+        // plus gas, or `select_coins` finds nothing on the balance-model
+        // wallet and the daemon dies before readiness.
+        let targets = FundingTargets::defaults();
+        assert_eq!(targets.materialized_coins, 2);
+        assert_eq!(targets.materialized_coin_mist, 3_000_000_000);
+        assert_eq!(targets.sui_floor_mist, 1_000_000_000);
     }
 
     #[test]
@@ -442,7 +516,7 @@ mod tests {
         )]);
         builder.set_gas_budget(50_000_000);
         builder.set_gas_price(1_000);
-        append_exchange_swap(&mut builder, sender, 1_000_000_000);
+        append_exchange_swap(&mut builder, sender, 1_000_000_000, &[2_000_000_000; 2]);
 
         let tx = builder.try_build().expect("offline build");
         assert_eq!(tx.sender, sender);
@@ -458,9 +532,17 @@ mod tests {
             other => panic!("expected SplitCoins first, got {other:?}"),
         };
         assert_eq!(*coin, sui_sdk_types::Argument::Gas);
-        // Inputs register in call order: the exchange object is Input(0),
-        // the split amount and the swap recipient follow.
-        assert_eq!(amounts, &[sui_sdk_types::Argument::Input(1)]);
+        // Inputs register in call order, and the builder value-dedupes pure
+        // inputs, so the two equal self-coins share Input(1) and the swap
+        // amount is Input(2). SplitCoins splits once per referenced amount.
+        assert_eq!(
+            amounts,
+            &[
+                sui_sdk_types::Argument::Input(1),
+                sui_sdk_types::Argument::Input(1),
+                sui_sdk_types::Argument::Input(2)
+            ]
+        );
 
         let call = match &commands[1] {
             sui_sdk_types::Command::MoveCall(c) => c,
@@ -472,18 +554,32 @@ mod tests {
         );
         assert_eq!(call.module.as_str(), "wal_exchange");
         assert_eq!(call.function.as_str(), "exchange_all_for_wal");
-        // The exchange object is the first input; the split coin moves by
-        // value; the TxContext argument is injected by the builder.
-        assert_eq!(call.arguments.len(), 2, "exchange object + split coin");
+        // The exchange object is the first input; the LAST split coin (the
+        // swap amount) moves by value; the TxContext argument is injected by
+        // the builder.
+        assert_eq!(call.arguments.len(), 2, "exchange object + swap coin");
+        assert_eq!(
+            call.arguments[1],
+            sui_sdk_types::Argument::NestedResult(0, 2),
+            "the swap spends the last split coin"
+        );
 
         let transfer = match &commands[2] {
             sui_sdk_types::Command::TransferObjects(t) => t,
             other => panic!("expected TransferObjects third, got {other:?}"),
         };
-        // The exchange returns the WAL coin; it moves to the sender. The
-        // builder emits the single-return shortcut `Result(1)`.
-        assert_eq!(transfer.objects, &[sui_sdk_types::Argument::Result(1)]);
-        assert_eq!(transfer.address, sui_sdk_types::Argument::Input(2));
+        // The two materialized self-coins and the WAL coin the exchange
+        // returns all move back to the sender: the self-coins are what the
+        // daemon's startup top-up selects as gas.
+        assert_eq!(
+            transfer.objects,
+            &[
+                sui_sdk_types::Argument::NestedResult(0, 0),
+                sui_sdk_types::Argument::NestedResult(0, 1),
+                sui_sdk_types::Argument::Result(1),
+            ]
+        );
+        assert_eq!(transfer.address, sui_sdk_types::Argument::Input(3));
     }
 
     #[test]
@@ -520,14 +616,14 @@ mod tests {
     #[test]
     fn funded_wallet_needs_no_requests() {
         let targets = FundingTargets::defaults();
-        let funded = targets.sui_floor_mist + targets.wal_target_frost;
+        let funded = total_target_mist(&targets);
         assert_eq!(faucet_requests_needed(funded, &targets), 0);
     }
 
     #[test]
     fn one_mist_short_still_needs_one_request() {
         let targets = FundingTargets::defaults();
-        let funded = targets.sui_floor_mist + targets.wal_target_frost - 1;
+        let funded = total_target_mist(&targets) - 1;
         assert_eq!(faucet_requests_needed(funded, &targets), 1);
     }
 
@@ -589,22 +685,31 @@ mod tests {
             "min balance: {svc}"
         );
         assert!(svc.contains("--wal-refill-amount"), "wal refill: {svc}");
-        assert!(
-            !svc.contains("--gas-refill-amount"),
-            "gas refill stays default: {svc}"
-        );
+        // The 0.5-SUI default strands the sub-wallet under the 2-SUI min
+        // balance, so the 1s-periodic refiller hammers failed top-ups every
+        // second; one aligned gas transfer reaches min in a single shot.
+        assert!(svc.contains("--gas-refill-amount"), "gas refill: {svc}");
     }
 
     #[test]
     fn swap_amount_caps_at_the_wal_target_and_refuses_a_drained_balance() {
         let targets = FundingTargets::defaults();
         // Fully funded: swap the WAL target, keep the gas floor.
-        assert_eq!(swap_amount(6_000_000_000, &targets), Some(2_000_000_000));
+        assert_eq!(
+            swap_amount(total_target_mist(&targets), &targets),
+            Some(2_000_000_000)
+        );
         // Partially funded: swap what exists above the floor.
-        assert_eq!(swap_amount(6_500_000_000, &targets), Some(2_000_000_000));
-        assert_eq!(swap_amount(4_500_000_000, &targets), Some(500_000_000));
+        assert_eq!(
+            swap_amount(total_target_mist(&targets) + 500_000_000, &targets),
+            Some(2_000_000_000)
+        );
+        assert_eq!(
+            swap_amount(targets.sui_floor_mist + 500_000_000, &targets),
+            Some(500_000_000)
+        );
         // At or below the gas floor: nothing to swap.
-        assert_eq!(swap_amount(4_000_000_000, &targets), None);
+        assert_eq!(swap_amount(targets.sui_floor_mist, &targets), None);
         assert_eq!(swap_amount(0, &targets), None);
     }
 
@@ -673,6 +778,7 @@ mod tests {
 #[cfg(test)]
 mod live {
     use super::*;
+    use crate::faucet::TESTNET_FAUCET;
 
     #[tokio::test]
     #[ignore]
@@ -693,9 +799,58 @@ mod live {
             .await
             .expect("reading balance");
         println!("live swap: sender {sender} balance {balance} MIST");
-        swap_sui_for_wal(rpc, &key, 1_000_000_000)
+        swap_sui_for_wal(rpc, &key, 1_000_000_000, &[1_000_000_000])
             .await
             .expect("live swap");
         println!("live swap: exchanged 1 SUI for WAL at the testnet exchange");
+    }
+
+    /// The full funding flow on a fresh wallet, exactly as CI runs it — the
+    /// 2026-11-27 failure lived in the fund_wallet wiring (the swap decided
+    /// from the stale pre-refill balance), which the swap-only probe never
+    /// reached. Run explicitly:
+    /// `cargo test -p podseq-e2e --lib walrus::live::fund_wallet_funds_a_fresh_wallet -- --ignored --nocapture`
+    /// (needs the release refill helper: `cargo build --release -p podseq-e2e --bin faucet-refill`;
+    /// spends ~9 faucet PoW rounds, several minutes).
+    #[tokio::test]
+    #[ignore]
+    async fn fund_wallet_funds_a_fresh_wallet() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let (keystore, address) = prepare_wallet(workdir.path()).expect("wallet generated");
+        let rpc = "https://fullnode.testnet.sui.io:443";
+        fund_wallet(&address, &keystore, rpc, TESTNET_FAUCET)
+            .await
+            .expect("funding the fresh wallet");
+        let targets = FundingTargets::defaults();
+
+        let rpc_client = sui_rpc::Client::new(rpc).expect("rpc client");
+        let mut sui = 0;
+        let mut wal = 0;
+        use futures::StreamExt;
+        let mut request = sui_rpc::proto::sui::rpc::v2::ListBalancesRequest::default();
+        request.owner = Some(address.clone());
+        let stream = rpc_client.list_balances(request);
+        futures::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            let balance = item.expect("balance entry");
+            let coin_type = balance.coin_type.clone().unwrap_or_default();
+            let amount = balance.balance.unwrap_or(0);
+            println!("balance {coin_type}: {amount}");
+            if coin_type.ends_with("::sui::SUI") {
+                sui = amount;
+            }
+            if coin_type.ends_with("::wal::WAL") {
+                wal = amount;
+            }
+        }
+        assert!(
+            wal >= targets.wal_target_frost,
+            "the swap landed the WAL target: {wal}"
+        );
+        assert!(
+            sui >= targets.sui_floor_mist,
+            "the gas floor survived the swap and the coins: {sui}"
+        );
+        println!("funded {address}: sui {sui} MIST, wal {wal} FROST");
     }
 }
