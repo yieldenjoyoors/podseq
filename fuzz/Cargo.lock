@@ -880,9 +880,9 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "commonware-codec"
-version = "2026.10.0"
+version = "2026.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f547e38e69017302f6966acb4b7b9558bced6232ef977adceb05b5eb445f6086"
+checksum = "993232f361f6ab0e2c00e04b0221d0fc808cbb0516c688e25da631a7ce3fd863"
 dependencies = [
  "bytes",
  "cfg-if",
@@ -890,14 +890,15 @@ dependencies = [
  "commonware-macros",
  "paste",
  "rand_chacha 0.10.0",
+ "ruint",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "commonware-codec-macros"
-version = "2026.10.0"
+version = "2026.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "155fa68ec9e020b9fd233e5dec8158d7ffd827acab342001954e106094524490"
+checksum = "f2f22d7fa8c4f885376cd1c1db7ff3bb8520616d78da0c9e2325c68db145d423"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -960,9 +961,9 @@ dependencies = [
 
 [[package]]
 name = "commonware-macros"
-version = "2026.10.0"
+version = "2026.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7ee2a1a0f65788f7e00d025933e833959e2a6a7808f74d26029bb6715d51be9"
+checksum = "077750065c4f78c23f9a5648a6be6ec8611a48e055d7bf03c3e2108c3133617e"
 dependencies = [
  "commonware-macros-impl",
  "tokio",
@@ -970,9 +971,9 @@ dependencies = [
 
 [[package]]
 name = "commonware-macros-impl"
-version = "2026.10.0"
+version = "2026.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a67b8171d05c6c8dfd691b8ecb263550e820d904dd100369efeb59a3d78be138"
+checksum = "bb18c86bb95c0b698b37f2db39b2507b1b4d93508d2b5e498ae204e51fc2c602"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1688,7 +1689,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3428,7 +3429,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5087,7 +5088,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
